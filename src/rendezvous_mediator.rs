@@ -794,7 +794,63 @@ impl RendezvousMediator {
         Ok(())
     }
 
+    fn lan_probe_interface() -> Option<crate::p2p::Interface> {
+        if config::is_disable_tcp_listen()
+            || !config::option2bool(
+                "enable-lan-discovery",
+                &Config::get_option("enable-lan-discovery"),
+            )
+        {
+            return None;
+        }
+        crate::p2p::Interface::configured()
+    }
+
+    async fn handle_lan_probe(&self, request: FetchLocalAddr, server: ServerPtr) -> ResultType<()> {
+        let Some(iface) = Self::lan_probe_interface() else {
+            return Ok(());
+        };
+        let Some(slot) = TCP_PUNCHES.take() else {
+            return Ok(());
+        };
+        let listener = hbb_common::tcp::new_listener(SocketAddr::from((iface.address, 0)), false).await?;
+        // The caller learns our interface address from its LAN discovery response.
+        let port = listener.local_addr()?.port();
+        let mut msg = Message::new();
+        let meta = connection_meta(request.control_permissions.into_option(), request.controlled_context.into_option());
+        msg.set_local_addr(LocalAddr {
+            id: Config::get_id(),
+            socket_addr: request.socket_addr,
+            local_addr: AddrMangle::encode(SocketAddr::from(([0, 0, 0, 0], port))).into(),
+            version: crate::VERSION.to_owned(),
+            lan_probe: true,
+            ..Default::default()
+        });
+        let mut signal = crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
+        signal.send(&msg).await?;
+        drop(signal);
+
+        let (stream, source) = hbb_common::timeout(2_000, async {
+            loop {
+                let (stream, source) = listener.accept().await?;
+                if let std::net::IpAddr::V4(ip) = source.ip() {
+                    if iface.on_link(ip) {
+                        return Ok::<_, std::io::Error>((stream, source));
+                    }
+                }
+            }
+        }).await??;
+        drop(slot);
+        let local = stream.local_addr()?;
+        crate::server::create_tcp_connection(
+            server, hbb_common::Stream::from(stream, local), source, true, meta
+        ).await
+    }
+
     async fn handle_intranet(&self, fla: FetchLocalAddr, server: ServerPtr) -> ResultType<()> {
+        if fla.lan_probe {
+            return self.handle_lan_probe(fla, server).await;
+        }
         let addr = AddrMangle::decode(&fla.socket_addr);
         let last = *LAST_MSG.lock().await;
         *LAST_MSG.lock().await = (addr, Instant::now());
@@ -1210,13 +1266,13 @@ impl RendezvousMediator {
         }
         log::debug!("Punch tcp hole to {:?}", peer_addr);
         let mut socket = {
-            let socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            let socket = crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
             let local_addr = socket.local_addr();
             // key important here for punch hole to tell my gateway incoming peer is safe.
             // Awaited rather than spawned so the mapping exists before `PunchHoleSent` goes out;
             // `local_addr` itself is shared, not exclusive - every socket here binds it with the
             // reuse flags `new_socket` sets.
-            allow_err!(socket_client::connect_tcp_local(peer_addr, Some(local_addr), 30).await);
+            allow_err!(crate::p2p::connect_punch(peer_addr, local_addr, 30).await);
             socket
         };
         let mut msg_out = Message::new();
@@ -1358,6 +1414,7 @@ impl RendezvousMediator {
         msg_out.set_register_peer(RegisterPeer {
             id,
             serial,
+            lan_probe: Self::lan_probe_interface().is_some(),
             ..Default::default()
         });
         socket.send(&msg_out).await?;
@@ -1617,7 +1674,7 @@ async fn punch_tcp_until_connected(
     // willing to take a connection through it.
     let until = Instant::now() + Duration::from_millis(CONNECT_TIMEOUT);
     let punch = punch_until(until, peer_addr, |ms| {
-        socket_client::connect_tcp_local(peer_addr, Some(local_addr), ms)
+        crate::p2p::connect_punch(peer_addr, local_addr, ms)
     });
     let Some(listener) = listener else {
         if let Some(stream) = punch.await {

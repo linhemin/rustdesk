@@ -752,7 +752,7 @@ async fn test_nat_type_() -> ResultType<bool> {
     for i in 0..2 {
         let server = if i == 0 { &*server1 } else { &*server2 };
         let mut socket =
-            socket_client::connect_tcp_local(server, local_addr, CONNECT_TIMEOUT).await?;
+            crate::p2p::connect_rendezvous(server, local_addr, CONNECT_TIMEOUT).await?;
         if i == 0 {
             // reuse the local addr is required for nat test
             local_addr = Some(socket.local_addr());

@@ -125,6 +125,7 @@ winapi = { version = "0.3", features = [
     "cfgmgr32",
     "ioapiset",
     "winspool",
+    "winsock2",
 ] }
 windows = { version = "0.61", features = [
     "Wdk_Foundation",

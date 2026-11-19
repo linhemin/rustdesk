@@ -539,6 +539,16 @@ impl Client {
         } else {
             None
         };
+        let lan = if !interface.is_force_relay()
+            && tcp_punch_allowed()
+            && conn_type == ConnType::DEFAULT_CONN
+            && interface.get_switch_code().is_empty()
+        {
+            crate::p2p::Interface::configured()
+        } else {
+            None
+        };
+        let lan_server = lan.map(|_| rendezvous_server.clone());
         let has_webrtc_offerer = webrtc_offerer.is_some();
         let fut = Self::_start_inner(
             peer.to_owned(),
@@ -554,49 +564,107 @@ impl Client {
             servers.clone(),
             contained,
         );
-        // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
-        // punch is off — it would reach `connect()` with nothing to try and just open a second
-        // relay.
-        if interface.is_force_relay()
-            || (udp.0.is_none() && !has_webrtc_offerer)
-            || !tcp_punch_allowed()
-        {
-            return fut.await;
-        }
-        let preferred_fut = fut.boxed();
-        // This is deliberately a pure TCP punch request: its WebRTC argument must stay `None`.
-        // TCP punching closes the rendezvous socket before binding a new connection to the same
-        // local address; a WebRTC ICE bridge would retain that socket and break the port reuse.
-        // The preferred request retains its own socket for WebRTC signaling.
-        let fallback_fut = Self::_start_inner(
-            peer.to_owned(),
-            key.to_owned(),
-            token.to_owned(),
-            conn_type,
-            interface,
-            (None, None),
-            None,
-            None,
-            None,
-            rendezvous_server,
-            servers,
-            contained,
-        )
-        .boxed();
-        if has_webrtc_offerer {
-            return race_transports_prefer_webrtc(
-                preferred_fut,
-                vec![fallback_fut],
-                Self::relay_fallback_delay_ms(),
-                |result| result.0 .1,
+        let existing = async move {
+            // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
+            // punch is off — it would reach `connect()` with nothing to try and just open a second
+            // relay.
+            if interface.is_force_relay()
+                || (udp.0.is_none() && !has_webrtc_offerer)
+                || !tcp_punch_allowed()
+            {
+                return fut.await;
+            }
+            let preferred_fut = fut.boxed();
+            // This is deliberately a pure TCP punch request: its WebRTC argument must stay `None`.
+            // TCP punching closes the rendezvous socket before binding a new connection to the same
+            // local address; a WebRTC ICE bridge would retain that socket and break the port reuse.
+            // The preferred request retains its own socket for WebRTC signaling.
+            let fallback_fut = Self::_start_inner(
+                peer.to_owned(),
+                key.to_owned(),
+                token.to_owned(),
+                conn_type,
+                interface,
+                (None, None),
+                None,
+                None,
+                None,
+                rendezvous_server,
+                servers,
+                contained,
             )
-            .await;
+            .boxed();
+            if has_webrtc_offerer {
+                return race_transports_prefer_webrtc(
+                    preferred_fut,
+                    vec![fallback_fut],
+                    Self::relay_fallback_delay_ms(),
+                    |result| result.0 .1,
+                )
+                .await;
+            }
+            let connect_futures = vec![preferred_fut, fallback_fut];
+            match select_ok(connect_futures).await {
+                Ok(conn) => Ok((conn.0 .0, conn.0 .1, conn.0 .2)),
+                Err(e) => Err(e),
+            }
+        };
+        if let Some((iface, server)) = lan.zip(lan_server) {
+            let lan = Self::probe_lan(peer, key, token, &server, iface).boxed();
+            return race_transports_prefer_webrtc(
+                lan, vec![existing.boxed()], Self::relay_fallback_delay_ms(),
+                |result| result.0.1,
+            ).await;
         }
-        let connect_futures = vec![preferred_fut, fallback_fut];
-        match select_ok(connect_futures).await {
-            Ok(conn) => Ok((conn.0 .0, conn.0 .1, conn.0 .2)),
-            Err(e) => Err(e),
+        existing.await
+    }
+
+    async fn probe_lan(
+        peer: &str,
+        key: &str,
+        token: &str,
+        server: &str,
+        iface: crate::p2p::Interface,
+    ) -> ResultType<(
+        (Stream, bool, Option<Vec<u8>>, Option<KcpStream>, &'static str),
+        (i32, String),
+        bool,
+    )> {
+        let address = crate::lan::probe_peer(peer, iface).await?;
+        let mut socket = crate::p2p::connect_rendezvous(server, None, 1_000).await?;
+        if !token.is_empty() {
+            secure_tcp(&mut socket, key).await?;
         }
+        let mut request = RendezvousMessage::new();
+        request.set_punch_hole_request(PunchHoleRequest {
+            id: peer.to_owned(),
+            licence_key: key.to_owned(),
+            token: token.to_owned(),
+            version: crate::VERSION.to_owned(),
+            lan_probe: true,
+            ..Default::default()
+        });
+        socket.send(&request).await?;
+        let Some(response) = crate::get_next_nonkeyexchange_msg(&mut socket, Some(1_000)).await else {
+            bail!("LAN rendezvous timed out");
+        };
+        let Some(rendezvous_message::Union::PunchHoleResponse(reply)) = response.union else {
+            bail!("LAN rendezvous declined");
+        };
+        if !reply.lan_probe || !reply.is_local() || reply.pk.is_empty() {
+            bail!("LAN rendezvous declined");
+        }
+        let listener = AddrMangle::decode(&reply.socket_addr);
+        if !listener.ip().is_unspecified() || listener.port() == 0 {
+            bail!("Invalid LAN listener");
+        }
+        let mut stream = iface.connect(SocketAddr::from((address, listener.port())), 0, 1_000).await?;
+        let pk = Self::secure_connection(peer, reply.pk.into(), key, &mut stream).await?;
+        if pk.is_none() || !stream.is_secured() {
+            bail!("LAN peer identity could not be verified");
+        }
+        log::info!("Secure LAN direct connection to {address}:{}", listener.port());
+        Ok(((stream, true, pk, None, "TCP"), (0, server.to_owned()), false))
     }
 
     fn is_expected_webrtc_ice_candidate(ice: &IceCandidate, session_key: &str) -> bool {
@@ -823,7 +891,7 @@ impl Client {
         // into_inner() once the stream is adopted into a connection attempt.
         let mut webrtc_offerer = webrtc_offerer.map(OffererGuard::new);
         let mut start = Instant::now();
-        let mut socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await;
+        let mut socket = crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await;
         debug_assert!(!servers.contains(&rendezvous_server));
         let rtt = start.elapsed();
         log::debug!("TCP connection establishment time used: {:?}", rtt);
@@ -881,7 +949,7 @@ impl Client {
                         err
                     );
                     webrtc_offerer = None;
-                    socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await?;
+                    socket = crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await?;
                     my_addr = socket.local_addr();
                 }
             }
@@ -1467,7 +1535,7 @@ impl Client {
         // always direct; WebRTC is direct only when ICE nominated a non-TURN pair.
         let mut direct_futures = Vec::new();
         if allow_tcp_punch {
-            let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
+            let fut = crate::p2p::connect_punch(peer, local_addr, connect_timeout);
             direct_futures.push(
                 async move {
                     let conn = fut.await?;
