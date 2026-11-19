@@ -65,6 +65,7 @@ jobs:
           python3 build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           FEATURES=$(python3 build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features)
           cargo test --locked --release --lib --features "$FEATURES" p2p::tests
+          cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rustdesk-p2p-tun-windows-x64-unsigned

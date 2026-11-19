@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::c_void,
+    future::Future,
     net::SocketAddr,
     ops::Deref,
     str::FromStr,
@@ -339,6 +340,37 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
     }
 }
 
+type PeerConnection = (
+    (Stream, bool, Option<Vec<u8>>, Option<KcpStream>, &'static str),
+    (i32, String),
+    bool,
+);
+
+async fn prefer_lan_connection<T>(
+    lan: impl Future<Output = ResultType<T>>,
+    fallback: impl Future<Output = ResultType<T>>,
+    grace: Duration,
+) -> ResultType<T> {
+    let deadline = Instant::now() + grace;
+    tokio::pin!(lan, fallback);
+    tokio::select! {
+        biased;
+        result = &mut lan => match result {
+            Ok(connection) => Ok(connection),
+            Err(err) => {
+                log::debug!("LAN direct attempt failed: {err}");
+                fallback.await
+            }
+        },
+        result = &mut fallback => {
+            match tokio::time::timeout_at(deadline, lan).await {
+                Ok(Ok(connection)) => Ok(connection),
+                _ => result,
+            }
+        }
+    }
+}
+
 // A peer decides how many ICE candidates it sends, and the rendezvous route that carries them is
 // reachable without a prior punch, so these sites would otherwise let someone else set how much
 // this machine writes to its log file. One line a minute each, carrying the suppressed count.
@@ -422,17 +454,7 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(
-        (
-            Stream,
-            bool,
-            Option<Vec<u8>>,
-            Option<KcpStream>,
-            &'static str,
-        ),
-        (i32, String),
-        bool,
-    )> {
+    ) -> ResultType<PeerConnection> {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
         }
@@ -489,6 +511,40 @@ impl Client {
             }
         };
 
+        let lan = if !interface.is_force_relay()
+            && tcp_punch_allowed()
+            && conn_type == ConnType::DEFAULT_CONN
+            && interface.get_switch_code().is_empty()
+        {
+            crate::p2p::Interface::configured()
+        } else {
+            None
+        };
+        let lan_server = lan.map(|_| rendezvous_server.clone());
+        let existing = Self::start_via_rendezvous(
+            peer, key, token, conn_type, interface, rendezvous_server, servers, contained,
+        );
+        if let Some((iface, server)) = lan.zip(lan_server) {
+            return prefer_lan_connection(
+                Self::probe_lan(peer, key, token, &server, iface),
+                existing,
+                Duration::from_secs(1),
+            )
+            .await;
+        }
+        existing.await
+    }
+
+    async fn start_via_rendezvous(
+        peer: &str,
+        key: &str,
+        token: &str,
+        conn_type: ConnType,
+        interface: impl Interface,
+        rendezvous_server: String,
+        servers: Vec<String>,
+        contained: bool,
+    ) -> ResultType<PeerConnection> {
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
         // be used, so probing v6 reachability is wasted work on every such connection.
         if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() {
@@ -539,16 +595,6 @@ impl Client {
         } else {
             None
         };
-        let lan = if !interface.is_force_relay()
-            && tcp_punch_allowed()
-            && conn_type == ConnType::DEFAULT_CONN
-            && interface.get_switch_code().is_empty()
-        {
-            crate::p2p::Interface::configured()
-        } else {
-            None
-        };
-        let lan_server = lan.map(|_| rendezvous_server.clone());
         let has_webrtc_offerer = webrtc_offerer.is_some();
         let fut = Self::_start_inner(
             peer.to_owned(),
@@ -564,74 +610,42 @@ impl Client {
             servers.clone(),
             contained,
         );
-        let existing = async move {
-            // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
-            // punch is off — it would reach `connect()` with nothing to try and just open a second
-            // relay.
-            if interface.is_force_relay()
-                || (udp.0.is_none() && !has_webrtc_offerer)
-                || !tcp_punch_allowed()
-            {
-                return fut.await;
-            }
-            let preferred_fut = fut.boxed();
-            // This is deliberately a pure TCP punch request: its WebRTC argument must stay `None`.
-            // TCP punching closes the rendezvous socket before binding a new connection to the same
-            // local address; a WebRTC ICE bridge would retain that socket and break the port reuse.
-            // The preferred request retains its own socket for WebRTC signaling.
-            let fallback_fut = Self::_start_inner(
-                peer.to_owned(),
-                key.to_owned(),
-                token.to_owned(),
-                conn_type,
-                interface,
-                (None, None),
-                None,
-                None,
-                None,
-                rendezvous_server,
-                servers,
-                contained,
-            )
-            .boxed();
-            if has_webrtc_offerer {
-                return race_transports_prefer_webrtc(
-                    preferred_fut,
-                    vec![fallback_fut],
-                    Self::relay_fallback_delay_ms(),
-                    |result| result.0 .1,
-                )
-                .await;
-            }
-            let connect_futures = vec![preferred_fut, fallback_fut];
-            match select_ok(connect_futures).await {
-                Ok(conn) => Ok((conn.0 .0, conn.0 .1, conn.0 .2)),
-                Err(e) => Err(e),
-            }
-        };
-        if let Some((iface, server)) = lan.zip(lan_server) {
-            let probe = Self::probe_lan(peer, key, token, &server, iface);
-            tokio::pin!(probe, existing);
-            return tokio::select! {
-                result = &mut probe => match result {
-                    Ok(connection) => Ok(connection),
-                    Err(err) => {
-                        log::debug!("LAN direct attempt failed: {err}");
-                        existing.await
-                    }
-                },
-                result = &mut existing => {
-                    if result.as_ref().map_or(false, |connection| connection.0.1) {
-                        return result;
-                    }
-                    match timeout(Self::relay_fallback_delay_ms(), probe).await {
-                        Ok(Ok(connection)) => Ok(connection),
-                        _ => result,
-                    }
-                }
-            };
+        // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
+        // punch is off — it would reach `connect()` with nothing to try and just open a second
+        // relay.
+        if interface.is_force_relay()
+            || (udp.0.is_none() && !has_webrtc_offerer)
+            || !tcp_punch_allowed()
+        {
+            return fut.await;
         }
-        existing.await
+        let preferred_fut = fut.boxed();
+        // This is deliberately a pure TCP punch request: its WebRTC argument must stay `None`.
+        // TCP punching closes the rendezvous socket before binding a new connection to the same
+        // local address; a WebRTC ICE bridge would retain that socket and break the port reuse.
+        // The preferred request retains its own socket for WebRTC signaling.
+        let fallback_fut = Self::_start_inner(
+            peer.to_owned(),
+            key.to_owned(),
+            token.to_owned(),
+            conn_type,
+            interface,
+            (None, None),
+            None,
+            None,
+            None,
+            rendezvous_server,
+            servers,
+            contained,
+        )
+        .boxed();
+        race_transports_prefer_webrtc(
+            preferred_fut,
+            vec![fallback_fut],
+            Self::relay_fallback_delay_ms(),
+            |result| result.0 .1,
+        )
+        .await
     }
 
     async fn probe_lan(
@@ -640,11 +654,7 @@ impl Client {
         token: &str,
         server: &str,
         iface: crate::p2p::Interface,
-    ) -> ResultType<(
-        (Stream, bool, Option<Vec<u8>>, Option<KcpStream>, &'static str),
-        (i32, String),
-        bool,
-    )> {
+    ) -> ResultType<PeerConnection> {
         let address = crate::lan::probe_peer(peer, iface).await?;
         let mut socket = crate::p2p::connect_rendezvous(server, None, 1_000).await?;
         if !token.is_empty() {
@@ -5675,7 +5685,7 @@ async fn udp_nat_connect(
 
 #[cfg(test)]
 mod webrtc_race_tests {
-    use super::race_transports_prefer_webrtc;
+    use super::{prefer_lan_connection, race_transports_prefer_webrtc};
     use hbb_common::{
         anyhow::anyhow,
         futures::future::{BoxFuture, FutureExt},
@@ -5701,6 +5711,50 @@ mod webrtc_race_tests {
     }
 
     const NOT_P2P: fn(&&'static str) -> bool = |_| false;
+
+    #[tokio::test]
+    async fn lan_wins_over_a_ready_public_direct_connection() {
+        let got = prefer_lan_connection(
+            ok_after(60, "LAN"),
+            ok_after(0, "public direct"),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, "LAN");
+    }
+
+    #[tokio::test]
+    async fn ready_public_connection_is_used_when_lan_quickly_fails() {
+        let got = tokio::time::timeout(
+            Duration::from_secs(1),
+            prefer_lan_connection(
+                err_after(20, "peer not on this LAN"),
+                ok_after(0, "public direct"),
+                Duration::from_secs(30),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(got, "public direct");
+    }
+
+    #[tokio::test]
+    async fn slow_lan_does_not_block_a_ready_fallback_past_its_window() {
+        let got = tokio::time::timeout(
+            Duration::from_secs(1),
+            prefer_lan_connection(
+                std::future::pending(),
+                ok_after(0, "relay"),
+                Duration::from_millis(80),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(got, "relay");
+    }
 
     // A direct result must win even when it lands first — the LAN ordering, where ICE beats the
     // relay's TCP connect. Parking it as if it were a relay commits the relay on arrival.
