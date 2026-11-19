@@ -215,6 +215,54 @@ pub(crate) async fn connect_rendezvous(
     }
 }
 
+// The controller and controlled side reuse their local rendezvous TCP port for the punch.
+// A v6 registration on one side and a v4-only peer on the other do not form a TCP pair.
+pub(crate) const FAMILY_RETRY_MS: u64 = 1_350;
+
+async fn connect_family(server: &str, ipv4: bool) -> hbb_common::ResultType<Stream> {
+    #[cfg(target_os = "windows")]
+    if let Some(iface) = Interface::configured().filter(|_| ipv4) {
+        // A physical pin has its own DNS. Do not bind a system resolver's Clash FakeIP
+        // to the physical interface. Unpinned connections below use the system route.
+        if let Some(endpoint) = configured_server_endpoint(server, iface, 400).await {
+            if let Ok(conn) = iface.connect(endpoint, 0, 350).await {
+                return Ok(conn);
+            }
+        }
+    }
+    // Only addresses returned by the system for this hbbs. An iPhone VPN and DNS64
+    // retain control of routing and resolution; do not synthesize a DNS name here.
+    let endpoints = hbb_common::tokio::net::lookup_host(server).await?;
+    for endpoint in endpoints.filter(|addr| addr.is_ipv4() == ipv4).take(4) {
+        if let Ok(conn) = socket_client::connect_tcp_local(endpoint, None, 350).await {
+            if matches!(conn, Stream::Tcp(_)) && conn.local_addr().is_ipv4() == ipv4 {
+                return Ok(conn);
+            }
+        }
+    }
+    hbb_common::bail!("No usable rendezvous TCP address in the peer's address family");
+}
+
+pub(crate) async fn authenticated_family_rendezvous(
+    server: &str,
+    ipv4: bool,
+    key: &str,
+    deadline_ms: u64,
+) -> hbb_common::ResultType<Stream> {
+    if Config::is_proxy() || hbb_common::config::use_ws() {
+        hbb_common::bail!("Direct TCP rendezvous is disabled");
+    }
+    hbb_common::timeout(deadline_ms, async {
+        let mut conn = connect_family(server, ipv4).await?;
+        crate::secure_tcp_required(&mut conn, key).await?;
+        if !conn.is_secured() {
+            hbb_common::bail!("Rendezvous key exchange was not authenticated");
+        }
+        Ok(conn)
+    })
+    .await?
+}
+
 pub(crate) async fn connect_punch(
     peer: SocketAddr,
     local: SocketAddr,
@@ -231,6 +279,20 @@ pub(crate) async fn connect_punch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hbb_common::tokio;
+
+    #[tokio::test]
+    async fn family_selection_uses_only_the_requested_tcp_address_family() {
+        for (listen, ipv4) in [("127.0.0.1:0", true), ("[::1]:0", false)] {
+            let listener = tokio::net::TcpListener::bind(listen).await.unwrap();
+            let endpoint = listener.local_addr().unwrap().to_string();
+            assert!(connect_family(&endpoint, !ipv4).await.is_err());
+            let conn = connect_family(&endpoint, ipv4).await.unwrap();
+            let (_, source) = listener.accept().await.unwrap();
+            assert_eq!(source.is_ipv4(), ipv4);
+            assert_eq!(conn.local_addr(), source);
+        }
+    }
 
     #[test]
     fn lan_targets_are_on_the_selected_link() {

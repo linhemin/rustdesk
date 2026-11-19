@@ -1306,7 +1306,24 @@ impl RendezvousMediator {
         }
         log::debug!("Punch tcp hole to {:?}", peer_addr);
         let mut socket = {
-            let socket = crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
+            let mut socket =
+                crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
+            if socket.local_addr().is_ipv4() != peer_addr.is_ipv4() {
+                if let Ok(matching) = crate::p2p::authenticated_family_rendezvous(
+                    &self.host,
+                    peer_addr.is_ipv4(),
+                    &crate::get_key(true).await,
+                    500,
+                )
+                .await
+                {
+                    log::debug!("Matched the rendezvous TCP address family to the punch request");
+                    socket = matching;
+                }
+                // If this host cannot reach hbbs in the requested family, send the original
+                // reply anyway. Its observed source tells a dual-stack controller which family
+                // to use. This function still sends only one PunchHoleSent.
+            }
             let local_addr = socket.local_addr();
             // key important here for punch hole to tell my gateway incoming peer is safe.
             // Awaited rather than spawned so the mapping exists before `PunchHoleSent` goes out;

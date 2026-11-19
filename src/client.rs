@@ -432,6 +432,74 @@ fn request_allows_tcp_punch(webrtc_sdp_offer: &str) -> bool {
     webrtc_sdp_offer.is_empty()
 }
 
+fn mismatched_public_tcp_family(
+    eligible: bool,
+    local: SocketAddr,
+    response: &RendezvousMessage,
+) -> Option<bool> {
+    let Some(rendezvous_message::Union::PunchHoleResponse(ph)) = &response.union else {
+        return None;
+    };
+    if !eligible
+        || ph.socket_addr.is_empty()
+        || ph.is_local()
+        || ph.is_udp
+        || !ph.webrtc_sdp_answer.is_empty()
+        || ph.nat_type() == NatType::SYMMETRIC
+    {
+        return None;
+    }
+    let peer = AddrMangle::decode(&ph.socket_addr);
+    (peer.port() != 0 && !peer.ip().is_unspecified() && peer.is_ipv4() != local.is_ipv4())
+        .then_some(peer.is_ipv4())
+}
+
+fn usable_family_reply(response: &RendezvousMessage, ipv4: bool) -> bool {
+    match &response.union {
+        Some(rendezvous_message::Union::PunchHoleResponse(ph)) if ph.socket_addr.is_empty() => {
+            // The protobuf default (ID_NOT_EXIST) is indistinguishable from an empty reply.
+            // Keep the original successful punch on an empty response.
+            !ph.other_failure.is_empty() || ph.failure.value() != 0
+        }
+        Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
+            let peer = AddrMangle::decode(&ph.socket_addr);
+            peer.port() > 0 && !peer.ip().is_unspecified() && peer.is_ipv4() == ipv4 && !ph.is_udp
+        }
+        Some(rendezvous_message::Union::RelayResponse(rr)) => {
+            !rr.refuse_reason.is_empty() || (!rr.uuid.is_empty() && !rr.relay_server.is_empty())
+        }
+        _ => false,
+    }
+}
+
+async fn retry_tcp_punch_family(
+    server: &str,
+    key: &str,
+    ipv4: bool,
+    request: &RendezvousMessage,
+) -> ResultType<(Stream, RendezvousMessage)> {
+    // One shared deadline includes DNS, TCP, hbbs key exchange and a fresh punch reply.
+    // Hold the original result until this completes. Cancellation drops the new socket.
+    timeout(crate::p2p::FAMILY_RETRY_MS, async {
+        let mut conn = crate::p2p::authenticated_family_rendezvous(
+            server,
+            ipv4,
+            key,
+            crate::p2p::FAMILY_RETRY_MS,
+        )
+        .await?;
+        conn.send(request).await?;
+        let response = crate::get_next_nonkeyexchange_msg(&mut conn, None)
+            .await
+            .context("Missing family-specific rendezvous reply")?;
+        if !usable_family_reply(&response, ipv4) {
+            bail!("Rendezvous returned no usable TCP endpoint or explicit decision");
+        }
+        Ok((conn, response))
+    })
+    .await?
+}
+
 /// TCP punch is a user option like the other direct transports, but it is also the backstop:
 /// with every direct transport switched off there would be nothing left to punch with, so it
 /// runs regardless. Only the switches decide that — a transport that is enabled but fails to
@@ -1112,6 +1180,12 @@ impl Client {
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
         let allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let mut family_retry_available = allow_tcp_punch
+            && !interface.is_force_relay()
+            && !Config::is_proxy()
+            && !use_ws()
+            && udp_nat_port == 0
+            && ipv6.1.is_none();
         let authenticated_direct_offer = exchanged
             && socket.is_secured()
             && !interface.is_policy_relay()
@@ -1181,7 +1255,7 @@ impl Client {
                 let timeout_ms = remaining
                     .as_millis()
                     .clamp(1, u64::MAX as u128) as u64;
-                let Some(msg_in) =
+                let Some(mut msg_in) =
                     crate::get_next_nonkeyexchange_msg(&mut socket, Some(timeout_ms)).await
                 else {
                     break;
@@ -1192,6 +1266,25 @@ impl Client {
                     && (msg_in.has_punch_hole_response() || msg_in.has_relay_response())
                 {
                     direct_permission.record_exchange(&rendezvous_server, handshake_grant);
+                }
+                if let Some(ipv4) =
+                    mismatched_public_tcp_family(family_retry_available, my_addr, &msg_in)
+                {
+                    family_retry_available = false;
+                    let family = if ipv4 { "IPv4" } else { "IPv6" };
+                    match retry_tcp_punch_family(&rendezvous_server, &key, ipv4, &msg_out).await {
+                        Ok((matching, answer)) => {
+                            log::info!(
+                                "Retried classic TCP punch via authenticated {family} rendezvous"
+                            );
+                            my_addr = matching.local_addr();
+                            socket = matching;
+                            msg_in = answer;
+                        }
+                        Err(err) => {
+                            log::debug!("Classic TCP {family} rendezvous retry unavailable: {err}")
+                        }
+                    }
                 }
                 match msg_in.union {
                     Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
@@ -1244,6 +1337,9 @@ impl Client {
                         }
                     }
                     Some(rendezvous_message::Union::RelayResponse(rr)) => {
+                        if !rr.refuse_reason.is_empty() {
+                            bail!(rr.refuse_reason);
+                        }
                         log::info!(
                             "relay requested from peer, time used: {:?}, relay_server: {}",
                             start.elapsed(),
@@ -6096,6 +6192,10 @@ mod webrtc_race_tests {
 #[cfg(test)]
 #[path = "client/tests/trusted_devices_tests.rs"]
 mod trusted_devices_tests;
+
+#[cfg(test)]
+#[path = "client/tests/tcp_family_tests.rs"]
+mod tcp_family_tests;
 
 #[cfg(test)]
 mod kx_tests {
