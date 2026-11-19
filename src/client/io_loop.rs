@@ -200,12 +200,14 @@ impl<T: InvokeUiSession> Remote<T> {
             ConnType::default()
         };
 
+        let mut initial_frames = client::path_rtt::InitialFrames::new();
         match Client::start_with_direct_permission(
             &self.handler.get_id(),
             key,
             token,
             conn_type,
             self.handler.clone(),
+            Some(&mut initial_frames),
         )
         .await
         {
@@ -342,7 +344,7 @@ impl<T: InvokeUiSession> Remote<T> {
                             check_live_permission = false;
                             allow_live_direct = allowed;
                         }
-                        res = peer.next() => {
+                        res = client::path_rtt::next_frame(&mut initial_frames, &mut peer) => {
                             if let Some(res) = res {
                                 match res {
                                     Err(err) => {

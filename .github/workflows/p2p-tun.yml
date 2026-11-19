@@ -66,6 +66,7 @@ jobs:
           FEATURES=$(python3 build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features)
           cargo test --locked --release --lib --features "$FEATURES" p2p::tests
           cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
+          cargo test --locked --release --lib --features "$FEATURES" client::path_rtt::tests
           cargo test --locked --release --lib --features "$FEATURES" live_direct::tests
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_secure_tcp
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_confirm_signed_direct_permission
@@ -117,13 +118,13 @@ jobs:
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
-        run: flutter build ios --release --no-codesign --build-number=72
+        run: flutter build ios --release --no-codesign --build-number=73
       - name: Verify and package the app
         run: |
           app=flutter/build/ios/iphoneos/Runner.app
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
-          test "$(plutil -extract CFBundleVersion raw "$info")" = 72
+          test "$(plutil -extract CFBundleVersion raw "$info")" = 73
           executable=$(plutil -extract CFBundleExecutable raw "$info")
           lipo "$app/$executable" -verify_arch arm64
           mkdir -p package/Payload

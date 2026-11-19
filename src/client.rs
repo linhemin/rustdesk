@@ -95,6 +95,7 @@ use crate::ui_session_interface::SessionPermissionConfig;
 pub use super::lang::*;
 
 mod login_method;
+mod path_rtt;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
@@ -390,26 +391,27 @@ async fn prefer_lan_connection<T>(
     lan: impl Future<Output = ResultType<T>>,
     fallback: impl Future<Output = ResultType<T>>,
     grace: Duration,
-) -> ResultType<T> {
+) -> ResultType<(T, Option<T>)> {
     let deadline = Instant::now() + grace;
     tokio::pin!(lan, fallback);
     tokio::select! {
         biased;
         result = &mut lan => match result {
-            Ok(connection) => Ok(connection),
+            // Only compare already-open paths. Never hold a ready LAN for a second handshake.
+            Ok(connection) => Ok((connection, fallback.now_or_never().and_then(Result::ok))),
             Err(err) => {
                 log::debug!("LAN direct attempt failed: {err}");
-                fallback.await
+                fallback.await.map(|connection| (connection, None))
             }
         },
         result = &mut fallback => match result {
             Ok(fallback) => match tokio::time::timeout_at(deadline, lan).await {
-                Ok(Ok(connection)) => Ok(connection),
-                _ => Ok(fallback),
+                Ok(Ok(connection)) => Ok((connection, Some(fallback))),
+                _ => Ok((fallback, None)),
             },
             // The deadline limits how long we hold a working fallback. A failed rendezvous has
             // nothing to offer: let the authenticated LAN probe finish its own bounded attempt.
-            Err(err) => lan.await.or(Err(err)),
+            Err(err) => lan.await.or(Err(err)).map(|connection| (connection, None)),
         }
     }
 }
@@ -454,7 +456,7 @@ impl Client {
         interface: impl Interface,
     ) -> ResultType<ConnectedPeer> {
         let (connection, _) =
-            Self::start_with_direct_permission(peer, key, token, conn_type, interface).await?;
+            Self::start_with_direct_permission(peer, key, token, conn_type, interface, None).await?;
         Ok(connection)
     }
 
@@ -464,12 +466,23 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
+        initial_frames: Option<&mut path_rtt::InitialFrames>,
     ) -> ResultType<(ConnectedPeer, Option<bool>)> {
         debug_assert!(peer == interface.get_id());
         interface.update_direct(None);
         interface.update_received(false);
         let permission = DirectRetryPermission::default();
-        match Self::_start(peer, key, token, conn_type, interface.clone(), &permission).await {
+        let connection = Self::_start(
+            peer,
+            key,
+            token,
+            conn_type,
+            interface.clone(),
+            &permission,
+            initial_frames,
+        )
+        .await;
+        match connection {
             Err(err) => {
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {
@@ -504,6 +517,7 @@ impl Client {
         conn_type: ConnType,
         interface: impl Interface,
         direct_permission: &DirectRetryPermission,
+        initial_frames: Option<&mut path_rtt::InitialFrames>,
     ) -> ResultType<PeerConnection> {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
@@ -576,12 +590,28 @@ impl Client {
             direct_permission,
         );
         if let Some((iface, server)) = lan.zip(lan_server) {
-            return prefer_lan_connection(
+            let (mut lan, alternate) = prefer_lan_connection(
                 Self::probe_lan(peer, key, token, &server, iface),
                 existing,
                 Duration::from_secs(1),
             )
-            .await;
+            .await?;
+            if let (Some(mut other), Some(initial_frames)) = (alternate, initial_frames) {
+                let (lan_path, other_path) = (&mut lan.0, &mut other.0);
+                if path_rtt::can_compare(
+                    lan_path.1,
+                    lan_path.2.as_deref(),
+                    &lan_path.0,
+                    other_path.1,
+                    other_path.2.as_deref(),
+                    &other_path.0,
+                ) && path_rtt::prefer_alternate(&mut lan_path.0, &mut other_path.0, initial_frames)
+                    .await?
+                {
+                    return Ok(other);
+                }
+            }
+            return Ok(lan);
         }
         existing.await
     }
@@ -5815,7 +5845,7 @@ mod webrtc_race_tests {
     const NOT_P2P: fn(&&'static str) -> bool = |_| false;
 
     #[tokio::test]
-    async fn lan_wins_over_a_ready_public_direct_connection() {
+    async fn ready_public_connection_is_retained_for_comparison_when_lan_arrives() {
         let got = prefer_lan_connection(
             ok_after(60, "LAN"),
             ok_after(0, "public direct"),
@@ -5823,7 +5853,24 @@ mod webrtc_race_tests {
         )
         .await
         .unwrap();
-        assert_eq!(got, "LAN");
+        assert_eq!(got, ("LAN", Some("public direct")));
+    }
+
+    #[tokio::test]
+    async fn ready_lan_only_takes_an_alternate_that_is_already_open() {
+        let ready = || std::future::ready(Ok("LAN"));
+        let both = prefer_lan_connection(ready(), std::future::ready(Ok("other")), Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(both, ("LAN", Some("other")));
+        let only_lan = tokio::time::timeout(
+            Duration::from_millis(100),
+            prefer_lan_connection(ready(), std::future::pending(), Duration::from_secs(30)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(only_lan, ("LAN", None));
     }
 
     #[tokio::test]
@@ -5839,7 +5886,7 @@ mod webrtc_race_tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(got, "public direct");
+        assert_eq!(got, ("public direct", None));
     }
 
     #[tokio::test]
@@ -5855,7 +5902,7 @@ mod webrtc_race_tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(got, "relay");
+        assert_eq!(got, ("relay", None));
     }
 
     #[tokio::test]
@@ -5867,7 +5914,7 @@ mod webrtc_race_tests {
         )
         .await
         .unwrap();
-        assert_eq!(got, "LAN");
+        assert_eq!(got, ("LAN", None));
     }
 
     // A direct result must win even when it lands first — the LAN ordering, where ICE beats the
