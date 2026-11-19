@@ -113,6 +113,7 @@ struct ParsedPeerInfo {
     idd_impl: String,
     support_view_camera: bool,
     support_terminal: bool,
+    live_direct: bool,
 }
 
 impl ParsedPeerInfo {
@@ -211,6 +212,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     .unwrap()
                     .set_connected();
                 let is_secured = peer.is_secured();
+                let peer_verified = pk.is_some();
                 let trust = crate::trusted_devices::client::Session::new(
                     &self.handler.lc.read().unwrap(),
                     is_secured,
@@ -289,6 +291,14 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut webrtc_suspect_since: Option<Instant> = None;
                 let mut last_rx_progress = peer.rx_progress();
                 let mut peer_gone = false;
+                let mut allow_live_direct = !direct
+                    && crate::live_direct::supported_transport(&peer)
+                    && peer_verified
+                    && conn_type == ConnType::DEFAULT_CONN
+                    && !self.handler.is_policy_relay()
+                    && crate::live_direct::enabled();
+                let mut waiting_for_live_direct = false;
+                let mut live_path = None;
 
                 loop {
                     tokio::select! {
@@ -301,6 +311,17 @@ impl<T: InvokeUiSession> Remote<T> {
                                     }
                                     Ok(ref bytes) => {
                                         last_recv_time = Instant::now();
+                                        if waiting_for_live_direct && bytes.as_ref() == crate::live_direct::ACCEPT {
+                                            waiting_for_live_direct = false;
+                                            match crate::live_direct::wrap(&mut peer, true) {
+                                                Ok(path) => live_path = Some(path),
+                                                Err(err) => {
+                                                    log::error!("Could not start live direct session: {err}");
+                                                    break;
+                                                }
+                                            }
+                                            continue;
+                                        }
                                         if !received {
                                             received = true;
                                             self.handler.update_received(true);
@@ -308,6 +329,12 @@ impl<T: InvokeUiSession> Remote<T> {
                                         self.data_count.fetch_add(bytes.len(), Ordering::Relaxed);
                                         if !self.handle_msg_from_peer(bytes, &mut peer).await {
                                             break
+                                        }
+                                        if allow_live_direct && self.peer_info.live_direct {
+                                            allow_live_direct = false;
+                                            if peer.send_raw(crate::live_direct::START.to_vec()).await.is_ok() {
+                                                waiting_for_live_direct = true;
+                                            }
                                         }
                                     }
                                 }
@@ -320,6 +347,16 @@ impl<T: InvokeUiSession> Remote<T> {
                                     self.handler.msgbox("error", "Connection Error", "Reset by the peer", "");
                                 }
                                 break;
+                            }
+                        }
+                        path = crate::live_direct::next_path(&mut live_path) => {
+                            if let Some(direct) = path {
+                                self.handler.update_direct(Some(direct));
+                                self.handler.set_connection_type(
+                                    true, direct, if direct { "WebRTC" } else { stream_type },
+                                );
+                            } else {
+                                live_path = None;
                             }
                         }
                         d = self.receiver.recv() => {
@@ -2619,6 +2656,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 .map(|v| v.as_bool())
                 .flatten()
                 .unwrap_or(false);
+            self.peer_info.live_direct = platform_additions
+                .get(crate::live_direct::CAPABILITY)
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
         }
     }
 

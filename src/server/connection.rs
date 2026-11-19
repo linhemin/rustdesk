@@ -735,6 +735,7 @@ impl Connection {
             (_tx_clip, rx_clip) = mpsc::unbounded_channel::<i32>();
         }
 
+        let mut live_direct_started = false;
         loop {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
@@ -1032,6 +1033,18 @@ impl Connection {
                             Ok(bytes) => {
                                 last_recv_time = Instant::now();
                                 conn.session_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
+                                if bytes.as_ref() == crate::live_direct::START {
+                                    if !live_direct_started && conn.can_try_live_direct() {
+                                        if conn.stream.send_raw(crate::live_direct::ACCEPT.to_vec()).await.is_err()
+                                            || crate::live_direct::wrap(&mut conn.stream, false).is_err()
+                                        {
+                                            conn.on_close("Live direct negotiation could not start", true).await;
+                                            break;
+                                        }
+                                        live_direct_started = true;
+                                    }
+                                    continue;
+                                }
                                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
                                     if !conn.on_message(msg_in).await {
                                         break;
@@ -1981,6 +1994,9 @@ impl Connection {
         }
         #[cfg(target_os = "windows")]
         {
+            if self.can_try_live_direct() {
+                platform_additions.insert(crate::live_direct::CAPABILITY.into(), json!(true));
+            }
             platform_additions.insert(
                 "is_installed".into(),
                 json!(crate::platform::is_installed()),
@@ -2254,6 +2270,16 @@ impl Connection {
     }
 
     #[inline]
+    fn can_try_live_direct(&self) -> bool {
+        self.authorized
+            && self.file_transfer.is_none()
+            && !self.is_port_forward()
+            && !self.view_camera
+            && !self.terminal
+            && crate::live_direct::supported_transport(&self.stream)
+            && crate::live_direct::enabled()
+    }
+
     fn is_port_forward(&self) -> bool {
         self.port_forward_socket.is_some() || self.port_forward_mux.is_some()
     }
