@@ -673,20 +673,39 @@ audio_rechannel!(audio_rechannel_8_7, 8, 7);
 
 pub struct CheckTestNatType {
     is_direct: bool,
+    #[cfg(target_os = "windows")]
+    p2p_route: (String, String),
 }
 
 impl CheckTestNatType {
     pub fn new() -> Self {
         Self {
             is_direct: Config::get_socks().is_none() && !config::use_ws(),
+            #[cfg(target_os = "windows")]
+            p2p_route: Self::p2p_route(),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn p2p_route() -> (String, String) {
+        (
+            Config::get_option(keys::OPTION_P2P_INTERFACE_IP),
+            Config::get_option(keys::OPTION_P2P_SERVER_IP),
+        )
     }
 }
 
 impl Drop for CheckTestNatType {
     fn drop(&mut self) {
         let is_direct = Config::get_socks().is_none() && !config::use_ws();
-        if self.is_direct != is_direct {
+        #[cfg(target_os = "windows")]
+        let p2p_route_changed = self.p2p_route != Self::p2p_route();
+        #[cfg(not(target_os = "windows"))]
+        let p2p_route_changed = false;
+        if p2p_route_changed {
+            Config::set_nat_type(NatType::UNKNOWN_NAT as i32);
+        }
+        if self.is_direct != is_direct || p2p_route_changed {
             test_nat_type();
         }
     }

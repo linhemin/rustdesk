@@ -1812,6 +1812,51 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
 
   final scrollController = ScrollController();
 
+  Future<void> _selectP2pInterface() async {
+    final interfaces = Map<String, String>.from(
+        jsonDecode(await bind.mainGetP2pInterfaces()) as Map);
+    if (!mounted || locked) return;
+    final current = bind.mainGetOptionSync(key: kOptionP2pInterfaceIp);
+    final address = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: Text(translate('Physical adapter for direct connections')),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+            child: Text(translate('physical-adapter-p2p-tip')),
+          ),
+          if (interfaces.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
+              child: Text(translate('No active physical adapter with IPv4')),
+            ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(dialogContext).pop(''),
+            child: Text(translate('Off')),
+          ),
+          for (final entry in interfaces.entries)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(entry.key),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(child: Text('${entry.value} (${entry.key})')),
+                  if (current == entry.key) ...[
+                    const SizedBox(width: 8),
+                    const Icon(Icons.check, size: 16),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (!mounted || locked || address == null || address == current) return;
+    await bind.mainSetOption(key: kOptionP2pInterfaceIp, value: address);
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -1836,6 +1881,10 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
         isWeb || bind.mainGetBuildinOption(key: kOptionHideProxySetting) == 'Y';
     final hideWebSocket = isWeb ||
         bind.mainGetBuildinOption(key: kOptionHideWebSocketSetting) == 'Y';
+    final showP2pInterface = !hideServer && !isWeb && isWindows;
+    final p2pInterface = showP2pInterface
+        ? bind.mainGetOptionSync(key: kOptionP2pInterfaceIp)
+        : '';
 
     if (hideServer && hideProxy && hideWebSocket) {
       return Offstage();
@@ -1931,6 +1980,18 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                   title: 'ID/Relay Server',
                   onTap: () => showServerSettings(gFFI.dialogManager, setState),
                 ),
+              if (showP2pInterface) ...[
+                divider,
+                listTile(
+                  icon: Icons.lan_outlined,
+                  title: 'Physical adapter for direct connections',
+                  trailing: Text(
+                      p2pInterface.isEmpty ? translate('Off') : p2pInterface),
+                  onTap: locked || isOptionFixed(kOptionP2pInterfaceIp)
+                      ? null
+                      : _selectP2pInterface,
+                ),
+              ],
               if (!hideProxy && !hideServer) divider,
               if (!hideProxy)
                 listTile(

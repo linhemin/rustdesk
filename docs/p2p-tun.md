@@ -1,16 +1,16 @@
 # Direct connections with a Windows TUN adapter
 
-This opt-in path applies to Windows desktop control sessions made with a RustDesk ID. In an elevated PowerShell window, configure the selected Ethernet or Wi-Fi IPv4 address and the current real IPv4 address of the configured public ID server.
+This opt-in path applies to Windows desktop control sessions made with a RustDesk ID. In **Settings > Network**, unlock the settings and select an Ethernet or Wi-Fi adapter under **Physical adapter for direct connections**. Configure the existing ID server name and public key in **ID/Relay Server**. The client queries the selected adapter's DNS for the server's real public IPv4 address and ignores Fake-IP responses in `198.18.0.0/15`.
+
+For command-line setup, apply the same adapter selection in an elevated PowerShell window.
 
 ```powershell
 & "$env:ProgramFiles\RustDesk\RustDesk.exe" --option p2p-interface-ip 192.168.50.10
-& "$env:ProgramFiles\RustDesk\RustDesk.exe" --option p2p-server-ip 203.0.113.10
-Restart-Service RustDesk
 ```
 
-Replace the example IPs with the actual addresses. Each device uses its own interface IP. Update the server address when its public IPv4 changes. The configured server name, server public key, relay settings and ID registration still govern the session. Registration and relay keep their existing transport paths. A RustDesk proxy or WebSocket configuration takes precedence over the new interface setting.
+Replace the example IP with that device's interface address. If DHCP changes it, select the new address. A previously set `p2p-server-ip` is used as a fallback when adapter DNS cannot resolve the public address. The configured server name, server public key, relay settings and ID registration still govern the session. Registration and relay keep their existing transport paths. A RustDesk proxy or WebSocket configuration takes precedence over the new interface setting.
 
-Close and reopen both desktop clients after updating the options, then allow at least one registration heartbeat before testing LAN discovery.
+After saving, allow at least one registration heartbeat before starting a new session to test LAN discovery.
 
 The LAN probe uses the existing LAN discovery protocol. It requires LAN discovery and direct TCP listening to be permitted on the controlled device, plus the matching client and hbbs builds. The probe uses a short-lived listener and verifies the peer's existing RustDesk identity before connection. The ID server passes the temporary port, while the LAN address is learned locally. The original connection attempt is already running when the LAN probe begins. The existing relay fallback delay gives a viable direct attempt priority.
 

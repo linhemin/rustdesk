@@ -4992,6 +4992,9 @@ ProcessId=10136
         assert_eq!(pids.len(), 0);
     }
 }
+mod p2p;
+pub(crate) use p2p::{is_physical_p2p_interface, resolve_p2p_ipv4};
+
 pub(crate) async fn connect_p2p_tcp(
     peer: std::net::SocketAddr,
     local: std::net::SocketAddr,

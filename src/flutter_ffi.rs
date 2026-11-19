@@ -1017,6 +1017,13 @@ pub fn main_get_option_sync(key: String) -> SyncReturn<String> {
     SyncReturn(get_option(key))
 }
 
+pub fn main_get_p2p_interfaces() -> String {
+    #[cfg(target_os = "windows")]
+    return crate::p2p::interface_choices();
+    #[cfg(not(target_os = "windows"))]
+    "{}".to_owned()
+}
+
 pub fn main_get_error() -> String {
     get_error()
 }
