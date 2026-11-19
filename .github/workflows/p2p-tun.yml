@@ -94,7 +94,7 @@ jobs:
         run: |
           python3 build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           FEATURES=$(python3 build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features)
-          cargo test --locked --release --lib --features "$FEATURES" p2p::tests
+          cargo test --locked --release --lib --features "$FEATURES" 'p2p::'
           cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
           cargo test --locked --release --lib --features "$FEATURES" client::path_rtt::tests
           cargo test --locked --release --lib --features "$FEATURES" client::tcp_family_tests
@@ -105,6 +105,15 @@ jobs:
         with:
           name: rustdesk-p2p-tun-windows-x64-unsigned
           path: flutter/build/windows/x64/runner/Release/
+          if-no-files-found: error
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
+      - name: Package the Windows installer
+        shell: pwsh
+        run: ./.github/scripts/package-p2p-windows.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustdesk-p2p-windows-x64-msi
+          path: p2p-package/*.msi
           if-no-files-found: error
 
   ios:
@@ -149,13 +158,13 @@ jobs:
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
-        run: flutter build ios --release --no-codesign --build-number=74
+        run: flutter build ios --release --no-codesign --build-number=75
       - name: Verify and package the app
         run: |
           app=flutter/build/ios/iphoneos/Runner.app
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
-          test "$(plutil -extract CFBundleVersion raw "$info")" = 74
+          test "$(plutil -extract CFBundleVersion raw "$info")" = 75
           executable=$(plutil -extract CFBundleExecutable raw "$info")
           lipo "$app/$executable" -verify_arch arm64
           mkdir -p package/Payload
