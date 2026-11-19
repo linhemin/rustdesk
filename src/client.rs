@@ -236,6 +236,9 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
     let mut window_started = false;
     loop {
         tokio::select! {
+            // If the preference window and a direct result become ready together,
+            // give the completed connection the first poll.
+            biased;
             res = async {
                 match webrtc_fut.as_mut() {
                     Some(fut) => fut.await,
@@ -716,7 +719,7 @@ impl Client {
     /// whose race timeout is tuned for a raw TCP SYN. Long enough for candidate trickle + ICE
     /// checks + DTLS on high-latency links; short enough that UDP-blocked networks settle on
     /// relay without a noticeable wait. The same role RFC 8305 calls a connection attempt delay.
-    const RELAY_FALLBACK_DELAY_MS: u64 = 2500;
+    const RELAY_FALLBACK_DELAY_MS: u64 = if cfg!(target_os = "ios") { 2000 } else { 2500 };
 
     /// The delay as the user configured it, falling back to `RELAY_FALLBACK_DELAY_MS`. The
     /// settings field holds seconds, which is what a user reasons about; everything here is
