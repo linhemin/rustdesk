@@ -929,7 +929,8 @@ impl RendezvousMediator {
             );
             bail!("no place among the punches in flight");
         };
-        let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+        // Legacy controllers get the address of this socket as their LAN candidate.
+        let mut socket = crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
         let local_addr = socket.local_addr();
         // we saw invalid local_addr while using proxy, local_addr.ip() == "::1"
         let local_addr: SocketAddr =

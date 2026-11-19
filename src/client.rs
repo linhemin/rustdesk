@@ -610,11 +610,26 @@ impl Client {
             }
         };
         if let Some((iface, server)) = lan.zip(lan_server) {
-            let lan = Self::probe_lan(peer, key, token, &server, iface).boxed();
-            return race_transports_prefer_webrtc(
-                lan, vec![existing.boxed()], Self::relay_fallback_delay_ms(),
-                |result| result.0.1,
-            ).await;
+            let probe = Self::probe_lan(peer, key, token, &server, iface);
+            tokio::pin!(probe, existing);
+            return tokio::select! {
+                result = &mut probe => match result {
+                    Ok(connection) => Ok(connection),
+                    Err(err) => {
+                        log::debug!("LAN direct attempt failed: {err}");
+                        existing.await
+                    }
+                },
+                result = &mut existing => {
+                    if result.as_ref().map_or(false, |connection| connection.0.1) {
+                        return result;
+                    }
+                    match timeout(Self::relay_fallback_delay_ms(), probe).await {
+                        Ok(Ok(connection)) => Ok(connection),
+                        _ => result,
+                    }
+                }
+            };
         }
         existing.await
     }
