@@ -14,7 +14,7 @@ jobs:
 
   ios:
     needs: bridge
-    runs-on: macos-15
+    runs-on: macos-15-intel
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       FLUTTER_VERSION: '3.24.5'
@@ -48,6 +48,7 @@ jobs:
         with:
           prefix-key: rustdesk-p2p-ios
           key: aarch64-apple-ios
+          cache-on-failure: true
       - name: Compile RustDesk for iPhone
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
@@ -59,7 +60,7 @@ jobs:
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
           executable=$(plutil -extract CFBundleExecutable raw "$info")
-          lipo -verify_arch arm64 "$app/$executable"
+          lipo "$app/$executable" -verify_arch arm64
           mkdir -p package/Payload
           ditto "$app" package/Payload/RustDesk.app
           (cd package && ditto -c -k --keepParent Payload rustdesk-p2p-ios-arm64-unsigned.ipa)
