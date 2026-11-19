@@ -1814,7 +1814,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
 
   Future<void> _selectP2pInterface() async {
     final interfaces = Map<String, String>.from(
-        jsonDecode(await bind.mainGetP2pInterfaces()) as Map);
+        jsonDecode(await bind.mainGetP2PInterfaces()) as Map);
     if (!mounted || locked) return;
     final current = bind.mainGetOptionSync(key: kOptionP2pInterfaceIp);
     final address = await showDialog<String>(

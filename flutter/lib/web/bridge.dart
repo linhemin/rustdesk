@@ -822,7 +822,7 @@ class RustdeskImpl {
     return js.context.callMethod('getByName', ['option', key]);
   }
 
-  Future<String> mainGetP2pInterfaces({dynamic hint}) async => '{}';
+  Future<String> mainGetP2PInterfaces({dynamic hint}) async => '{}';
 
   Future<String> mainGetError({dynamic hint}) {
     throw UnimplementedError("mainGetError");
