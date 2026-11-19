@@ -12,6 +12,36 @@ jobs:
   bridge:
     uses: ./.github/workflows/bridge.yml
 
+  ice-tests:
+    if: github.ref_name == 'p2p-cellular'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Read the client ICE revision
+        id: ice
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import re, tomllib
+          with open('Cargo.toml', 'rb') as manifest:
+              source = tomllib.load(manifest)['patch']['crates-io']['webrtc']
+          assert source['git'] == 'https://github.com/linhemin/webrtc'
+          assert re.fullmatch(r'[0-9a-f]{40}', source['rev'])
+          print('revision=' + source['rev'])
+          PY
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: linhemin/webrtc
+          ref: ${{ steps.ice.outputs.revision }}
+          path: ice-source
+          persist-credentials: false
+      - name: Test IPv4 translation and candidate gathering
+        working-directory: ice-source
+        run: |
+          cargo test --locked -p webrtc-ice --lib nat64
+          cargo test --locked -p webrtc-ice --lib agent_gather_test
+
   windows:
     needs: bridge
     runs-on: windows-2022
@@ -67,6 +97,7 @@ jobs:
           cargo test --locked --release --lib --features "$FEATURES" p2p::tests
           cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
           cargo test --locked --release --lib --features "$FEATURES" client::path_rtt::tests
+          cargo test --locked --release --lib --features "$FEATURES" client::tcp_family_tests
           cargo test --locked --release --lib --features "$FEATURES" live_direct::tests
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_secure_tcp
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_confirm_signed_direct_permission
@@ -118,13 +149,13 @@ jobs:
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
-        run: flutter build ios --release --no-codesign --build-number=73
+        run: flutter build ios --release --no-codesign --build-number=74
       - name: Verify and package the app
         run: |
           app=flutter/build/ios/iphoneos/Runner.app
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
-          test "$(plutil -extract CFBundleVersion raw "$info")" = 73
+          test "$(plutil -extract CFBundleVersion raw "$info")" = 74
           executable=$(plutil -extract CFBundleExecutable raw "$info")
           lipo "$app/$executable" -verify_arch arm64
           mkdir -p package/Payload
