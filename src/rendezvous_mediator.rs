@@ -1308,7 +1308,7 @@ impl RendezvousMediator {
         let mut socket = {
             let mut socket =
                 crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
-            if socket.local_addr().is_ipv4() != peer_addr.is_ipv4() {
+            if slot_tcp.is_some() && socket.local_addr().is_ipv4() != peer_addr.is_ipv4() {
                 if let Ok(matching) = crate::p2p::authenticated_family_rendezvous(
                     &self.host,
                     peer_addr.is_ipv4(),
