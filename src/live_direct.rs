@@ -260,6 +260,10 @@ struct CandidateCounts {
     srflx: usize,
     prflx: usize,
     relay: usize,
+    v4_host: usize,
+    v4_srflx_v4_base: usize,
+    v4_srflx_v6_base: usize,
+    v4_srflx_unknown_base: usize,
 }
 
 impl CandidateCounts {
@@ -273,20 +277,77 @@ impl CandidateCounts {
         let Some(line) = value.get("candidate").and_then(|v| v.as_str()) else {
             return;
         };
-        let mut fields = line.split_ascii_whitespace().skip(4);
-        let Some(address) = fields.next() else { return };
-        match fields.nth(2) {
-            Some("host") => self.host += 1,
-            Some("srflx") => self.srflx += 1,
-            Some("prflx") => self.prflx += 1,
-            Some("relay") => self.relay += 1,
+        let fields: Vec<_> = line.split_ascii_whitespace().collect();
+        let [foundation, component, transport, priority, address, port, "typ", kind, extensions @ ..] =
+            fields.as_slice()
+        else {
+            return;
+        };
+        if !foundation
+            .strip_prefix("candidate:")
+            .is_some_and(|f| !f.is_empty())
+            || !component
+                .parse::<u16>()
+                .is_ok_and(|v| (1..=256).contains(&v))
+            || !(transport.eq_ignore_ascii_case("udp") || transport.eq_ignore_ascii_case("tcp"))
+            || priority.parse::<u32>().is_err()
+            || !port.parse::<u16>().is_ok_and(|v| v > 0)
+            || extensions.len() % 2 != 0
+        {
+            return;
+        }
+        let mut related = None;
+        for pair in extensions.chunks_exact(2) {
+            if pair[0] == "raddr" && related.replace(pair[1]).is_some() {
+                return;
+            }
+        }
+        match *kind {
+            "host" => self.host += 1,
+            "srflx" => self.srflx += 1,
+            "prflx" => self.prflx += 1,
+            "relay" => self.relay += 1,
             _ => return,
         }
         match address.parse::<IpAddr>() {
-            Ok(IpAddr::V4(_)) => self.v4 += 1,
+            Ok(ip @ IpAddr::V4(_)) => {
+                self.v4 += 1;
+                if Self::usable_unicast(ip).is_none() {
+                    return;
+                }
+                match *kind {
+                    "host" => self.v4_host += 1,
+                    "srflx" => match related
+                        .and_then(|base| base.parse().ok())
+                        .and_then(Self::usable_unicast)
+                    {
+                        Some(IpAddr::V4(_)) => self.v4_srflx_v4_base += 1,
+                        Some(IpAddr::V6(_)) => self.v4_srflx_v6_base += 1,
+                        None => self.v4_srflx_unknown_base += 1,
+                    },
+                    _ => {}
+                }
+            }
             Ok(IpAddr::V6(_)) => self.v6 += 1,
-            Err(_) => {} // mDNS host candidates do not reveal their address family.
+            Err(_) => {} // mDNS names do not reveal the candidate's address family.
         }
+    }
+
+    fn usable_unicast(mut ip: IpAddr) -> Option<IpAddr> {
+        if let IpAddr::V6(v6) = ip {
+            // An IPv4-mapped socket address alone is no evidence of a translated IPv6 path.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                ip = IpAddr::V4(v4);
+            }
+        }
+        if ip.is_unspecified()
+            || ip.is_loopback()
+            || ip.is_multicast()
+            || matches!(ip, IpAddr::V4(v4) if v4.is_broadcast())
+        {
+            return None;
+        }
+        Some(ip)
     }
 }
 
@@ -485,13 +546,21 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     #[test]
-    fn candidate_diagnostics_report_only_type_and_family() {
+    fn candidate_diagnostics_distinguish_signaled_base_families() {
         let mut counts = CandidateCounts::default();
         for line in [
             "candidate:a 1 udp 1 192.0.2.1 51234 typ host",
             "candidate:b 1 udp 1 2001:db8::2 51235 typ srflx raddr :: rport 0",
             "candidate:c 1 udp 1 mask.local 51236 typ host",
-            "candidate:d 1 udp 1 192.0.2.8 12345 typ invalid",
+            "candidate:d 1 udp 1 192.0.2.8 51237 typ srflx raddr 10.0.0.7 rport 51234",
+            "candidate:e 1 udp 1 192.0.2.8 51238 typ srflx network-id 1 raddr 2001:db8::9 rport 51234",
+            "candidate:f 1 udp 1 192.0.2.8 51239 typ srflx raddr 0.0.0.0 rport 0",
+            "candidate:g 1 udp 1 192.0.2.8 51240 typ srflx raddr :: rport 0",
+            "candidate:h 1 udp 1 192.0.2.8 51241 typ srflx",
+            "candidate:i 1 udp 1 192.0.2.8 51242 typ srflx raddr mask.local rport 51234",
+            "candidate:j 1 udp 1 192.0.2.8 51243 typ srflx raddr ::ffff:10.0.0.7 rport 51234",
+            "candidate:k 1 udp 1 0.0.0.0 51244 typ host",
+            "candidate:l 1 udp 1 192.0.2.8 51245 typ relay raddr 2001:db8::9 rport 51234",
         ] {
             counts.record(
                 hbb_common::serde_json::json!({ "candidate": line })
@@ -499,10 +568,44 @@ mod tests {
                     .as_bytes(),
             );
         }
-        counts.record(b"invalid json");
         assert_eq!(
             (counts.v4, counts.v6, counts.host, counts.srflx),
-            (1, 1, 2, 1)
+            (10, 1, 3, 8)
+        );
+        assert_eq!(counts.relay, 1);
+        assert_eq!(counts.v4_host, 1);
+        assert_eq!(counts.v4_srflx_v4_base, 2);
+        assert_eq!(counts.v4_srflx_v6_base, 1);
+        assert_eq!(counts.v4_srflx_unknown_base, 4);
+    }
+
+    #[test]
+    fn candidate_diagnostics_ignore_malformed_lines() {
+        let mut counts = CandidateCounts::default();
+        for line in [
+            "",
+            "candidate:",
+            "bad 1 udp 1 192.0.2.1 51234 typ host",
+            "candidate: 1 udp 1 192.0.2.1 51234 typ host",
+            "candidate:a 0 udp 1 192.0.2.1 51234 typ host",
+            "candidate:a 1 udp bad 192.0.2.1 51234 typ host",
+            "candidate:a 1 udp 1 192.0.2.1 99999 typ host",
+            "candidate:a 1 udp 1 192.0.2.1 51234 junk host",
+            "candidate:a 1 udp 1 192.0.2.1 51234 typ invalid",
+            "candidate:a 1 udp 1 192.0.2.1 51234 typ srflx raddr",
+            "candidate:a 1 udp 1 192.0.2.1 51234 typ srflx raddr :: raddr 10.0.0.1",
+        ] {
+            counts.record(
+                hbb_common::serde_json::json!({"candidate": line})
+                    .to_string()
+                    .as_bytes(),
+            );
+        }
+        counts.record(b"invalid json");
+        counts.record(br#"{"candidate": false}"#);
+        assert_eq!(
+            (counts.v4, counts.v6, counts.host, counts.srflx),
+            (0, 0, 0, 0)
         );
     }
 
