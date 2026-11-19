@@ -2,19 +2,16 @@ name: P2P iOS build
 
 on:
   push:
-    branches: [p2p-ios]
+    branches: [p2p-ios-intel]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  bridge:
-    uses: ./.github/workflows/bridge.yml
-
   ios:
-    needs: bridge
-    runs-on: macos-15
+    runs-on: macos-15-intel
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
       FLUTTER_VERSION: '3.24.5'
@@ -27,6 +24,8 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: bridge-artifact
+          github-token: ${{ github.token }}
+          run-id: 44499640372
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
           channel: stable
