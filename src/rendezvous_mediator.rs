@@ -46,6 +46,7 @@ fn connection_meta(
     ConnectionMeta {
         control_permissions,
         controlled_context,
+        direct_retry_permitted: false,
     }
 }
 
@@ -722,6 +723,7 @@ impl RendezvousMediator {
             server,
             rr.secure,
             false,
+            false,
             Default::default(),
             String::new(),
             meta,
@@ -737,9 +739,10 @@ impl RendezvousMediator {
         server: ServerPtr,
         secure: bool,
         initiate: bool,
+        force_relay: bool,
         socket_addr_v6: bytes::Bytes,
         webrtc_sdp_answer: String,
-        meta: ConnectionMeta,
+        mut meta: ConnectionMeta,
     ) -> ResultType<()> {
         let peer_addr = AddrMangle::decode(&socket_addr);
         log::info!(
@@ -757,15 +760,46 @@ impl RendezvousMediator {
         // socket since the failed exchange may have consumed a message on this one, and the
         // controller falls back to its other transports.
         let mut webrtc_sdp_answer = webrtc_sdp_answer;
-        if !webrtc_sdp_answer.is_empty() {
+        let eligible = secure && !force_relay && !use_ws() && crate::live_direct::enabled();
+        let carries_answer = !webrtc_sdp_answer.is_empty();
+        let mut signed_grant = false;
+        if carries_answer || eligible {
             let key = crate::get_key(true).await;
-            if let Err(err) = crate::secure_tcp_required(&mut socket, &key).await {
-                log::warn!("relaying without the WebRTC answer, it cannot be encrypted: {err}");
-                webrtc_sdp_answer = String::new();
-                socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            let exchange = crate::secure_tcp_with_direct_permission(&mut socket, &key, true);
+            // Pre-KX servers wait for RelayResponse first. Don't delay an ordinary relay
+            // for their full handshake timeout when we only wanted the optional policy.
+            let exchange = if carries_answer {
+                exchange.await
+            } else {
+                hbb_common::timeout(1_250, exchange).await.map_err(anyhow::Error::from)
+                    .and_then(|result| result)
+            };
+            let verified = match exchange {
+                Ok(true) if eligible && !carries_answer => {
+                    match crate::confirm_signed_direct_permission(&mut socket).await {
+                        Ok(true) => Ok(true),
+                        Ok(false) => Err(anyhow::anyhow!("Missing encrypted policy confirmation")),
+                        Err(err) => Err(err),
+                    }
+                }
+                Ok(_) => Ok(false),
+                Err(err) => Err(err),
+            };
+            match verified {
+                Ok(allowed) => signed_grant = allowed,
+                Err(err) => {
+                    log::debug!("Rendezvous key exchange unavailable for relay response: {err}");
+                    webrtc_sdp_answer.clear();
+                    socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+                }
             }
         }
 
+        // A standalone RequestRelay needs an affirmative signed grant. On older hbbs
+        // we can only trust the specific pairing for which we sent a direct ICE answer.
+        meta.direct_retry_permitted = eligible && socket.is_secured()
+            && (signed_grant || (meta.direct_retry_permitted
+                && WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_answer)));
         let mut msg_out = Message::new();
         let mut rr = RelayResponse {
             socket_addr: socket_addr.into(),
@@ -901,6 +935,7 @@ impl RendezvousMediator {
             server,
             true,
             true,
+            relay,
             socket_addr_v6,
             String::new(),
             meta,
@@ -1219,6 +1254,9 @@ impl RendezvousMediator {
         // nat_type to make the two agree.
         if relay_v4 {
             let uuid = Uuid::new_v4().to_string();
+            let mut meta = meta;
+            meta.direct_retry_permitted = !relay
+                && WebRTCStream::endpoint_declares_all_ice(&ph.webrtc_sdp_offer);
             return self
                 .create_relay(
                     ph.socket_addr.into(),
@@ -1227,6 +1265,7 @@ impl RendezvousMediator {
                     server,
                     true,
                     true,
+                    relay,
                     socket_addr_v6.clone(),
                     webrtc_sdp_answer.clone(),
                     meta,

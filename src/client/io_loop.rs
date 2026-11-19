@@ -114,6 +114,7 @@ struct ParsedPeerInfo {
     support_view_camera: bool,
     support_terminal: bool,
     live_direct: bool,
+    live_direct_trickle: bool,
 }
 
 impl ParsedPeerInfo {
@@ -185,6 +186,9 @@ impl<T: InvokeUiSession> Remote<T> {
             }
         };
 
+        // Capabilities must come from this connection's authenticated PeerInfo.
+        self.peer_info.live_direct = false;
+        self.peer_info.live_direct_trickle = false;
         let mut received = false;
         let conn_type = if self.handler.is_file_transfer() {
             ConnType::FILE_TRANSFER
@@ -196,7 +200,7 @@ impl<T: InvokeUiSession> Remote<T> {
             ConnType::default()
         };
 
-        match Client::start(
+        match Client::start_with_direct_permission(
             &self.handler.get_id(),
             key,
             token,
@@ -205,7 +209,9 @@ impl<T: InvokeUiSession> Remote<T> {
         )
         .await
         {
-            Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server))) => {
+            Ok((connection, direct_retry_permitted)) => {
+                let ((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server)) =
+                    connection;
                 self.handler
                     .connection_round_state
                     .lock()
@@ -286,22 +292,56 @@ impl<T: InvokeUiSession> Remote<T> {
                     crate::rustdesk_interval(time::interval(Duration::new(1, 0)));
                 let mut fps_instant = Instant::now();
 
+                // A fast relay can finish before the offer's authenticated key exchange.
+                // Query once, only after this peer advertises live upgrades, alongside
+                // the ordinary session traffic. Older hbbs versions give no signed grant.
+                let policy_server = rendezvous_server.clone();
+                let policy_key = self.handler.get_lch().read().unwrap().other_server
+                    .as_ref().map(|(_, _, key)| key.clone())
+                    .unwrap_or_else(|| key.to_owned());
+                let check_permission = async move {
+                    let exchange = async {
+                        let mut socket =
+                            crate::p2p::connect_rendezvous(&policy_server, None, 4_000).await?;
+                        if !crate::secure_tcp_with_direct_permission(&mut socket, &policy_key, true)
+                            .await?
+                        {
+                            return Ok(false);
+                        }
+                        crate::confirm_signed_direct_permission(&mut socket).await
+                    };
+                    matches!(timeout(4_000, exchange).await, Ok(Ok(true)))
+                };
+                tokio::pin!(check_permission);
                 let _keep_it = client::hc_connection(feedback, rendezvous_server, token).await;
                 let mut last_recv_time = Instant::now();
                 let mut webrtc_suspect_since: Option<Instant> = None;
                 let mut last_rx_progress = peer.rx_progress();
                 let mut peer_gone = false;
-                let mut allow_live_direct = !direct
+                let eligible_live_direct = !direct
                     && crate::live_direct::supported_transport(&peer)
                     && peer_verified
                     && conn_type == ConnType::DEFAULT_CONN
                     && !self.handler.is_policy_relay()
                     && crate::live_direct::enabled();
+                let mut allow_live_direct =
+                    eligible_live_direct && direct_retry_permitted == Some(true);
+                let mut check_live_permission = eligible_live_direct && direct_retry_permitted.is_none();
                 let mut waiting_for_live_direct = false;
                 let mut live_path = None;
 
                 loop {
+                    if allow_live_direct && self.peer_info.live_direct {
+                        allow_live_direct = false;
+                        if peer.send_raw(crate::live_direct::START.to_vec()).await.is_ok() {
+                            waiting_for_live_direct = true;
+                        }
+                    }
                     tokio::select! {
+                        allowed = &mut check_permission, if check_live_permission && self.peer_info.live_direct => {
+                            check_live_permission = false;
+                            allow_live_direct = allowed;
+                        }
                         res = peer.next() => {
                             if let Some(res) = res {
                                 match res {
@@ -313,7 +353,8 @@ impl<T: InvokeUiSession> Remote<T> {
                                         last_recv_time = Instant::now();
                                         if waiting_for_live_direct && bytes.as_ref() == crate::live_direct::ACCEPT {
                                             waiting_for_live_direct = false;
-                                            match crate::live_direct::wrap(&mut peer, true) {
+                                            let role = crate::live_direct::Role::Offerer { trickle: self.peer_info.live_direct_trickle };
+                                            match crate::live_direct::wrap(&mut peer, role) {
                                                 Ok(path) => live_path = Some(path),
                                                 Err(err) => {
                                                     log::error!("Could not start live direct session: {err}");
@@ -329,12 +370,6 @@ impl<T: InvokeUiSession> Remote<T> {
                                         self.data_count.fetch_add(bytes.len(), Ordering::Relaxed);
                                         if !self.handle_msg_from_peer(bytes, &mut peer).await {
                                             break
-                                        }
-                                        if allow_live_direct && self.peer_info.live_direct {
-                                            allow_live_direct = false;
-                                            if peer.send_raw(crate::live_direct::START.to_vec()).await.is_ok() {
-                                                waiting_for_live_direct = true;
-                                            }
                                         }
                                     }
                                 }
@@ -2658,6 +2693,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 .unwrap_or(false);
             self.peer_info.live_direct = platform_additions
                 .get(crate::live_direct::CAPABILITY)
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+            self.peer_info.live_direct_trickle = platform_additions
+                .get(crate::live_direct::TRICKLE_CAPABILITY)
                 .and_then(serde_json::Value::as_bool)
                 == Some(true);
         }

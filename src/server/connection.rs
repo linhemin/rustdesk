@@ -357,6 +357,7 @@ impl TerminalUserToken {
 }
 pub struct Connection {
     inner: ConnInner,
+    direct_retry_permitted: bool,
     display_idx: usize,
     stream: super::Stream,
     server: super::ServerPtrWeak,
@@ -535,6 +536,7 @@ impl Connection {
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,
+            direct_retry_permitted,
         } = meta;
         // Android is not supported yet, so we always set control_permissions to None.
         #[cfg(target_os = "android")]
@@ -565,6 +567,7 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let tx_cloned = tx.clone();
         let mut conn = Self {
+            direct_retry_permitted,
             inner: ConnInner {
                 id,
                 tx: Some(tx),
@@ -1036,7 +1039,7 @@ impl Connection {
                                 if bytes.as_ref() == crate::live_direct::START {
                                     if !live_direct_started && conn.can_try_live_direct() {
                                         if conn.stream.send_raw(crate::live_direct::ACCEPT.to_vec()).await.is_err()
-                                            || crate::live_direct::wrap(&mut conn.stream, false).is_err()
+                                            || crate::live_direct::wrap(&mut conn.stream, crate::live_direct::Role::Answerer).is_err()
                                         {
                                             conn.on_close("Live direct negotiation could not start", true).await;
                                             break;
@@ -1996,6 +1999,7 @@ impl Connection {
         {
             if self.can_try_live_direct() {
                 platform_additions.insert(crate::live_direct::CAPABILITY.into(), json!(true));
+                platform_additions.insert(crate::live_direct::TRICKLE_CAPABILITY.into(), json!(true));
             }
             platform_additions.insert(
                 "is_installed".into(),
@@ -2272,6 +2276,7 @@ impl Connection {
     #[inline]
     fn can_try_live_direct(&self) -> bool {
         self.authorized
+            && self.direct_retry_permitted
             && self.file_transfer.is_none()
             && !self.is_port_forward()
             && !self.view_camera

@@ -21,7 +21,7 @@ use std::{
     str::FromStr,
     sync::{
         mpsc::{self, RecvTimeoutError},
-        Arc, Mutex, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
     },
 };
 use uuid::Uuid;
@@ -32,7 +32,7 @@ use crate::{
     create_symmetric_key_msg, decode_id_pk, decode_id_pk_dtls, dtls_fingerprint_bound, get_rs_pk,
     is_keyboard_mode_supported,
     kcp_stream::KcpStream,
-    secure_tcp, secure_tcp_required,
+    secure_tcp, secure_tcp_with_direct_permission,
     ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
@@ -237,6 +237,8 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
     let mut window_started = false;
     loop {
         tokio::select! {
+            // When both the deadline and a completed direct connection are ready, keep direct.
+            biased;
             res = async {
                 match webrtc_fut.as_mut() {
                     Some(fut) => fut.await,
@@ -346,6 +348,44 @@ type PeerConnection = (
     bool,
 );
 
+// The punch requests share one round. A grant from another rendezvous in the fallback
+// list cannot authorize the server which actually returned the relay.
+#[derive(Default)]
+struct DirectRetryPermission {
+    checked: OnceLock<String>,
+    permitted: OnceLock<String>,
+}
+
+impl DirectRetryPermission {
+    fn record_exchange(&self, server: &str, signed_grant: bool) {
+        let _ = self.checked.set(server.to_owned());
+        if signed_grant {
+            let _ = self.permitted.set(server.to_owned());
+        }
+    }
+
+    fn record_answer(&self, server: &str, authenticated_direct_offer: bool, answer: &str) {
+        if authenticated_direct_offer && WebRTCStream::endpoint_declares_all_ice(answer) {
+            let _ = self.permitted.set(server.to_owned());
+        }
+    }
+
+    fn decision(&self, server: &str) -> Option<bool> {
+        if self.permitted.get().map(String::as_str) == Some(server) {
+            Some(true)
+        } else if self.checked.get().map(String::as_str) == Some(server) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+type ConnectedPeer = (
+    (Stream, bool, Option<Vec<u8>>, Option<KcpStream>, &'static str),
+    (i32, String),
+);
+
 async fn prefer_lan_connection<T>(
     lan: impl Future<Output = ResultType<T>>,
     fallback: impl Future<Output = ResultType<T>>,
@@ -362,11 +402,14 @@ async fn prefer_lan_connection<T>(
                 fallback.await
             }
         },
-        result = &mut fallback => {
-            match tokio::time::timeout_at(deadline, lan).await {
+        result = &mut fallback => match result {
+            Ok(fallback) => match tokio::time::timeout_at(deadline, lan).await {
                 Ok(Ok(connection)) => Ok(connection),
-                _ => result,
-            }
+                _ => Ok(fallback),
+            },
+            // The deadline limits how long we hold a working fallback. A failed rendezvous has
+            // nothing to offer: let the authenticated LAN probe finish its own bounded attempt.
+            Err(err) => lan.await.or(Err(err)),
         }
     }
 }
@@ -409,20 +452,24 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(
-        (
-            Stream,
-            bool,
-            Option<Vec<u8>>,
-            Option<KcpStream>,
-            &'static str,
-        ),
-        (i32, String),
-    )> {
+    ) -> ResultType<ConnectedPeer> {
+        let (connection, _) =
+            Self::start_with_direct_permission(peer, key, token, conn_type, interface).await?;
+        Ok(connection)
+    }
+
+    async fn start_with_direct_permission(
+        peer: &str,
+        key: &str,
+        token: &str,
+        conn_type: ConnType,
+        interface: impl Interface,
+    ) -> ResultType<(ConnectedPeer, Option<bool>)> {
         debug_assert!(peer == interface.get_id());
         interface.update_direct(None);
         interface.update_received(false);
-        match Self::_start(peer, key, token, conn_type, interface.clone()).await {
+        let permission = DirectRetryPermission::default();
+        match Self::_start(peer, key, token, conn_type, interface.clone(), &permission).await {
             Err(err) => {
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {
@@ -442,7 +489,9 @@ impl Client {
                         interface.get_lch().write().unwrap().set_direct_failure(n);
                     }
                 }
-                Ok((x.0, x.1))
+                let (_, rendezvous_server) = &x.1;
+                let allowed = permission.decision(rendezvous_server);
+                Ok(((x.0, x.1), allowed))
             }
         }
     }
@@ -454,6 +503,7 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
+        direct_permission: &DirectRetryPermission,
     ) -> ResultType<PeerConnection> {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
@@ -523,6 +573,7 @@ impl Client {
         let lan_server = lan.map(|_| rendezvous_server.clone());
         let existing = Self::start_via_rendezvous(
             peer, key, token, conn_type, interface, rendezvous_server, servers, contained,
+            direct_permission,
         );
         if let Some((iface, server)) = lan.zip(lan_server) {
             return prefer_lan_connection(
@@ -544,6 +595,7 @@ impl Client {
         rendezvous_server: String,
         servers: Vec<String>,
         contained: bool,
+        direct_permission: &DirectRetryPermission,
     ) -> ResultType<PeerConnection> {
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
         // be used, so probing v6 reachability is wasted work on every such connection.
@@ -609,6 +661,7 @@ impl Client {
             rendezvous_server.clone(),
             servers.clone(),
             contained,
+            direct_permission,
         );
         // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
         // punch is off — it would reach `connect()` with nothing to try and just open a second
@@ -637,6 +690,7 @@ impl Client {
             rendezvous_server,
             servers,
             contained,
+            direct_permission,
         )
         .boxed();
         race_transports_prefer_webrtc(
@@ -726,7 +780,7 @@ impl Client {
     /// whose race timeout is tuned for a raw TCP SYN. Long enough for candidate trickle + ICE
     /// checks + DTLS on high-latency links; short enough that UDP-blocked networks settle on
     /// relay without a noticeable wait. The same role RFC 8305 calls a connection attempt delay.
-    const RELAY_FALLBACK_DELAY_MS: u64 = 2500;
+    const RELAY_FALLBACK_DELAY_MS: u64 = if cfg!(target_os = "ios") { 2000 } else { 2500 };
 
     /// The delay as the user configured it, falling back to `RELAY_FALLBACK_DELAY_MS`. The
     /// settings field holds seconds, which is what a user reasons about; everything here is
@@ -900,6 +954,7 @@ impl Client {
         mut rendezvous_server: String,
         servers: Vec<String>,
         contained: bool,
+        direct_permission: &DirectRetryPermission,
     ) -> ResultType<(
         (
             Stream,
@@ -958,6 +1013,7 @@ impl Client {
         // wait rather than replacing it: the test runs beside both.
         let udp_nat_wait_from = Instant::now();
         let mut exchanged = false;
+        let mut handshake_grant = false;
         if carries_offer {
             // An offer puts both sides' ICE candidates, every interface address of both
             // machines, on this socket, so it goes out only once the server's key exchange has
@@ -965,8 +1021,11 @@ impl Client {
             // exchange, the offer is dropped and this becomes a punch without WebRTC, on a fresh
             // socket since the failed exchange may have consumed a message on this one. Degrade
             // to no WebRTC, never to WebRTC signalling in the clear.
-            match secure_tcp_required(&mut socket, &key).await {
-                Ok(()) => exchanged = true,
+            match secure_tcp_with_direct_permission(&mut socket, &key, true).await {
+                Ok(signed_grant) => {
+                    exchanged = true;
+                    handshake_grant = signed_grant;
+                }
                 Err(err) => {
                     log::warn!(
                         "WebRTC signalling to {} cannot be encrypted, punching without WebRTC: {}",
@@ -1023,6 +1082,10 @@ impl Client {
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
         let allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let authenticated_direct_offer = exchanged
+            && socket.is_secured()
+            && !interface.is_policy_relay()
+            && WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_offer);
         // Every direct transport this round carries, not one of them: a round can carry several
         // at once (a NAT port and an offer and a v6 address), and since the TCP punch became a
         // switch it can carry none — a single name had to misreport both. `relay` is not a punch,
@@ -1093,6 +1156,13 @@ impl Client {
                 else {
                     break;
                 };
+                // The signed key announcement alone can be replayed. A reply decrypted
+                // with our fresh session keys proves this rendezvous owns the signed key.
+                if authenticated_direct_offer
+                    && (msg_in.has_punch_hole_response() || msg_in.has_relay_response())
+                {
+                    direct_permission.record_exchange(&rendezvous_server, handshake_grant);
+                }
                 match msg_in.union {
                     Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
                         if ph.socket_addr.is_empty() {
@@ -1181,6 +1251,10 @@ impl Client {
                                         log::warn!("failed to set WebRTC relay answer: {}", err);
                                         false
                                     } else {
+                                        direct_permission.record_answer(
+                                            &rendezvous_server, authenticated_direct_offer,
+                                            &rr.webrtc_sdp_answer,
+                                        );
                                         for candidate in pending_webrtc_ice.drain(..) {
                                             if let Err(err) =
                                                 webrtc.add_remote_ice_candidate(&candidate).await
@@ -1402,6 +1476,9 @@ impl Client {
                         log::warn!("failed to set WebRTC answer: {}", err);
                         false
                     } else {
+                        direct_permission.record_answer(
+                            &rendezvous_server, authenticated_direct_offer, &webrtc_sdp_answer,
+                        );
                         for candidate in pending_webrtc_ice.drain(..) {
                             if let Err(err) = webrtc.add_remote_ice_candidate(&candidate).await {
                                 log::warn!("failed to add buffered WebRTC ICE candidate: {}", err);
@@ -5685,6 +5762,31 @@ async fn udp_nat_connect(
 
 #[cfg(test)]
 mod webrtc_race_tests {
+    #[test]
+    fn live_direct_permission_requires_same_round_server_and_authenticated_direct_answer() {
+        use super::DirectRetryPermission;
+        let endpoint = |policy| {
+            format!("webrtc://{}", crate::encode64(format!(
+                r#"{{"type":"answer","sdp":"v=0","ice_policy":"{policy}"}}"#
+            )))
+        };
+        let permission = DirectRetryPermission::default();
+        assert_eq!(permission.decision("hbbs-a"), None);
+        permission.record_exchange("hbbs-a", false);
+        permission.record_answer("hbbs-a", false, &endpoint("all"));
+        permission.record_answer("hbbs-a", true, "");
+        permission.record_answer("hbbs-a", true, &endpoint("relay"));
+        assert_eq!(permission.decision("hbbs-a"), Some(false));
+        permission.record_answer("hbbs-a", true, &endpoint("all"));
+        assert_eq!(permission.decision("hbbs-a"), Some(true));
+        assert_eq!(permission.decision("hbbs-b"), None);
+        let next_round = DirectRetryPermission::default();
+        assert_eq!(next_round.decision("hbbs-a"), None);
+        next_round.record_exchange("hbbs-b", true);
+        assert_eq!(next_round.decision("hbbs-b"), Some(true));
+        assert_eq!(next_round.decision("hbbs-a"), None);
+    }
+
     use super::{prefer_lan_connection, race_transports_prefer_webrtc};
     use hbb_common::{
         anyhow::anyhow,
@@ -5754,6 +5856,18 @@ mod webrtc_race_tests {
         .unwrap()
         .unwrap();
         assert_eq!(got, "relay");
+    }
+
+    #[tokio::test]
+    async fn failed_fallback_does_not_cancel_lan_at_its_preference_deadline() {
+        let got = prefer_lan_connection(
+            ok_after(40, "LAN"),
+            err_after(0, "rendezvous unavailable"),
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, "LAN");
     }
 
     // A direct result must win even when it lands first — the LAN ordering, where ICE beats the

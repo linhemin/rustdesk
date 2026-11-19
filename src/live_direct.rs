@@ -11,15 +11,16 @@ use hbb_common::{
     tokio::{
         self,
         io::{duplex, join},
-        sync::{mpsc, watch, Semaphore},
+        sync::{mpsc, oneshot, watch, Semaphore},
         time::{interval, timeout, Duration, Instant, MissedTickBehavior},
     },
     webrtc::WebRTCStream,
     ResultType, Stream,
 };
-use std::{collections::VecDeque, future::pending};
+use std::{collections::VecDeque, future::pending, net::IpAddr};
 
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
+pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const START: &[u8] = b"\x00RD-live-v1-start";
 pub(crate) const ACCEPT: &[u8] = b"\x00RD-live-v1-accept";
 // Protobuf cannot begin with a zero field tag. Keep control frames unambiguous even when
@@ -31,21 +32,28 @@ const OFFER: u8 = 3;
 const ANSWER: u8 = 4;
 const RESET: u8 = 5;
 const DATA_MORE: u8 = 6;
+// The base handshake and framing stay compatible with deployed complete-SDP peers.
+// Only send this offer to a peer that advertised the additional capability.
+const TRICKLE_OFFER: u8 = 7;
+const ICE_CANDIDATE: u8 = 8;
 const MAX_SDP: usize = 16 * 1024;
+const MAX_CANDIDATE: usize = 2048;
+const MAX_CANDIDATES: usize = 128;
 const MAX_APP_MESSAGE: usize = hbb_common::bytes_codec::MAX_FRAME_LENGTH;
 const FRAGMENT: usize = 16 * 1024;
 const MAX_IN_FLIGHT: u64 = 24;
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_FRAMES: usize = 128;
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
-const RTC_TIMEOUT: u64 = 8_000;
+const RTC_TIMEOUT: u64 = 18_000;
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
 #[cfg(test)]
 static DROP_TEST_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn enabled() -> bool {
-    // A RustDesk proxy is an explicit policy. OS VPN routing is left to Windows.
-    cfg!(target_os = "windows")
+    // Both platforms use the OS route (including VPN) for WebRTC. iOS only builds the
+    // controller; Windows also advertises the responder capability after authorization.
+    cfg!(any(target_os = "windows", target_os = "ios"))
         && crate::get_webrtc_enabled()
         && !Config::is_proxy()
         && Config::get_option("force-always-relay") != "Y"
@@ -64,7 +72,13 @@ pub(crate) fn supported_transport(stream: &Stream) -> bool {
     matches!(stream, Stream::Tcp(_)) && stream.is_secured()
 }
 
-pub(crate) fn wrap(stream: &mut Stream, offerer: bool) -> ResultType<watch::Receiver<bool>> {
+#[derive(Clone, Copy)]
+pub(crate) enum Role {
+    Answerer,
+    Offerer { trickle: bool },
+}
+
+pub(crate) fn wrap(stream: &mut Stream, role: Role) -> ResultType<watch::Receiver<bool>> {
     if !supported_transport(stream) {
         bail!("A live direct path requires an encrypted TCP session");
     }
@@ -94,7 +108,7 @@ pub(crate) fn wrap(stream: &mut Stream, offerer: bool) -> ResultType<watch::Rece
     let relay = std::mem::replace(tcp, app);
     let (path, status) = watch::channel(false);
     tokio::spawn(async move {
-        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), offerer, path).await {
+        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), role, path).await {
             log::debug!("Live direct bridge closed: {err}");
         }
     });
@@ -176,7 +190,7 @@ impl Sequence {
 
 enum SetupEvent {
     Send(Bytes),
-    Finished(u64, Option<Rtc>),
+    Finished(u64, Option<Rtc>, &'static str),
 }
 
 struct SetupTask(tokio::task::JoinHandle<()>);
@@ -238,35 +252,163 @@ impl Relay {
     }
 }
 
+#[derive(Debug, Default)]
+struct CandidateCounts {
+    v4: usize,
+    v6: usize,
+    host: usize,
+    srflx: usize,
+    prflx: usize,
+    relay: usize,
+}
+
+impl CandidateCounts {
+    // An RFC 8445 candidate begins foundation component transport priority address port typ type.
+    // Store only counts. In particular, do not log candidate strings, SDP, credentials or IPs.
+    fn record(&mut self, bytes: &[u8]) {
+        let Ok(value) = hbb_common::serde_json::from_slice::<hbb_common::serde_json::Value>(bytes)
+        else {
+            return;
+        };
+        let Some(line) = value.get("candidate").and_then(|v| v.as_str()) else {
+            return;
+        };
+        let mut fields = line.split_ascii_whitespace().skip(4);
+        let Some(address) = fields.next() else { return };
+        match fields.nth(2) {
+            Some("host") => self.host += 1,
+            Some("srflx") => self.srflx += 1,
+            Some("prflx") => self.prflx += 1,
+            Some("relay") => self.relay += 1,
+            _ => return,
+        }
+        match address.parse::<IpAddr>() {
+            Ok(IpAddr::V4(_)) => self.v4 += 1,
+            Ok(IpAddr::V6(_)) => self.v6 += 1,
+            Err(_) => {} // mDNS host candidates do not reveal their address family.
+        }
+    }
+}
+
+struct Attempt {
+    _task: SetupTask,
+    answer: Option<oneshot::Sender<String>>,
+    candidates: Option<mpsc::Sender<String>>,
+    candidates_received: usize,
+    local: CandidateCounts,
+    remote: CandidateCounts,
+}
+
+impl Attempt {
+    fn receive_candidate(&mut self, bytes: &[u8]) {
+        if bytes.len() > MAX_CANDIDATE || self.candidates_received >= MAX_CANDIDATES {
+            return;
+        }
+        if let (Some(tx), Ok(candidate)) = (self.candidates.as_ref(), std::str::from_utf8(bytes)) {
+            if tx.try_send(candidate.to_owned()).is_ok() {
+                self.candidates_received += 1;
+                self.remote.record(bytes);
+            }
+        }
+    }
+}
+
 fn make_attempt(
     events: &mpsc::Sender<SetupEvent>,
     id: u64,
     offer: Option<String>,
-) -> (SetupTask, mpsc::Sender<String>) {
+    trickle: bool,
+) -> Attempt {
     let offerer = offer.is_none();
-    let (answer, mut wait_for_answer) = mpsc::channel::<String>(1);
+    let (answer, wait_for_answer) = oneshot::channel::<String>();
+    let (candidates, mut remote_candidates) = mpsc::channel::<String>(MAX_CANDIDATES);
     let events = events.clone();
     let task = tokio::spawn(async move {
+        let mut stage = "capacity";
         let outcome: ResultType<Rtc> = async {
             let _slot = NEGOTIATIONS.try_acquire()?;
+            stage = "create peer connection";
             let mut rtc =
                 Rtc(WebRTCStream::new(offer.as_deref().unwrap_or(""), false, RTC_TIMEOUT).await?);
-            let sdp = timeout(Duration::from_secs(5), rtc.0.get_local_endpoint()).await??;
+            stage = "prepare local description";
+            let sdp = if trickle {
+                rtc.0.local_endpoint().to_owned()
+            } else {
+                rtc.0
+                    .get_local_endpoint_within(Duration::from_secs(3))
+                    .await?
+            };
             if sdp.len() > MAX_SDP {
                 bail!("The ICE description exceeded the live signaling limit");
             }
-            let kind = if offerer { OFFER } else { ANSWER };
+            let kind = match (offerer, trickle) {
+                (true, true) => TRICKLE_OFFER,
+                (true, false) => OFFER,
+                (false, _) => ANSWER,
+            };
             events
                 .send(SetupEvent::Send(frame(kind, id, sdp.as_bytes())))
                 .await
                 .map_err(|_| hbb_common::anyhow::anyhow!("The session closed"))?;
+
+            // Queue SDP first on the ordered authenticated relay. Local candidates can then
+            // reach the answerer even while we are waiting for its SDP.
+            let _send_ice = if trickle {
+                let mut rx = rtc
+                    .0
+                    .take_local_ice_rx()
+                    .context("ICE candidate receiver unavailable")?;
+                let events = events.clone();
+                Some(SetupTask(tokio::spawn(async move {
+                    let mut sent = 0;
+                    while let Some(candidate) = rx.recv().await {
+                        if candidate.is_empty() || candidate.len() > MAX_CANDIDATE {
+                            continue;
+                        }
+                        if events
+                            .send(SetupEvent::Send(frame(
+                                ICE_CANDIDATE,
+                                id,
+                                candidate.as_bytes(),
+                            )))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                        sent += 1;
+                        if sent >= MAX_CANDIDATES {
+                            break;
+                        }
+                    }
+                })))
+            } else {
+                None
+            };
             if offerer {
-                let sdp = timeout(Duration::from_secs(8), wait_for_answer.recv())
+                stage = "receive answer";
+                let sdp = timeout(Duration::from_millis(RTC_TIMEOUT), wait_for_answer)
                     .await?
                     .context("The peer did not answer")?;
+                stage = "set remote description";
                 rtc.0.set_remote_endpoint(&sdp).await?;
             }
+            // Remote candidates that arrived early remain queued until the peer's SDP is set.
+            let _receive_ice = if trickle {
+                let pc = rtc.0.clone();
+                Some(SetupTask(tokio::spawn(async move {
+                    while let Some(candidate) = remote_candidates.recv().await {
+                        if pc.add_remote_ice_candidate(&candidate).await.is_err() {
+                            log::trace!("Live direct attempt {id} rejected a remote ICE candidate");
+                        }
+                    }
+                })))
+            } else {
+                None
+            };
+            stage = "ICE/DTLS/data-channel checks";
             rtc.0.wait_connected(RTC_TIMEOUT).await?;
+            stage = "verify direct selected pair";
             if rtc.0.is_relayed().await != Some(false) {
                 bail!("ICE did not select a direct candidate pair");
             }
@@ -274,15 +416,22 @@ fn make_attempt(
             // each received certificate matches the fingerprint we got on that session.
             rtc.0.set_key(secretbox::gen_key());
             rtc.0.set_send_timeout(1_500);
+            stage = "direct channel ready";
             Ok(rtc)
         }
         .await;
-        if let Err(err) = outcome.as_ref() {
-            log::debug!("Live direct attempt {id} ended: {err}");
-        }
-        let _ = events.send(SetupEvent::Finished(id, outcome.ok())).await;
+        let _ = events
+            .send(SetupEvent::Finished(id, outcome.ok(), stage))
+            .await;
     });
-    (SetupTask(task), answer)
+    Attempt {
+        _task: SetupTask(task),
+        answer: offerer.then_some(answer),
+        candidates: trickle.then_some(candidates),
+        candidates_received: 0,
+        local: CandidateCounts::default(),
+        remote: CandidateCounts::default(),
+    }
 }
 
 async fn relay_pending(
@@ -335,6 +484,28 @@ mod tests {
     use super::*;
     use tokio::net::{TcpListener, TcpStream};
 
+    #[test]
+    fn candidate_diagnostics_report_only_type_and_family() {
+        let mut counts = CandidateCounts::default();
+        for line in [
+            "candidate:a 1 udp 1 192.0.2.1 51234 typ host",
+            "candidate:b 1 udp 1 2001:db8::2 51235 typ srflx raddr :: rport 0",
+            "candidate:c 1 udp 1 mask.local 51236 typ host",
+            "candidate:d 1 udp 1 192.0.2.8 12345 typ invalid",
+        ] {
+            counts.record(
+                hbb_common::serde_json::json!({ "candidate": line })
+                    .to_string()
+                    .as_bytes(),
+            );
+        }
+        counts.record(b"invalid json");
+        assert_eq!(
+            (counts.v4, counts.v6, counts.host, counts.srflx),
+            (1, 1, 2, 1)
+        );
+    }
+
     async fn encrypted_pair() -> (Stream, Stream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -363,8 +534,8 @@ mod tests {
             .send_raw(b"before the upgrade".to_vec())
             .await
             .unwrap();
-        let one = wrap(&mut first, false).unwrap();
-        let two = wrap(&mut second, false).unwrap();
+        let one = wrap(&mut first, Role::Answerer).unwrap();
+        let two = wrap(&mut second, Role::Answerer).unwrap();
         assert!(first.is_secured() && second.is_secured());
         assert_eq!(
             second.next().await.unwrap().unwrap(),
@@ -393,7 +564,7 @@ mod tests {
     #[tokio::test]
     async fn packet_replay_does_not_dispatch_input_twice() {
         let (mut sender, mut receiver) = encrypted_pair().await;
-        let _path = wrap(&mut receiver, false).unwrap();
+        let _path = wrap(&mut receiver, Role::Answerer).unwrap();
         for (kind, n, data) in [
             (DATA_MORE, 1, &b"action "[..]),
             (DATA_MORE, 1, &b"action "[..]),
@@ -439,8 +610,8 @@ mod tests {
         }
 
         let (mut first, mut second) = encrypted_pair().await;
-        let mut responder = wrap(&mut second, false).unwrap();
-        let mut initiator = wrap(&mut first, true).unwrap();
+        let mut responder = wrap(&mut second, Role::Answerer).unwrap();
+        let mut initiator = wrap(&mut first, Role::Offerer { trickle: true }).unwrap();
         exchange(&mut first, &mut second, b"before direct").await;
         tokio::join!(
             wait_for_path(&mut initiator, true),
@@ -465,7 +636,7 @@ async fn run(
     mut read_pipe: FramedStream,
     mut write_pipe: FramedStream,
     mut relay: Relay,
-    offerer: bool,
+    role: Role,
     path: watch::Sender<bool>,
 ) -> ResultType<()> {
     // App TX and RX can both exceed the pipe buffer (e.g. video and a clipboard image).
@@ -487,8 +658,9 @@ async fn run(
         }
     }));
     let (event_tx, mut events) = mpsc::channel(8);
-    let mut setup: Option<(SetupTask, mpsc::Sender<String>)> = None;
+    let mut setup: Option<Attempt> = None;
     let mut attempt = 0;
+    let offerer = matches!(role, Role::Offerer { .. });
     let mut retry_delay = 2;
     let mut next_attempt = Instant::now() + Duration::from_secs(1);
     let mut direct: Option<Direct> = None;
@@ -507,21 +679,28 @@ async fn run(
                         receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
                     }
                     Some((ACK, number, [])) => seq.acknowledge(number),
-                    Some((OFFER, number, data))
+                    Some((kind @ (OFFER | TRICKLE_OFFER), number, data))
                         if !offerer && direct.is_none() && number > attempt
                             && data.len() <= MAX_SDP && Instant::now() >= next_attempt =>
                     {
                         if let Ok(sdp) = std::str::from_utf8(data) {
                             attempt = number;
                             next_attempt = Instant::now() + Duration::from_secs(3);
-                            setup = Some(make_attempt(&event_tx, number, Some(sdp.to_owned())));
+                            setup = Some(make_attempt(&event_tx, number, Some(sdp.to_owned()), kind == TRICKLE_OFFER));
                         }
                     }
                     Some((ANSWER, number, data))
                         if offerer && number == attempt && data.len() <= MAX_SDP =>
                     {
-                        if let (Some((_, answer)), Ok(sdp)) = (setup.as_ref(), std::str::from_utf8(data)) {
-                            let _ = answer.try_send(sdp.to_owned());
+                        if let (Some(setup), Ok(sdp)) = (setup.as_mut(), std::str::from_utf8(data)) {
+                            if let Some(answer) = setup.answer.take() {
+                                let _ = answer.send(sdp.to_owned());
+                            }
+                        }
+                    }
+                    Some((ICE_CANDIDATE, number, data)) if number == attempt => {
+                        if let Some(setup) = setup.as_mut() {
+                            setup.receive_candidate(data);
                         }
                     }
                     Some((RESET, number, [])) if number == attempt => {
@@ -580,12 +759,28 @@ async fn run(
             }
             Some(event) = events.recv() => match event {
                 SetupEvent::Send(bytes) => {
-                    if decode(&bytes).map_or(false, |(_, id, _)| id == attempt) {
+                    if let Some((kind, id, data)) = decode(&bytes) {
+                        if id != attempt || setup.is_none() {
+                            continue;
+                        }
+                        if kind == ICE_CANDIDATE {
+                            if let Some(current) = setup.as_mut() {
+                                current.local.record(data);
+                            }
+                        }
                         relay.send(bytes).await?;
                     }
                 }
-                SetupEvent::Finished(id, rtc) if id == attempt && setup.is_some() => {
-                    setup = None;
+                SetupEvent::Finished(id, rtc, stage) if id == attempt && setup.is_some() => {
+                    let current = setup.take().unwrap();
+                    if id <= 3 || id.is_power_of_two() || rtc.is_some() {
+                        let side = if offerer { "controller" } else { "controlled" };
+                        if current.candidates.is_some() {
+                            log::info!("Live direct {side} attempt {id} (trickle): {stage}; local {:?}, remote {:?}", current.local, current.remote);
+                        } else {
+                            log::info!("Live direct {side} attempt {id} (complete SDP): {stage}");
+                        }
+                    }
                     if let Some(rtc) = rtc {
                         direct = Some(Direct { id, rtc, since: Instant::now(), active: false });
                     } else if offerer {
@@ -593,7 +788,7 @@ async fn run(
                         retry_delay = (retry_delay * 2).min(30);
                     }
                 }
-                SetupEvent::Finished(_, _) => {}
+                SetupEvent::Finished(_, _, _) => {}
             },
             _ = tick.tick() => {
                 #[cfg(test)]
@@ -605,9 +800,11 @@ async fn run(
                 }) || seq.pending.front().map_or(false, |p| p.sent.elapsed() >= PATH_TIMEOUT) {
                     relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
                 }
-                if offerer && direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
-                    attempt += 1;
-                    setup = Some(make_attempt(&event_tx, attempt, None));
+                if let Role::Offerer { trickle } = role {
+                    if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
+                        attempt += 1;
+                        setup = Some(make_attempt(&event_tx, attempt, None, trickle));
+                    }
                 }
             }
         }

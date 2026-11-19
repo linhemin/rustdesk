@@ -281,16 +281,16 @@ class FfiModel with ChangeNotifier {
     }
   }
 
-  Widget? getConnectionImageText() {
+  Widget? getConnectionImageText({String? peerId}) {
     if (secure == null || direct == null) {
       return null;
-    } else {
-      final icon =
-          '${secure == true ? 'secure' : 'insecure'}${direct == true ? '' : '_relay'}';
+    }
+
+    Widget indicator(bool secure, bool direct, String streamType) {
+      final icon = '${secure ? 'secure' : 'insecure'}${direct ? '' : '_relay'}';
       final iconWidget =
           SvgPicture.asset('assets/$icon.svg', width: 48, height: 48);
-      String connectionText =
-          getConnectionText(secure!, direct!, cachedPeerData.streamType);
+      final connectionText = getConnectionText(secure, direct, streamType);
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -304,6 +304,17 @@ class FfiModel with ChangeNotifier {
         ],
       );
     }
+
+    if (peerId != null && isMobile) {
+      final path = ConnectionTypeState.find(peerId);
+      return Obx(() => path.isValid()
+          ? indicator(
+              path.secure.value == ConnectionType.strSecure,
+              path.direct.value == ConnectionType.strDirect,
+              path.stream_type.value)
+          : const SizedBox.shrink());
+    }
+    return indicator(secure!, direct!, cachedPeerData.streamType);
   }
 
   clearPermissions() {
