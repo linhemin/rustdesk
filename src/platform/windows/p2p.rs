@@ -1,5 +1,53 @@
 use std::net::Ipv4Addr;
 
+pub(super) fn set_unicast_interface(
+    socket: &impl std::os::windows::io::AsRawSocket,
+    index: u32,
+) -> std::io::Result<()> {
+    use winapi::um::winsock2::{setsockopt, WSAGetLastError, SOCKET_ERROR};
+    const IP_UNICAST_IF: i32 = 31;
+    // Winsock takes the IPv4 unicast interface index in network byte order.
+    let bytes = index.to_be_bytes();
+    let result = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as usize,
+            0,
+            IP_UNICAST_IF,
+            bytes.as_ptr().cast(),
+            4,
+        )
+    };
+    if result == SOCKET_ERROR {
+        return Err(std::io::Error::from_raw_os_error(unsafe {
+            WSAGetLastError()
+        }));
+    }
+    Ok(())
+}
+
+pub(crate) fn bind_p2p_stun_udp(
+    source: Ipv4Addr,
+    index: u32,
+    min: u16,
+    max: u16,
+) -> Option<hbb_common::tokio::net::UdpSocket> {
+    use std::net::UdpSocket;
+    let socket = if (min, max) == (0, 0) {
+        UdpSocket::bind((source, 0)).ok()?
+    } else {
+        let first = u32::from(min.max(1));
+        let last = u32::from(if max == 0 { u16::MAX } else { max });
+        let count = last.checked_sub(first)? + 1;
+        let start = hbb_common::rand::random::<u32>() % count;
+        // The supplemental path may yield to ordinary gathering if a range is busy.
+        (0..count.min(16))
+            .find_map(|i| UdpSocket::bind((source, (first + (start + i) % count) as u16)).ok())?
+    };
+    set_unicast_interface(&socket, index).ok()?;
+    socket.set_nonblocking(true).ok()?;
+    hbb_common::tokio::net::UdpSocket::from_std(socket).ok()
+}
+
 pub(crate) fn is_physical_p2p_interface(index: u32) -> bool {
     use windows::Win32::NetworkManagement::{
         IpHelper::{GetIfEntry2, MIB_IF_ROW2},

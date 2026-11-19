@@ -4993,7 +4993,7 @@ ProcessId=10136
     }
 }
 mod p2p;
-pub(crate) use p2p::{is_physical_p2p_interface, resolve_p2p_ipv4};
+pub(crate) use p2p::{bind_p2p_stun_udp, is_physical_p2p_interface, resolve_p2p_ipv4};
 
 pub(crate) async fn connect_p2p_tcp(
     peer: std::net::SocketAddr,
@@ -5002,20 +5002,9 @@ pub(crate) async fn connect_p2p_tcp(
     timeout: u64,
 ) -> hbb_common::ResultType<hbb_common::Stream> {
     use hbb_common::tokio::net::TcpSocket;
-    use std::{io, os::windows::io::AsRawSocket};
-    use winapi::um::winsock2::{setsockopt, WSAGetLastError, SOCKET_ERROR};
-
-    // Winsock takes the IPv4 unicast interface index in network byte order.
-    const IP_UNICAST_IF: i32 = 31;
     let socket = TcpSocket::new_v4()?;
     socket.set_reuseaddr(true)?;
-    let index = interface_index.to_be_bytes();
-    let result = unsafe {
-        setsockopt(socket.as_raw_socket() as usize, 0, IP_UNICAST_IF, index.as_ptr().cast(), 4)
-    };
-    if result == SOCKET_ERROR {
-        return Err(io::Error::from_raw_os_error(unsafe { WSAGetLastError() }).into());
-    }
+    p2p::set_unicast_interface(&socket, interface_index)?;
     socket.bind(local)?;
     let stream = hbb_common::timeout(timeout, socket.connect(peer)).await??;
     stream.set_nodelay(true)?;

@@ -3,6 +3,12 @@ use hbb_common::{config::Config, socket_client, Stream};
 use std::net::{Ipv4Addr, SocketAddr};
 
 #[cfg(target_os = "windows")]
+#[path = "p2p/stun.rs"]
+mod stun;
+#[cfg(target_os = "windows")]
+pub(crate) use stun::configured_stun_provider;
+
+#[cfg(target_os = "windows")]
 use std::{
     sync::Mutex,
     time::{Duration, Instant},
@@ -52,7 +58,7 @@ impl Interface {
             if !address.is_private() {
                 return None;
             }
-            return physical_interfaces().find_map(|iface| {
+            let mut matches = physical_interfaces().filter_map(|iface| {
                 let network = iface.ipv4.iter().find(|network| network.addr == address)?;
                 (network.prefix_len > 0 && network.prefix_len <= 32).then_some(Self {
                     address,
@@ -60,6 +66,10 @@ impl Interface {
                     index: iface.index,
                 })
             });
+            // The GUI stores the source address. Two adapters with the same address do not
+            // identify the user's choice, so let the ordinary route handle that case.
+            let selected = matches.next()?;
+            return matches.next().is_none().then_some(selected);
         }
         #[cfg(not(target_os = "windows"))]
         None
