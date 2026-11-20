@@ -44,6 +44,9 @@ const PUNCH_READY: u8 = 10;
 const PUNCH_GO: u8 = 11;
 const PUNCH_DONE: u8 = 12;
 const PUNCH_DELAYS_MS: [u64; 3] = [0, 180, 320];
+// The agent waits up to 680 ms for trickled sockets, then up to 3 s for observers.
+// Keep its partial results while bounding the independent READY task.
+const PUNCH_MEASUREMENT_BUDGET: Duration = Duration::from_secs(4);
 const MAX_SDP: usize = 16 * 1024;
 const MAX_CANDIDATE: usize = 2048;
 const MAX_CANDIDATES: usize = 128;
@@ -483,7 +486,7 @@ async fn coordinated_punch(
     peer_ready: oneshot::Receiver<()>,
     start: oneshot::Receiver<()>,
 ) {
-    let mapping = timeout(Duration::from_secs(3), pc.wait_for_punch_ready())
+    let mapping = timeout(PUNCH_MEASUREMENT_BUDGET, pc.wait_for_punch_ready())
         .await
         .unwrap_or_default();
     status.send_modify(|s| s.local_mapping = Some(mapping));
