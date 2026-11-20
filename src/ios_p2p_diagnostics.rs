@@ -69,6 +69,9 @@ fn append_punch_status(out: &mut String, status: &crate::live_direct::PunchStatu
     use std::fmt::Write;
     if let Some(group) = status.group_local {
         let _ = writeln!(out, "mappedPairs local {group}");
+        if let Some(mask) = status.peer_group_aliases {
+            let _ = writeln!(out, "peerObservedAliasMask={mask}");
+        }
         if let Some(counts) = status.peer_profiles {
             let _ = writeln!(out, "peerOrderedMappings [stable,constantStep,irregular,insufficient]={counts:?}");
         }

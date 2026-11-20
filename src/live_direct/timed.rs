@@ -22,6 +22,7 @@ pub(super) const RESULT: u8 = 21;
 pub(super) const GROUP_SELECT: u8 = 23;
 pub(super) const GROUP_RESULT: u8 = 24;
 pub(super) const PROFILE: u8 = 25;
+pub(super) const GROUP_ALIASES: u8 = 26;
 #[path = "groups.rs"]
 mod groups;
 pub(crate) use groups::GroupSample;

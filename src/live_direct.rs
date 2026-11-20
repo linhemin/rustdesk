@@ -534,6 +534,7 @@ pub(crate) struct PunchStatus {
     pub(crate) group_local: Option<timed::GroupSample>,
     pub(crate) group_peer: Option<timed::GroupSample>,
     pub(crate) peer_profiles: Option<[u8; 4]>,
+    pub(crate) peer_group_aliases: Option<u8>,
     pub(crate) timed_local: Option<timed::Sample>,
     pub(crate) timed_peer: Option<timed::Sample>,
     pub(crate) local_mapping: Option<MappingCounts>,
@@ -1415,6 +1416,11 @@ async fn run(
                     Some((ICE_CANDIDATE, number, data)) if number == attempt => {
                         if let Some(setup) = setup.as_mut() {
                             setup.receive_candidate(data);
+                        }
+                    }
+                    Some((timed::GROUP_ALIASES, number, [mask])) if number == attempt && *mask < 8 => {
+                        if let Some(p) = setup.as_ref().filter(|a| a.grouped).and_then(|a| a.punch.as_ref()) {
+                            p.status.send_modify(|s| s.peer_group_aliases = Some(*mask));
                         }
                     }
                     Some((timed::PROFILE, number, data)) if number == attempt && data.len() == 4 => {

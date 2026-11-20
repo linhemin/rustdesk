@@ -10,6 +10,7 @@ pub(crate) struct GroupSample {
     written: u8,
     delayed: u8,
     pub(super) ingress: Option<u8>,
+    aliases: Option<u8>,
 }
 
 impl GroupSample {
@@ -44,6 +45,7 @@ impl GroupSample {
             written,
             delayed,
             ingress: (received != 255).then_some(received),
+            aliases: None,
         })
     }
 }
@@ -56,9 +58,13 @@ impl fmt::Display for GroupSample {
             self.count, self.stable, self.changed, self.written, self.delayed
         )?;
         match self.ingress {
-            Some(mask) => write!(f, "{mask}"),
-            None => f.write_str("pending"),
+            Some(mask) => write!(f, "{mask}")?,
+            None => f.write_str("pending")?,
         }
+        if let Some(mask) = self.aliases {
+            write!(f, " observedAliasMask={mask}")?;
+        }
+        Ok(())
     }
 }
 
@@ -120,6 +126,20 @@ impl Exchange<'_> {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
+        // Legacy peers also require a selected endpoint to match a trickled
+        // candidate. Publish measured aliases on the same ordered relay first.
+        let mut alias_mask = 0u8;
+        for candidate in pc.observed_udp_candidates().await {
+            if let Some(bytes) = super::super::candidate_frame(self.id, &candidate) {
+                if let Some(endpoint) = WebRTCStream::public_srflx_endpoint(candidate.as_bytes()) {
+                    if let Some(slot) = local.iter().position(|(_, addr, _)| *addr == endpoint) {
+                        alias_mask |= 1 << slot;
+                    }
+                }
+                self.events.send(SetupEvent::Send(bytes)).await
+                    .map_err(|_| anyhow!("group candidate signaling closed"))?;
+            }
+        }
         if let Some(counts) = pc.ordered_mapping_profiles().await {
             self.send(PROFILE, &counts).await?;
         }
@@ -140,6 +160,9 @@ impl Exchange<'_> {
         endpoints.truncate(local.len());
         let count = endpoints.len();
         report.count = count as u8;
+        let selected_aliases = alias_mask & ((1u8 << count) - 1);
+        report.aliases = Some(selected_aliases);
+        self.send(GROUP_ALIASES, &[selected_aliases]).await?;
         let mut lines = vec![None; count];
         while lines.iter().any(Option::is_none) {
             let json = remote.recv().await.context("group trickle ended")?;
