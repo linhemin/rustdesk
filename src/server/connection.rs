@@ -2000,6 +2000,7 @@ impl Connection {
             if self.can_try_live_direct() {
                 platform_additions.insert(crate::live_direct::CAPABILITY.into(), json!(true));
                 platform_additions.insert(crate::live_direct::TRICKLE_CAPABILITY.into(), json!(true));
+                platform_additions.insert(crate::live_direct::PUNCH_CAPABILITY.into(), json!(true));
             }
             platform_additions.insert(
                 "is_installed".into(),
