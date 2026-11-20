@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' as io;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:get/get.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:settings_ui/settings_ui.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -72,39 +69,6 @@ KeepScreenOn optionToKeepScreenOn(String value) {
 }
 
 class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
-  Future<void> _copyP2pDiagnostics() async {
-    try {
-      final documents = await getApplicationDocumentsDirectory();
-      final path = '${documents.path}/RustDesk-P2P-diagnostics.txt';
-      if (await io.FileSystemEntity.type(path, followLinks: false) !=
-          io.FileSystemEntityType.file) {
-        showToast(translate(
-            'Connect to a peer first, then try again in a minute.'));
-        return;
-      }
-      final handle = await io.File(path).open();
-      final Uint8List bytes;
-      try {
-        bytes = await handle.read(48 * 1024 + 1);
-      } finally {
-        await handle.close();
-      }
-      if (bytes.length > 48 * 1024) {
-        showToast(translate('Failed'));
-        return;
-      }
-      final report = utf8.decode(bytes);
-      if (!report.startsWith('RustDesk P2P diagnostics\n')) {
-        showToast(translate('Failed'));
-        return;
-      }
-      await Clipboard.setData(ClipboardData(text: report));
-      showToast(translate('Copied'));
-    } catch (_) {
-      showToast(translate('Failed'));
-    }
-  }
-
   final _hasIgnoreBattery =
       false; //androidVersion >= 26; // remove because not work on every device
   var _ignoreBatteryOpt = false;
@@ -932,12 +896,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                         _enableWebrtc = newValue;
                       });
                     },
-            ),
-          if (isIOS && !incomingOnly)
-            SettingsTile(
-              title: Text(translate('Copy P2P diagnostics')),
-              leading: const Icon(Icons.content_copy),
-              onPressed: (_) => _copyP2pDiagnostics(),
             ),
           SettingsTile(
               title: Text(translate('Language')),

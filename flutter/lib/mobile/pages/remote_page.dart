@@ -12,6 +12,7 @@ import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:flutter_keyboard_visibility/flutter_keyboard_visibility.dart';
 import 'package:flutter_svg/svg.dart';
 import 'package:get/get.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../../common.dart';
@@ -23,6 +24,7 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
+import '../ios_p2p_diagnostics.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
 
@@ -88,6 +90,7 @@ class RemotePage extends StatefulWidget {
 }
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
+  final _sessionOpened = DateTime.now();
   Timer? _timer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
@@ -821,11 +824,35 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     ];
   }
 
+  Future<void> _copyP2pDiagnostics() async {
+    try {
+      final documents = await getApplicationDocumentsDirectory();
+      final report = await readIosP2pDiagnostics(documents, _sessionOpened);
+      if (!mounted) return;
+      if (report == null) {
+        showToast(translate('Waiting'));
+        return;
+      }
+      await Clipboard.setData(ClipboardData(text: report));
+      if (mounted) showToast(translate('Copied'));
+    } catch (_) {
+      if (mounted) showToast(translate('Failed'));
+    }
+  }
+
   void showActions(String id) async {
     final size = MediaQuery.of(context).size;
     final x = 120.0;
     final y = size.height;
-    final mobileActionMenus = _getMobileActionMenus();
+    final mobileActionMenus = [
+      if (isIOS)
+        TTextMenu(
+          child: Text(translate('Copy P2P diagnostics')),
+          trailingIcon: const Icon(Icons.content_copy),
+          onPressed: _copyP2pDiagnostics,
+        ),
+      ..._getMobileActionMenus(),
+    ];
     final menus = toolbarControls(context, id, gFFI);
 
     final List<PopupMenuEntry<int>> more = [
