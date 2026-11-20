@@ -11,6 +11,7 @@ pub(crate) struct GroupSample {
     delayed: u8,
     pub(super) ingress: Option<u8>,
     aliases: Option<u8>,
+    cross_written: Option<u16>,
 }
 
 impl GroupSample {
@@ -46,6 +47,7 @@ impl GroupSample {
             delayed,
             ingress: (received != 255).then_some(received),
             aliases: None,
+            cross_written: None,
         })
     }
 }
@@ -63,6 +65,9 @@ impl fmt::Display for GroupSample {
         }
         if let Some(mask) = self.aliases {
             write!(f, " observedAliasMask={mask}")?;
+        }
+        if let Some(mask) = self.cross_written {
+            write!(f, " crossWrittenMask={mask}")?;
         }
         Ok(())
     }
@@ -107,6 +112,21 @@ fn offset_ms(slot: usize, count: usize, controller: bool, local: u8, remote: u8)
     } else {
         0
     }
+}
+
+// Both peers order the same advertised pairs by controller slot, then responder slot.
+fn cross_pairs(controller: bool, local: &[u8], remote: &[u8]) -> Vec<(usize, usize, u16)> {
+    let (control, answer) = if controller { (local, remote) } else { (remote, local) };
+    let mut pairs = Vec::new();
+    for (i, &a) in control.iter().enumerate() {
+        for (j, &b) in answer.iter().enumerate() {
+            if i != j && (a == 0 || b == 0) {
+                let slots = if controller { (i, j) } else { (j, i) };
+                pairs.push((slots.0, slots.1, 1u16 << (3 * i + j)));
+            }
+        }
+    }
+    pairs
 }
 
 impl Exchange<'_> {
@@ -199,6 +219,20 @@ impl Exchange<'_> {
                 report.written |= 1 << i;
             }
         }
+        // Keep the three original first sends intact. While ordinary trickle is
+        // still held, also check verified siblings of any stable group. An older
+        // peer can answer these normal authenticated ICE checks without a new frame.
+        let local_ranks: Vec<_> = local.iter().take(count).map(|slot| slot.2).collect();
+        let peer_ranks: Vec<_> = endpoints.iter().map(|slot| slot.1).collect();
+        let mut cross_written = 0;
+        if report.written != 0 {
+            for (ours, theirs, bit) in cross_pairs(controller, &local_ranks, &peer_ranks) {
+                if pc.timed_first_check(&local[ours].0, &held[lines[theirs].unwrap()]).await {
+                    cross_written |= bit;
+                }
+            }
+        }
+        report.cross_written = Some(cross_written);
         exact.extend(
             local
                 .iter()
@@ -235,6 +269,17 @@ mod tests {
         assert!(GroupSample::decode(&[3, 1, 1, 7, 0, 0]).is_none());
         let good = [3, 1, 4, 7, 4, 2];
         assert_eq!(GroupSample::decode(&good).unwrap().bytes(), good);
+    }
+
+    #[test]
+    fn stable_group_meets_both_other_advertised_sockets_on_either_role() {
+        let phone = [2, 2, 2];
+        let windows = [0, 2, 2];
+        assert_eq!(cross_pairs(true, &phone, &windows), [(1, 0, 8), (2, 0, 64)]);
+        assert_eq!(cross_pairs(false, &windows, &phone), [(0, 1, 8), (0, 2, 64)]);
+        assert!(cross_pairs(true, &[0], &[2]).is_empty());
+        assert!(cross_pairs(true, &phone, &[1, 2, 2]).is_empty());
+        assert_eq!(cross_pairs(true, &[0, 0, 0], &[0, 0, 0]).len(), 6);
     }
 
     #[test]
