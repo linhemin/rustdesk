@@ -305,8 +305,15 @@ jobs:
       - name: Build and test the Windows client
         shell: bash
         run: |
-          python build.py --portable --flutter --skip-portable-pack --hwcodec --vram
-          FEATURES=$(python build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features)
+          set -euo pipefail
+          FEATURES=$(python build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features | tr -d '\r')
+          cargo build --locked --release -p dylib_virtual_display --message-format=json-render-diagnostics > "$RUNNER_TEMP/display-build.jsonl"
+          display_dll=$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "dylib_virtual_display") | .filenames[] | select(endswith("dylib_virtual_display.dll"))] | if length == 1 then .[0] else error("Missing unique display DLL") end' "$RUNNER_TEMP/display-build.jsonl" | tr -d '\r')
+          cargo build --locked --release --lib --features "$FEATURES"
+          (cd flutter && flutter build windows --release)
+          release=flutter/build/windows/x64/runner/Release
+          test -f "$release/rustdesk.exe"
+          cp -- "$(cygpath -u "$display_dll")" "$release/dylib_virtual_display.dll"
           cargo test --locked --release --lib --features "$FEATURES" 'p2p::'
           cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
           cargo test --locked --release --lib --features "$FEATURES" client::path_rtt::tests
