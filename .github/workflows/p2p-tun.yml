@@ -2,7 +2,7 @@ name: P2P client builds
 
 on:
   push:
-    branches: [p2p-tun, p2p-live, p2p-cellular]
+    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   ice-tests:
-    if: github.ref_name == 'p2p-cellular'
+    if: github.ref_name == 'p2p-cellular' || github.ref_name == 'ios-cellular-diagnostics'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -41,8 +41,13 @@ jobs:
         run: |
           cargo test --locked -p webrtc-ice --lib nat64
           cargo test --locked -p webrtc-ice --lib agent_gather_test
+      - name: Test ICE check accounting
+        if: github.ref_name == 'ios-cellular-diagnostics'
+        working-directory: ice-source
+        run: cargo test --locked -p webrtc-ice --lib
 
   windows:
+    if: github.ref_name != 'ios-cellular-diagnostics'
     needs: bridge
     runs-on: windows-2022
     env:
@@ -117,7 +122,7 @@ jobs:
           if-no-files-found: error
 
   ios:
-    if: github.ref_name == 'p2p-cellular'
+    if: github.ref_name == 'p2p-cellular' || github.ref_name == 'ios-cellular-diagnostics'
     needs: bridge
     runs-on: macos-15-intel
     env:
@@ -158,13 +163,21 @@ jobs:
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
-        run: flutter build ios --release --no-codesign --build-number=75
+        run: flutter build ios --release --no-codesign --build-number=76
       - name: Verify and package the app
         run: |
           app=flutter/build/ios/iphoneos/Runner.app
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
-          test "$(plutil -extract CFBundleVersion raw "$info")" = 75
+          test "$(plutil -extract CFBundleVersion raw "$info")" = 76
+          python3 - "$info" <<'PY'
+          import pathlib, plistlib, sys
+          info = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
+          assert info.get("UIFileSharingEnabled")
+          assert info.get("UISupportsDocumentBrowser") or info.get("LSSupportsOpeningDocumentsInPlace")
+          runner = (pathlib.Path(sys.argv[1]).parent / info["CFBundleExecutable"]).read_bytes()
+          assert b"RustDesk-P2P-diagnostics.txt" in runner and b"RustDesk P2P diagnostics" in runner
+          PY
           executable=$(plutil -extract CFBundleExecutable raw "$info")
           lipo "$app/$executable" -verify_arch arm64
           mkdir -p package/Payload

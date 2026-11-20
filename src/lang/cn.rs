@@ -829,5 +829,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("install-directory-not-empty-tip", "所选文件夹不为空。安装可能删除现有数据。建议选择其他文件夹。"),
         ("Request approval", "请求批准"),
         ("Forever", "永久"),
+        ("Copy P2P diagnostics", "复制 P2P 诊断"),
+        ("Connect to a peer first, then try again in a minute.", "请先连接远端设备，一分钟后再试。"),
     ].iter().cloned().collect();
 }
