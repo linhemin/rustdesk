@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $payload = (Resolve-Path 'flutter/build/windows/x64/runner/Release').Path
 $exeVersion = (Get-Item -LiteralPath (Join-Path $payload 'rustdesk.exe')).VersionInfo
-if ($exeVersion.ProductVersion -ne '1.5.3+78') { throw "Unexpected Windows executable version: $($exeVersion.ProductVersion)" }
+if ($exeVersion.ProductVersion -ne '1.5.3+79') { throw "Unexpected Windows executable version: $($exeVersion.ProductVersion)" }
 $stage = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'p2p-msi')
 $stock = Join-Path $stage.FullName 'upstream.msi'
 $extracted = Join-Path $stage.FullName 'upstream'
@@ -32,11 +32,11 @@ foreach ($name in @('WindowInjection.dll', 'printer_driver_adapter.dll', 'driver
 $output = New-Item -ItemType Directory -Path 'p2p-package' -Force
 Push-Location res/msi
 try {
-    python preprocess.py --arp --version $version --revision-version 78 -d $payload
+    python preprocess.py --arp --version $version --revision-version 79 -d $payload
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the MSI project' }
     msbuild msi.sln /restore /p:RestorePackagesConfig=true /p:Configuration=Release /p:Platform=x64 /p:TargetVersion=Windows10 /nologo /v:minimal
     if ($LASTEXITCODE -ne 0) { throw 'Could not build the MSI' }
-    Copy-Item -LiteralPath 'Package/bin/x64/Release/en-us/Package.msi' -Destination (Join-Path $output.FullName 'rustdesk-1.5.3-build78-windows-x64.msi')
+    Copy-Item -LiteralPath 'Package/bin/x64/Release/en-us/Package.msi' -Destination (Join-Path $output.FullName 'rustdesk-1.5.3-build79-windows-x64.msi')
 } finally {
     Pop-Location
 }

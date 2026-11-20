@@ -5,7 +5,7 @@ import 'dart:io';
 // contain earlier sessions from the same app run, including after reconnects.
 Future<String?> readIosP2pDiagnostics(
     Directory documents, DateTime sessionOpened) async {
-  const header = 'RustDesk P2P diagnostics\nformat=udp-sync-v2';
+  const header = 'RustDesk P2P diagnostics\nformat=udp-paths-v3';
   const limit = 48 * 1024;
   final file = File('${documents.path}/RustDesk-P2P-diagnostics.txt');
   if (await FileSystemEntity.type(file.path, followLinks: false) !=
