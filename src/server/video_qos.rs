@@ -266,6 +266,7 @@ struct UserData {
     delay: UserDelay,
     record: bool,
     delivery: VecDeque<(Instant, u32, u32)>, // video kbps and receiver queue pressure
+    probe_blocked_until: Option<Instant>,
     joined_at: Option<Instant>, // set by on_connection_open; the start-up guard's clock
 }
 
@@ -493,6 +494,9 @@ impl VideoQoS {
             if viewer.delivery.iter().filter(|(_, _, queued)| *queued >= 25).count() >= 2 {
                 return (0, false);
             }
+            if viewer.probe_blocked_until.is_some_and(|deadline| now < deadline) {
+                complete = false;
+            }
             floor = floor.min(viewer.delivery.iter().map(|(_, kbps, _)| *kbps).min().unwrap_or(0));
         }
         if !complete || floor < target_kbps.saturating_mul(8) / 10 { return (150, false); }
@@ -519,6 +523,8 @@ impl VideoQoS {
 
         let mut adjust_ratio = false;
         let mut reduce_bitrate = false;
+        let now = self.now();
+        let enhanced_best = self.abr_config && self.latest_quality() == Quality::Best;
         if let Some(user) = self.users.get_mut(&id) {
             let delay = delay.max(10);
             // The reply closes the outstanding probe, braked or not.
@@ -527,6 +533,16 @@ impl VideoQoS {
             let old_avg_delay = user.delay.avg_delay();
             if !braked {
                 user.delay.rtt_calculator.update(delay);
+            }
+            // A trial above the normal ceiling must not wait for the ordinary
+            // congestion brake. Queuing is measurable before frames start dropping.
+            let queue_ms = delay.saturating_sub(user.delay.rtt_calculator.get_rtt().unwrap_or(delay));
+            if queue_ms >= 24 || braked {
+                user.probe_blocked_until = Some(now + Duration::from_secs(60));
+                let ordinary_cap = target_ratio * MAX_BR_MULTIPLE;
+                if enhanced_best && !user.delivery.is_empty() && self.ratio > ordinary_cap {
+                    self.ratio = ordinary_cap;
+                }
             }
             user.delay.add_delay(delay);
             let mut avg_delay = user.delay.avg_delay();
@@ -963,6 +979,25 @@ mod tests {
         assert_eq!(qos.delivery_growth_budget(8000), (150, false));
         qos.user_video_delivery(1, 80, 1, 0);
         assert!(qos.users[&1].delivery.is_empty());
+    }
+
+    #[test]
+    fn excess_delay_rolls_back_a_best_quality_probe_and_pauses_the_next_trial() {
+        let mut qos = stable_qos();
+        qos.new_display("monitor".into());
+        qos.set_support_changing_quality("monitor", true);
+        qos.users.get_mut(&1).unwrap().quality = Some((1, Quality::Best));
+        qos.ratio = BR_BEST * MAX_BR_MULTIPLE * 1.25;
+        for _ in 0..3 { qos.user_video_delivery(1, 8100, 60, 0); }
+        assert!(qos.delivery_growth_budget(8000).1);
+        qos.user_network_delay(1, 65);
+        assert!(qos.ratio <= BR_BEST * MAX_BR_MULTIPLE);
+        assert_eq!(qos.delivery_growth_budget(8000), (150, false));
+        qos.advance_ms(59_000);
+        for _ in 0..3 { qos.user_video_delivery(1, 8100, 60, 0); }
+        assert!(!qos.delivery_growth_budget(8000).1);
+        qos.advance_ms(1100);
+        assert!(qos.delivery_growth_budget(8000).1);
     }
 
     #[test]

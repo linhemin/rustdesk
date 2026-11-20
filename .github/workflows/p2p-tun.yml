@@ -2,7 +2,7 @@ name: P2P client builds
 
 on:
   push:
-    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics, p2p-synchronized-ice, p2p-observed-paths-79, windows-first-check-80, synchronized-first-pair-81, mapped-pair-groups-82, adaptive-cellular-media-83, ios-latest-frame-84]
+    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics, p2p-synchronized-ice, p2p-observed-paths-79, windows-first-check-80, synchronized-first-pair-81, mapped-pair-groups-82, adaptive-cellular-media-83, ios-latest-frame-84, media-probe-recovery-85]
   workflow_dispatch:
 
 permissions:
@@ -105,7 +105,7 @@ jobs:
           cargo test --locked --release --lib --features "$FEATURES" client::tcp_family_tests
           cargo test --locked --release --lib --features "$FEATURES" server::video_qos::tests
           cargo test --locked --release --lib --features "$FEATURES" client::video_delivery::tests
-            cargo test --locked --release --lib --features "$FEATURES" flutter::rgba_frame::tests
+          cargo test --locked --release --lib --features "$FEATURES" flutter::rgba_frame::tests
           cargo test --locked --release --lib --features "$FEATURES" live_direct::
           cargo test --locked --release --lib --features "$FEATURES" ios_p2p_diagnostics::tests
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_secure_tcp
