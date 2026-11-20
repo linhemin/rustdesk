@@ -171,6 +171,11 @@ jobs:
           foreach ($path in @('Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin','Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja','MSBuild/Current/Bin')) {
             Join-Path $vs $path | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           }
+          # Composite actions invoke bash by name. Prefer Git Bash over the Windows WSL launcher.
+          $gitRoot = Split-Path (Split-Path (Get-Command git.exe).Source -Parent) -Parent
+          $gitBin = Join-Path $gitRoot 'bin'
+          if (!(Test-Path -LiteralPath (Join-Path $gitBin 'bash.exe'))) { throw 'Git Bash required' }
+          $gitBin | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
           $python = Get-Command python.exe -ErrorAction SilentlyContinue
           if (!$python -or $python.Source -like '*WindowsApps*') {
             $pythonPath = 'C:/ProgramData/miniconda3'
