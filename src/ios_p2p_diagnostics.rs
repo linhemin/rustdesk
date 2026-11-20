@@ -1,0 +1,308 @@
+//! Address-free summaries of this app run's most recent in-session ICE attempts.
+use std::{collections::VecDeque, fs, io::Write, path::Path};
+
+const FILENAME: &str = "RustDesk-P2P-diagnostics.txt";
+const HEADER: &str = "RustDesk P2P diagnostics\n";
+const MAX_FILE: usize = 48 * 1024;
+const MAX_ATTEMPTS: usize = 16;
+const MAX_SNAPSHOT: usize = 4096;
+
+// The ICE library builds fixed labels and counts, without copying candidate strings. Also
+// enforce its vocabulary here, at the file boundary; a future human-readable error, changed
+// stats schema or raw signaling value must never silently become part of a shared report.
+fn safe_snapshot(text: &str) -> bool {
+    const WORDS: &str = "ice dtls sctp pc selected checklist candidates public4 other4 ipv6 unknown \
+        local remote pairs states traffic nominated host srflx prflx relay udp tcp none unavailable \
+        stats limit no ICE reports timeout waiting checking succeeded failed reqSent reqSendError \
+        reqReceivedValid respSent respSendError respReceivedMatched connected new connecting closed \
+        disconnected completed unspecified Unspecified Unknown established closing";
+    if text.is_empty()
+        || text.len() > MAX_SNAPSHOT
+        || !text
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b" \n=,[]()/->".contains(&c))
+    {
+        return false;
+    }
+    for line in text.lines() {
+        let mut remaining = line;
+        while let Some(start) = remaining.find(char::is_alphanumeric) {
+            let rest = &remaining[start..];
+            let end = rest
+                .find(|c: char| !c.is_alphanumeric())
+                .unwrap_or(rest.len());
+            let word = &rest[..end];
+            if word.bytes().all(|b| b.is_ascii_digit()) {
+                // Numbers belong only to counters, never selected endpoints or remote IDs.
+                let prefix = &line[..line.len() - rest.len()].trim_end();
+                if !(prefix.ends_with('[')
+                    || prefix.ends_with(',')
+                    || prefix.ends_with("pairs=")
+                    || prefix.ends_with("nominated="))
+                {
+                    return false;
+                }
+            } else if !WORDS
+                .split_ascii_whitespace()
+                .any(|allowed| allowed == word)
+            {
+                return false;
+            }
+            remaining = &rest[end..];
+        }
+    }
+    true
+}
+
+#[derive(Default)]
+struct History(VecDeque<String>);
+
+impl History {
+    fn push(&mut self, entry: String) -> String {
+        self.0.push_back(entry);
+        let mut size = HEADER.len() + self.0.iter().map(String::len).sum::<usize>();
+        while self.0.len() > MAX_ATTEMPTS || size > MAX_FILE {
+            size -= self.0.pop_front().unwrap().len();
+        }
+        let mut file = String::with_capacity(size);
+        file.push_str(HEADER);
+        for entry in &self.0 {
+            file.push_str(entry);
+        }
+        file
+    }
+}
+
+fn save(path: &Path, contents: &str, seq: u64) -> std::io::Result<()> {
+    // Files can read this document during a write. Rename only after the full new report
+    // exists. Never follow an existing temporary file in this user-visible directory.
+    let tmp = path.with_file_name(format!(".rd-p2p-{}-{}.tmp", std::process::id(), seq));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
+    let written = file.write_all(contents.as_bytes());
+    drop(file);
+    let result = written.and_then(|()| fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+#[cfg(target_os = "ios")]
+pub(super) use recorder::Observation;
+
+#[cfg(target_os = "ios")]
+mod recorder {
+    use super::*;
+    use hbb_common::{
+        anyhow, config::Config, futures_util::FutureExt, tokio, webrtc::WebRTCStream,
+    };
+    use std::{
+        sync::{
+            atomic::{AtomicU32, AtomicU8, Ordering},
+            mpsc::{sync_channel, SyncSender},
+            Arc, Mutex, OnceLock,
+        },
+        time::{Duration, Instant},
+    };
+
+    static DEFAULT_PATH: AtomicU8 = AtomicU8::new(0);
+    static BUILD: AtomicU32 = AtomicU32::new(0);
+
+    // Written by NWPathMonitor. Do not infer the interface of an individual ICE socket.
+    #[no_mangle]
+    pub extern "C" fn rustdesk_ios_diagnostic_path(kind: u8, build: u32) {
+        DEFAULT_PATH.store(kind, Ordering::Relaxed);
+        BUILD.store(build, Ordering::Relaxed);
+    }
+
+    fn path_label() -> &'static str {
+        match DEFAULT_PATH.load(Ordering::Relaxed) {
+            1 => "wifi",
+            2 => "cellular",
+            3 => "other",
+            _ => "unknown",
+        }
+    }
+
+    // One bounded queue/writer per process. Dropping an ICE task never blocks on the filesystem
+    // and concurrent sessions cannot interleave file writes. History takes only typed local
+    // events; an existing user-edited file is never read back into a new diagnostic report.
+    fn writer() -> Option<&'static SyncSender<String>> {
+        static WRITER: OnceLock<Option<SyncSender<String>>> = OnceLock::new();
+        WRITER
+            .get_or_init(|| {
+                let (tx, rx) = sync_channel(16);
+                std::thread::Builder::new()
+                    .name("p2p-diagnostics".into())
+                    .spawn(move || {
+                        let mut history = History::default();
+                        for (seq, entry) in rx.into_iter().enumerate() {
+                            let path = Config::path(FILENAME);
+                            if path.is_absolute() {
+                                let _ = save(&path, &history.push(entry), seq as u64);
+                            }
+                        }
+                    })
+                    .ok()?;
+                Some(tx)
+            })
+            .as_ref()
+    }
+
+    type Sample = Arc<Mutex<Option<(Instant, String)>>>;
+
+    pub(in super::super) struct Observation {
+        started: Instant,
+        start_path: &'static str,
+        offerer: bool,
+        result: &'static str,
+        stage: &'static str,
+        sample: Sample,
+        sampler: Option<tokio::task::JoinHandle<()>>,
+    }
+
+    impl Observation {
+        pub(in super::super) fn new(offerer: bool) -> Self {
+            Self {
+                started: Instant::now(),
+                start_path: path_label(),
+                offerer,
+                result: "cancelled",
+                stage: "starting",
+                sample: Default::default(),
+                sampler: None,
+            }
+        }
+
+        pub(in super::super) fn observe(&mut self, pc: &WebRTCStream) {
+            self.stage = "negotiating";
+            let pc = pc.clone();
+            let sample = self.sample.clone();
+            self.sampler = Some(tokio::spawn(async move {
+                loop {
+                    let text = pc.ice_path_diagnostics().await;
+                    if let Ok(mut latest) = sample.lock() {
+                        *latest = Some((Instant::now(), text));
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            }));
+        }
+
+        pub(in super::super) fn set_stage(&mut self, stage: &'static str) {
+            self.stage = stage;
+        }
+
+        // On the terminal transition try the same snapshot once without waiting. If it
+        // needs to await a lock, keep the last live snapshot with its visible age. An aborted
+        // attempt uses that same snapshot and releases the sampler when this guard drops.
+        pub(in super::super) fn sample_now(&mut self, pc: &WebRTCStream) {
+            if let Some(sampler) = self.sampler.take() {
+                sampler.abort();
+            }
+            if let Some(text) = pc.ice_path_diagnostics().now_or_never() {
+                if let Ok(mut latest) = self.sample.lock() {
+                    *latest = Some((Instant::now(), text));
+                }
+            }
+        }
+
+        pub(in super::super) fn finish(
+            &mut self,
+            stage: &'static str,
+            err: Option<&anyhow::Error>,
+        ) {
+            self.stage = stage;
+            self.result = match err {
+                None => "direct-ready",
+                Some(e)
+                    if e.is::<tokio::time::error::Elapsed>()
+                        || e.to_string() == "WebRTC wait_connected timeout" =>
+                {
+                    "timeout"
+                }
+                Some(_) => "failed",
+            };
+        }
+    }
+
+    impl Drop for Observation {
+        fn drop(&mut self) {
+            if let Some(sampler) = self.sampler.take() {
+                sampler.abort();
+            }
+            let side = if self.offerer {
+                "controller"
+            } else {
+                "controlled"
+            };
+            let finished = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let mut entry = format!(
+                "\n{finished} version={} build={} role={side} default_path_start={} default_path_end={} duration_ms={} result={} stage={}\n",
+                env!("CARGO_PKG_VERSION"), BUILD.load(Ordering::Relaxed), self.start_path,
+                path_label(), self.started.elapsed().as_millis(), self.result, self.stage,
+            );
+            let sample = self.sample.lock().ok().and_then(|mut guard| guard.take());
+            match sample {
+                Some((at, text)) if safe_snapshot(&text) => {
+                    entry.push_str(&format!("sample_age_ms={}\n", at.elapsed().as_millis()));
+                    entry.push_str(text.trim_end());
+                    entry.push('\n');
+                }
+                _ => entry.push_str("sample=unavailable\n"),
+            }
+            if let Some(tx) = writer() {
+                let _ = tx.try_send(entry);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_identifiers_and_accepts_count_only_snapshots() {
+        let valid = "ice=checking dtls=new sctp=connecting pc=connecting\nselected=none\npublic4 local=[0, 1, 0, 0, 0] remote=[0, 1, 0, 0, 0]\nlocal=public4->remote=public4 pairs=12 traffic=[753, 0, 0, 0, 0, 0]\n";
+        assert!(safe_snapshot(valid));
+        for unsafe_input in [
+            "ice=10.0.0.1:53047",
+            "selected=2001:db8::1",
+            "password=ASecret",
+            "remote=my-device-ID",
+            "remote=534217888",
+            "selected=58119",
+            "a=ice-ufrag",
+            "abc\0",
+            "",
+            &"x".repeat(5000),
+        ] {
+            assert!(!safe_snapshot(unsafe_input));
+        }
+    }
+
+    #[test]
+    fn keeps_complete_bounded_records_and_replaces_the_shared_file() {
+        let mut history = History::default();
+        let mut report = String::new();
+        for i in 0..30 {
+            report = history.push(format!("attempt-{i} {}\n", "x".repeat(4000)));
+        }
+        assert!(report.starts_with(HEADER));
+        assert!(report.len() <= MAX_FILE && history.0.len() <= MAX_ATTEMPTS);
+        assert!(!report.contains("attempt-0 "));
+        assert!(report.contains("attempt-29 "));
+        let dir = std::env::temp_dir().join(format!("rd-p2p-storage-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(FILENAME);
+        fs::write(&file, "untrusted previous text").unwrap();
+        save(&file, &report, 1).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), report);
+        fs::remove_file(file).unwrap();
+        fs::remove_dir(dir).unwrap();
+    }
+}

@@ -19,6 +19,10 @@ use hbb_common::{
 };
 use std::{collections::VecDeque, future::pending, net::IpAddr};
 
+#[cfg(any(target_os = "ios", test))]
+#[path = "ios_p2p_diagnostics.rs"]
+mod ios_diagnostics;
+
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const START: &[u8] = b"\x00RD-live-v1-start";
@@ -384,6 +388,8 @@ fn make_attempt(
     let (answer, wait_for_answer) = oneshot::channel::<String>();
     let (candidates, mut remote_candidates) = mpsc::channel::<String>(MAX_CANDIDATES);
     let events = events.clone();
+    #[cfg(target_os = "ios")]
+    let mut observation = ios_diagnostics::Observation::new(offerer);
     let task = tokio::spawn(async move {
         let mut stage = "capacity";
         let outcome: ResultType<Rtc> = async {
@@ -391,6 +397,8 @@ fn make_attempt(
             stage = "create peer connection";
             let mut rtc =
                 Rtc(WebRTCStream::new(offer.as_deref().unwrap_or(""), false, RTC_TIMEOUT).await?);
+            #[cfg(target_os = "ios")]
+            observation.observe(&rtc.0);
             stage = "prepare local description";
             let sdp = if trickle {
                 rtc.0.local_endpoint().to_owned()
@@ -468,7 +476,12 @@ fn make_attempt(
                 None
             };
             stage = "ICE/DTLS/data-channel checks";
-            rtc.0.wait_connected(RTC_TIMEOUT).await?;
+            #[cfg(target_os = "ios")]
+            observation.set_stage(stage);
+            let connected = rtc.0.wait_connected(RTC_TIMEOUT).await;
+            #[cfg(target_os = "ios")]
+            observation.sample_now(&rtc.0);
+            connected?;
             stage = "verify direct selected pair";
             if rtc.0.is_relayed().await != Some(false) {
                 bail!("ICE did not select a direct candidate pair");
@@ -481,6 +494,8 @@ fn make_attempt(
             Ok(rtc)
         }
         .await;
+        #[cfg(target_os = "ios")]
+        observation.finish(stage, outcome.as_ref().err());
         let _ = events
             .send(SetupEvent::Finished(id, outcome.ok(), stage))
             .await;
