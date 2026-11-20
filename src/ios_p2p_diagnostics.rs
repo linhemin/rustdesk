@@ -67,19 +67,29 @@ struct History(VecDeque<(u64, String)>);
 // distinguishable from a READY that actually reported zero measured sockets.
 fn append_punch_status(out: &mut String, status: &crate::live_direct::PunchStatus) {
     use std::fmt::Write;
-    let state = if status.started { "started" } else { "waiting" };
-    let _ = writeln!(out, "syncPunch={state} localWakes={}", status.local_wakes);
-    match status.remote_wakes {
-        Some(wakes) => {
-            let _ = writeln!(out, "remoteWakes={wakes}");
+    if let Some(local) = status.timed_local {
+        let _ = writeln!(out, "timedFirst local {local}");
+        if let Some(peer) = status.timed_peer {
+            let _ = writeln!(out, "timedFirst peer {peer}");
+        } else {
+            out.push_str("timedFirst peer=unavailable\n");
         }
-        None => out.push_str("remoteWakes=unavailable\n"),
+    } else {
+        let state = if status.started { "started" } else { "waiting" };
+        let _ = writeln!(out, "syncPunch={state} localWakes={}", status.local_wakes);
+        match status.remote_wakes {
+            Some(wakes) => {
+                let _ = writeln!(out, "remoteWakes={wakes}");
+            }
+            None => out.push_str("remoteWakes=unavailable\n"),
+        }
     }
     if let Some(sample) = status.remote_io {
         let _ = writeln!(out, "syncUdp peer elapsedMs={} [reads,bindingRequestHeader,reqAccepted,respSent,respSendError,respReceivedMatched]={:?}", sample.elapsed_ms, sample.counts);
     } else {
         out.push_str("syncUdp peer=unavailable\n");
     }
+    if status.timed_local.is_some() { return; }
     for (side, mapping) in [
         ("local", status.local_mapping),
         ("peer", status.remote_mapping),

@@ -22,6 +22,9 @@ use std::{collections::VecDeque, future::pending, net::IpAddr};
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const PUNCH_CAPABILITY: &str = "rustdesk_live_direct_punch_v1";
+pub(crate) const TIMED_CAPABILITY: &str = "rustdesk_timed_first_pair_v1";
+#[path = "live_direct/timed.rs"]
+mod timed;
 pub(crate) const START: &[u8] = b"\x00RD-live-v1-start";
 pub(crate) const ACCEPT: &[u8] = b"\x00RD-live-v1-accept";
 // Protobuf cannot begin with a zero field tag. Keep control frames unambiguous even when
@@ -46,6 +49,7 @@ const PUNCH_DONE: u8 = 12;
 // Optional counters requested by the controller. Build 78 ignores unknown control kinds.
 const PUNCH_IO_REQUEST: u8 = 13;
 const PUNCH_IO: u8 = 14;
+const TIMED_OFFER: u8 = 15;
 const IO_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const PUNCH_DELAYS_MS: [u64; 3] = [0, 180, 320];
 // The agent waits up to 680 ms for trickled sockets, then up to 3 s for observers.
@@ -92,6 +96,7 @@ pub(crate) enum Role {
     Answerer,
     Offerer { trickle: bool },
     CoordinatedOfferer,
+    TimedOfferer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -99,6 +104,7 @@ enum OfferMode {
     Complete,
     Trickle,
     Coordinated,
+    Timed,
 }
 
 impl OfferMode {
@@ -107,6 +113,7 @@ impl OfferMode {
             Self::Complete => OFFER,
             Self::Trickle => TRICKLE_OFFER,
             Self::Coordinated => PUNCH_OFFER,
+            Self::Timed => TIMED_OFFER,
         }
     }
 }
@@ -126,6 +133,7 @@ impl Role {
             Self::Offerer { trickle: false } => Some(OfferMode::Complete),
             Self::Offerer { trickle: true } => Some(OfferMode::Trickle),
             Self::CoordinatedOfferer => Some(OfferMode::Coordinated),
+            Self::TimedOfferer => Some(OfferMode::Timed),
         }
     }
 }
@@ -507,6 +515,8 @@ impl PunchIo {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PunchStatus {
+    pub(crate) timed_local: Option<timed::Sample>,
+    pub(crate) timed_peer: Option<timed::Sample>,
     pub(crate) local_mapping: Option<MappingCounts>,
     pub(crate) remote_mapping: Option<MappingCounts>,
     pub(crate) started: bool,
@@ -682,6 +692,7 @@ async fn coordinated_punch(
 }
 
 struct Attempt {
+    timed: Option<mpsc::Sender<(u8, Vec<u8>)>>,
     _task: SetupTask,
     answer: Option<oneshot::Sender<String>>,
     candidates: Option<mpsc::Sender<String>>,
@@ -713,16 +724,18 @@ fn make_attempt(
 ) -> Attempt {
     let offerer = offer.is_none();
     let trickle = mode != OfferMode::Complete;
-    let (punch, coordination) = if mode == OfferMode::Coordinated {
+    let (timed, timed_rx) = (mode == OfferMode::Timed).then(|| mpsc::channel(12)).unzip();
+    let (punch, coordination) = if matches!(mode, OfferMode::Coordinated | OfferMode::Timed) {
         let (control, ready, start) = PunchControl::new();
-        let channel = (control.status.clone(), ready, start);
-        (Some(control), Some(channel))
+        let channel = (mode == OfferMode::Coordinated).then(|| (control.status.clone(), ready, start));
+        (Some(control), channel)
     } else {
         (None, None)
     };
     let (answer, wait_for_answer) = oneshot::channel::<String>();
     let (candidates, mut remote_candidates) = mpsc::channel::<String>(MAX_CANDIDATES);
     let events = events.clone();
+    let timed_job = timed_rx.zip(punch.as_ref().map(|p| p.status.clone()));
     let io_requested = punch
         .as_ref()
         .filter(|_| !offerer)
@@ -738,6 +751,9 @@ fn make_attempt(
         let outcome: ResultType<Rtc> = async {
             let _slot = NEGOTIATIONS.try_acquire()?;
             stage = "create peer connection";
+            if mode == OfferMode::Timed && offer.as_ref().is_some_and(|s| !WebRTCStream::endpoint_has_no_candidates(s)) {
+                bail!("Timed ICE requires a candidate-free trickle offer");
+            }
             let mut rtc =
                 Rtc(WebRTCStream::new(offer.as_deref().unwrap_or(""), false, RTC_TIMEOUT).await?);
             let outbound_first = cfg!(target_os = "windows") && !offerer
@@ -770,7 +786,7 @@ fn make_attempt(
 
             // A Build 78 controller will never request these samples. A Build 78
             // responder ignores the request and continues normal trickle and punching.
-            if offerer && mode == OfferMode::Coordinated && cfg!(any(target_os = "ios", test)) {
+            if offerer && matches!(mode, OfferMode::Coordinated | OfferMode::Timed) && cfg!(any(target_os = "ios", test)) {
                 let _ = events.try_send(SetupEvent::Send(frame(PUNCH_IO_REQUEST, id, &[])));
             }
             let _io_reporter = io_requested.map(|requested| {
@@ -814,14 +830,21 @@ fn make_attempt(
                     .await?
                     .context("The peer did not answer")?;
                 stage = "set remote description";
+                if mode == OfferMode::Timed && !WebRTCStream::endpoint_has_no_candidates(&sdp) {
+                    bail!("Timed ICE requires a candidate-free trickle answer");
+                }
                 rtc.0.set_remote_endpoint(&sdp).await?;
             }
             // Remote candidates that arrived early remain queued until the peer's SDP is set.
             let (first_candidate, peer_candidate) = oneshot::channel();
             let _receive_ice = if trickle {
                 let pc = rtc.0.clone();
+                let events = events.clone();
                 Some(SetupTask(tokio::spawn(async move {
                     let mut first_candidate = Some(first_candidate);
+                    if let Some((control, status)) = timed_job {
+                        timed::run(&pc, &events, id, offerer, control, &mut remote_candidates, status).await;
+                    }
                     while let Some(candidate) = remote_candidates.recv().await {
                         if pc.add_remote_ice_candidate(&candidate).await.is_err() {
                             log::trace!("Live direct attempt {id} rejected a remote ICE candidate");
@@ -883,6 +906,7 @@ fn make_attempt(
             .await;
     });
     Attempt {
+        timed,
         _task: SetupTask(task),
         answer: offerer.then_some(answer),
         candidates: trickle.then_some(candidates),
@@ -1333,7 +1357,7 @@ async fn run(
                         receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
                     }
                     Some((ACK, number, [])) => seq.acknowledge(number),
-                    Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER), number, data))
+                    Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER), number, data))
                         if !offerer && direct.is_none() && number > attempt
                             && data.len() <= MAX_SDP && Instant::now() >= next_attempt =>
                     {
@@ -1341,6 +1365,7 @@ async fn run(
                             attempt = number;
                             next_attempt = Instant::now() + Duration::from_secs(3);
                             let mode = match kind {
+                                TIMED_OFFER => OfferMode::Timed,
                                 PUNCH_OFFER => OfferMode::Coordinated,
                                 TRICKLE_OFFER => OfferMode::Trickle,
                                 _ => OfferMode::Complete,
@@ -1360,6 +1385,18 @@ async fn run(
                     Some((ICE_CANDIDATE, number, data)) if number == attempt => {
                         if let Some(setup) = setup.as_mut() {
                             setup.receive_candidate(data);
+                        }
+                    }
+                    Some((timed::RESULT, number, data)) if number == attempt => {
+                        if let Some(a) = setup.as_ref().filter(|a| a.timed.is_some()) {
+                            if let (Some(p), Some(sample)) = (&a.punch, timed::Sample::decode(data)) {
+                                p.status.send_modify(|s| s.timed_peer = Some(sample));
+                            }
+                        }
+                    }
+                    Some((kind @ timed::SELECT..=timed::GO, number, data)) if number == attempt && data.len() <= 8 => {
+                        if let Some(tx) = setup.as_ref().and_then(|a| a.timed.as_ref()) {
+                            let _ = tx.try_send((kind, data.to_vec()));
                         }
                     }
                     Some((kind @ (PUNCH_READY | PUNCH_GO | PUNCH_DONE | PUNCH_IO_REQUEST | PUNCH_IO), number, data)) if number == attempt => {
@@ -1482,6 +1519,11 @@ async fn run(
                 if let Some(mode) = offer_mode {
                     if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
                         attempt += 1;
+                        // Give immediately usable LAN/IPv6 candidates the ordinary first
+                        // retry. Use fresh sockets for the timed attempt on the next retry.
+                        let mode = if mode == OfferMode::Timed && attempt % 2 == 1 {
+                            OfferMode::Coordinated
+                        } else { mode };
                         setup = Some(make_attempt(&event_tx, attempt, None, mode));
                     }
                 }

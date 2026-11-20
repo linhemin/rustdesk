@@ -2001,6 +2001,7 @@ impl Connection {
                 platform_additions.insert(crate::live_direct::CAPABILITY.into(), json!(true));
                 platform_additions.insert(crate::live_direct::TRICKLE_CAPABILITY.into(), json!(true));
                 platform_additions.insert(crate::live_direct::PUNCH_CAPABILITY.into(), json!(true));
+                platform_additions.insert(crate::live_direct::TIMED_CAPABILITY.into(), json!(true));
             }
             platform_additions.insert(
                 "is_installed".into(),
