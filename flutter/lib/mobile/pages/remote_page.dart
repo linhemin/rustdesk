@@ -841,7 +841,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         fps: data.fps, delay: data.delay, target: data.targetBitrate,
         direct: gFFI.ffiModel.direct,
       );
-      await Clipboard.setData(ClipboardData(text: '$report\n$media'));
+      final ready = gFFI.imageModel.imageReady.format(_sessionOpened, DateTime.now());
+      await Clipboard.setData(ClipboardData(text: '$report\n$media$ready'));
       if (mounted) showToast(translate('Copied'));
     } catch (_) {
       if (mounted) showToast(translate('Failed'));

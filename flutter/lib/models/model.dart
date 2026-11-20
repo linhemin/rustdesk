@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:flutter_hbb/mobile/image_ready_samples.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1927,6 +1928,7 @@ class VirtualMouseMode with ChangeNotifier {
 }
 
 class ImageModel with ChangeNotifier {
+  final imageReady = ImageReadySamples();
   ui.Image? _image;
 
   ui.Image? get image => _image;
@@ -1949,7 +1951,10 @@ class ImageModel with ChangeNotifier {
 
   addCallbackOnFirstImage(Function(String) cb) => callbacksOnFirstImage.add(cb);
 
-  clearImage() => _image = null;
+  clearImage() {
+    _image = null;
+    imageReady.reset();
+  }
 
   bool _webDecodingRgba = false;
   final List<Uint8List> _webRgbaList = List.empty(growable: true);
@@ -1989,6 +1994,7 @@ class ImageModel with ChangeNotifier {
 
   decodeAndUpdate(int display, Uint8List rgba) async {
     final pid = parent.target?.id;
+    final upload = isIOS ? (Stopwatch()..start()) : null;
     final rect = parent.target?.ffiModel.pi.getDisplayRect(display);
     final image = await img.decodeImageFromPixels(
       rgba,
@@ -2002,7 +2008,11 @@ class ImageModel with ChangeNotifier {
       image?.dispose();
       return;
     }
+    final uploadUs = upload?.elapsedMicroseconds;
     await update(image);
+    if (uploadUs != null && image != null && parent.target?.id == pid) {
+      imageReady.add(DateTime.now(), uploadUs);
+    }
   }
 
   Future<void> update(ui.Image? image,

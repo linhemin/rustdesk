@@ -1,9 +1,24 @@
 import 'dart:io';
 
+import 'package:flutter_hbb/mobile/image_ready_samples.dart';
+
 import 'package:flutter_hbb/mobile/ios_p2p_diagnostics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('image-ready samples expire on idle and cannot cross a session boundary', () {
+    final rows = ImageReadySamples();
+    final start = DateTime.utc(2026, 11, 20);
+    for (int i = 0; i <= 50; i++) {
+      rows.add(start.add(Duration(milliseconds: i * 20)), 4400);
+    }
+    final end = start.add(const Duration(seconds: 1));
+    expect(rows.format(start, end), ' imageReadyFps=50 rgbaToImageMeanMs=4');
+    expect(rows.format(start, end.add(const Duration(seconds: 4))), '');
+    expect(rows.format(end.add(const Duration(milliseconds: 1)), end), '');
+    rows.reset();
+    expect(rows.format(start, end), '');
+  });
   test('copy includes only current, typed media samples', () {
     final now = DateTime.utc(2026, 1, 1);
     final start = now.subtract(const Duration(seconds: 20));
