@@ -203,6 +203,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Portable 7-Zip extraction failed' }
           }
           $sevenZip | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          $jqDir = Join-Path $env:RUNNER_TOOL_CACHE 'jq-1.8.2-x64'
+          $jq = Join-Path $jqDir 'jq.exe'
+          if (!(Test-Path -LiteralPath $jq)) {
+            New-Item -ItemType Directory -Path $jqDir -Force | Out-Null
+            $tmpJq = Join-Path $env:RUNNER_TEMP 'jq-download.exe'
+            (New-Object Net.WebClient).DownloadFile('https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-windows-amd64.exe', $tmpJq)
+            if ((Get-FileHash -LiteralPath $tmpJq).Hash -ne 'A6FC67FEDAF9128A3309A1E2EBB8B986AECCF70122EE46D2CB4849E423F0C627') { throw 'jq executable digest mismatch' }
+            Move-Item -LiteralPath $tmpJq -Destination $jq
+          }
+          $jqDir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ needs.source.outputs.revision }}
