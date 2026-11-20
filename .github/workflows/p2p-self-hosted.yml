@@ -46,7 +46,6 @@ jobs:
     runs-on: rustdesk-macos-arm64
     timeout-minutes: 150
     env:
-      IPHONEOS_DEPLOYMENT_TARGET: '15.0'
       FLUTTER_VERSION: '3.24.5'
       VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
     steps:
@@ -108,6 +107,7 @@ jobs:
           targets: aarch64-apple-ios
       - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
         with:
+          vcpkgDirectory: ${{ runner.tool_cache }}/vcpkg-p2p-ios
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
       - name: Install iOS native dependencies
         run: |
@@ -115,8 +115,11 @@ jobs:
           mkdir -p "$overlay"
           cp "$VCPKG_ROOT/triplets/community/arm64-ios.cmake" "$overlay/arm64-ios.cmake"
           cat >> "$overlay/arm64-ios.cmake" <<'CMAKE'
-          list(APPEND VCPKG_ENV_PASSTHROUGH IPHONEOS_DEPLOYMENT_TARGET)
-          list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DCMAKE_OSX_DEPLOYMENT_TARGET=$ENV{IPHONEOS_DEPLOYMENT_TARGET}")
+          # Scope the minimum to this triplet. vcpkg also builds tools that run on macOS.
+          set(ENV{IPHONEOS_DEPLOYMENT_TARGET} "15.0")
+          list(APPEND VCPKG_CMAKE_CONFIGURE_OPTIONS "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0")
+          set(VCPKG_C_FLAGS "-miphoneos-version-min=15.0")
+          set(VCPKG_CXX_FLAGS "-miphoneos-version-min=15.0")
           CMAKE
           "$VCPKG_ROOT/vcpkg" install --clean-after-build --overlay-triplets="$overlay" --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
@@ -125,6 +128,8 @@ jobs:
           key: aarch64-apple-ios
           cache-on-failure: true
       - name: Compile RustDesk for iPhone
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '15.0'
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
