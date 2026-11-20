@@ -19,6 +19,11 @@ const PING: u8 = 18;
 const PONG: u8 = 19;
 pub(super) const GO: u8 = 20;
 pub(super) const RESULT: u8 = 21;
+pub(super) const GROUP_SELECT: u8 = 23;
+pub(super) const GROUP_RESULT: u8 = 24;
+#[path = "groups.rs"]
+mod groups;
+pub(crate) use groups::GroupSample;
 const BUDGET: Duration = Duration::from_secs(7);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +212,7 @@ pub(super) async fn run(
     control: mpsc::Receiver<(u8, Vec<u8>)>,
     remote: &mut mpsc::Receiver<String>,
     status: watch::Sender<PunchStatus>,
+    grouped: bool,
 ) {
     let mut exchange = Exchange {
         events,
@@ -221,17 +227,34 @@ pub(super) async fn run(
         late_ms: 0,
     };
     status.send_modify(|s| s.timed_local = Some(pending));
-    let sample = match timeout(
-        BUDGET,
-        exchange.first_check(pc, controller, remote, &mut held),
-    )
-    .await
-    {
-        Ok(Ok(sample)) => sample,
-        _ => Sample {
+    let mut exact = Vec::new();
+    let sample = if grouped {
+        let mut report = GroupSample::default();
+        status.send_modify(|s| s.group_local = Some(report));
+        let result = timeout(
+            Duration::from_secs(10),
+            exchange.group_checks(pc, controller, remote, &mut held, &mut exact, &mut report),
+        )
+        .await;
+        status.send_modify(|s| s.group_local = Some(report));
+        let _ = exchange.send(GROUP_RESULT, &report.bytes()).await;
+        result.ok().and_then(Result::ok).unwrap_or(Sample {
             state: 2,
             ..pending
-        },
+        })
+    } else {
+        match timeout(
+            BUDGET,
+            exchange.first_check(pc, controller, remote, &mut held),
+        )
+        .await
+        {
+            Ok(Ok(sample)) => sample,
+            _ => Sample {
+                state: 2,
+                ..pending
+            },
+        }
     };
     status.send_modify(|s| s.timed_local = Some(sample));
     // Release ordinary ICE immediately after the timed write or bounded fallback.
@@ -241,6 +264,19 @@ pub(super) async fn run(
         }
     }
     let _ = exchange.send(RESULT, &sample.bytes()).await;
+    if !exact.is_empty() {
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        let ingress = pc.grouped_pair_ingress(&exact).await;
+        let report = status.borrow().group_local.map(|mut value| {
+            value.ingress = ingress;
+            value
+        });
+        if let Some(report) = report {
+            status.send_modify(|s| s.group_local = Some(report));
+            let _ = exchange.send(GROUP_RESULT, &report.bytes()).await;
+            hbb_common::log::info!("RustDesk mapped pairs attempt {id}: {report}");
+        }
+    }
     if id <= 3 || id.is_power_of_two() {
         hbb_common::log::info!("RustDesk timed first pair attempt {id}: {sample}");
     }

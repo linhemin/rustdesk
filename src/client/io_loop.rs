@@ -117,6 +117,7 @@ struct ParsedPeerInfo {
     live_direct_trickle: bool,
     live_direct_punch: bool,
     live_direct_timed: bool,
+    live_direct_groups: bool,
 }
 
 impl ParsedPeerInfo {
@@ -193,6 +194,7 @@ impl<T: InvokeUiSession> Remote<T> {
         self.peer_info.live_direct_trickle = false;
         self.peer_info.live_direct_punch = false;
         self.peer_info.live_direct_timed = false;
+        self.peer_info.live_direct_groups = false;
         let mut received = false;
         let conn_type = if self.handler.is_file_transfer() {
             ConnType::FILE_TRANSFER
@@ -360,7 +362,11 @@ impl<T: InvokeUiSession> Remote<T> {
                                         if waiting_for_live_direct && bytes.as_ref() == crate::live_direct::ACCEPT {
                                             waiting_for_live_direct = false;
                                             let role = if self.peer_info.live_direct_timed && self.peer_info.live_direct_trickle && self.peer_info.live_direct_punch {
-                                                crate::live_direct::Role::TimedOfferer
+                                                if self.peer_info.live_direct_groups {
+                                                    crate::live_direct::Role::GroupOfferer
+                                                } else {
+                                                    crate::live_direct::Role::TimedOfferer
+                                                }
                                             } else {
                                                 crate::live_direct::Role::offerer(self.peer_info.live_direct_trickle, self.peer_info.live_direct_punch)
                                             };
@@ -2713,6 +2719,9 @@ impl<T: InvokeUiSession> Remote<T> {
                 .get(crate::live_direct::PUNCH_CAPABILITY)
                 .and_then(serde_json::Value::as_bool)
                 == Some(true);
+            self.peer_info.live_direct_groups = platform_additions
+                .get(crate::live_direct::GROUP_CAPABILITY)
+                .and_then(serde_json::Value::as_bool) == Some(true);
             self.peer_info.live_direct_timed = platform_additions
                 .get(crate::live_direct::TIMED_CAPABILITY)
                 .and_then(serde_json::Value::as_bool) == Some(true);

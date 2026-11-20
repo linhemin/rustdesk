@@ -2,7 +2,7 @@ name: P2P client builds
 
 on:
   push:
-    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics, p2p-synchronized-ice, p2p-observed-paths-79, windows-first-check-80, synchronized-first-pair-81]
+    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics, p2p-synchronized-ice, p2p-observed-paths-79, windows-first-check-80, synchronized-first-pair-81, mapped-pair-groups-82]
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,7 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   ice-tests:
-    if: contains(fromJSON('["p2p-cellular","ios-cellular-diagnostics","p2p-synchronized-ice","p2p-observed-paths-79","synchronized-first-pair-81"]'), github.ref_name)
+    if: contains(fromJSON('["p2p-cellular","ios-cellular-diagnostics","p2p-synchronized-ice","p2p-observed-paths-79","synchronized-first-pair-81","mapped-pair-groups-82"]'), github.ref_name)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -103,7 +103,7 @@ jobs:
           cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
           cargo test --locked --release --lib --features "$FEATURES" client::path_rtt::tests
           cargo test --locked --release --lib --features "$FEATURES" client::tcp_family_tests
-          cargo test --locked --release --lib --features "$FEATURES" live_direct::tests
+          cargo test --locked --release --lib --features "$FEATURES" live_direct::
           cargo test --locked --release --lib --features "$FEATURES" ios_p2p_diagnostics::tests
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_secure_tcp
           cargo test --locked --release --lib --features "$FEATURES" common::tests::test_confirm_signed_direct_permission
@@ -123,7 +123,7 @@ jobs:
           if-no-files-found: error
 
   ios:
-    if: contains(fromJSON('["p2p-cellular","ios-cellular-diagnostics","p2p-synchronized-ice","p2p-observed-paths-79","synchronized-first-pair-81"]'), github.ref_name)
+    if: contains(fromJSON('["p2p-cellular","ios-cellular-diagnostics","p2p-synchronized-ice","p2p-observed-paths-79","synchronized-first-pair-81","mapped-pair-groups-82"]'), github.ref_name)
     needs: bridge
     runs-on: macos-15-intel
     env:
@@ -164,7 +164,7 @@ jobs:
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
-        run: flutter build ios --release --no-codesign --build-number=81
+        run: flutter build ios --release --no-codesign --build-number=82
       - name: Test copying the active iPhone connection report
         working-directory: flutter
         run: flutter test --no-pub test/mobile_p2p_diagnostics_test.dart
@@ -173,7 +173,7 @@ jobs:
           app=flutter/build/ios/iphoneos/Runner.app
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
-          test "$(plutil -extract CFBundleVersion raw "$info")" = 81
+          test "$(plutil -extract CFBundleVersion raw "$info")" = 82
           python3 - "$info" <<'PY'
           import pathlib, plistlib, sys
           info = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
