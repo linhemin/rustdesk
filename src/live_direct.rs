@@ -702,7 +702,7 @@ fn make_attempt(
 
             // A Build 78 controller will never request these samples. A Build 78
             // responder ignores the request and continues normal trickle and punching.
-            if offerer && mode == OfferMode::Coordinated {
+            if offerer && mode == OfferMode::Coordinated && cfg!(any(target_os = "ios", test)) {
                 let _ = events.try_send(SetupEvent::Send(frame(PUNCH_IO_REQUEST, id, &[])));
             }
             let _io_reporter = io_requested.map(|requested| {
