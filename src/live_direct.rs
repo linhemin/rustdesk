@@ -253,6 +253,65 @@ enum SetupEvent {
     Finished(u64, Option<Rtc>, &'static str),
 }
 
+// Some NATs assign a different port if the peer reaches the advertised tuple
+// before our first outbound check. Buffer only public IPv4 UDP advertisements
+// on alternating coordinated retries. This task never handles application data.
+async fn advertise_after_check(
+    pc: WebRTCStream,
+    mut input: mpsc::Receiver<SetupEvent>,
+    output: mpsc::Sender<SetupEvent>,
+    id: u64,
+) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut waiting = Vec::new();
+    let mut check = interval(Duration::from_millis(80));
+    check.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut released = 0;
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => break,
+            _ = check.tick(), if !waiting.is_empty() => {
+                let checked = pc.checked_public_udp_endpoints().await;
+                let pending = std::mem::take(&mut waiting);
+                for (address, event) in pending {
+                    if checked.contains(&address) {
+                        if output.send(event).await.is_err() { return; }
+                        released += 1;
+                    } else {
+                        waiting.push((address, event));
+                    }
+                }
+            }
+            next = input.recv() => {
+                let Some(event) = next else { break };
+                let address = match &event {
+                    SetupEvent::Send(bytes) => decode(bytes).and_then(|(kind, _, data)| {
+                        if kind == ICE_CANDIDATE {
+                            WebRTCStream::public_udp_candidate_endpoint(data)
+                        } else { None }
+                    }),
+                    _ => None,
+                };
+                if let Some(address) = address {
+                    // All candidate producers are bounded by the attempt protocol.
+                    waiting.push((address, event));
+                } else if output.send(event).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+    if id <= 3 || id.is_power_of_two() {
+        log::info!("Windows outbound-first ICE attempt {id}: checked before advertising {released}, released at deadline {}", waiting.len());
+    }
+    for (_, event) in waiting {
+        if output.send(event).await.is_err() { return; }
+    }
+    while let Some(event) = input.recv().await {
+        if output.send(event).await.is_err() { return; }
+    }
+}
+
 struct SetupTask(tokio::task::JoinHandle<()>);
 
 impl Drop for SetupTask {
@@ -681,6 +740,15 @@ fn make_attempt(
             stage = "create peer connection";
             let mut rtc =
                 Rtc(WebRTCStream::new(offer.as_deref().unwrap_or(""), false, RTC_TIMEOUT).await?);
+            let outbound_first = cfg!(target_os = "windows") && !offerer
+                && mode == OfferMode::Coordinated && id % 2 == 1;
+            let (events, _advertisements) = if outbound_first {
+                let (tx, rx) = mpsc::channel(MAX_CANDIDATES);
+                let task = tokio::spawn(advertise_after_check(rtc.0.clone(), rx, events.clone(), id));
+                (tx, Some(SetupTask(task)))
+            } else {
+                (events.clone(), None)
+            };
             #[cfg(target_os = "ios")]
             observation.observe(&rtc.0);
             stage = "prepare local description";
@@ -874,6 +942,27 @@ async fn receive_data(
 mod tests {
     use super::*;
     use tokio::net::{TcpListener, TcpStream};
+
+    #[tokio::test]
+    async fn outbound_first_keeps_private_candidates_moving_and_releases_unchecked_public_one() {
+        let pc = Rtc(WebRTCStream::new("", false, RTC_TIMEOUT).await.unwrap());
+        let (input, rx) = mpsc::channel(4);
+        let (output, mut received) = mpsc::channel(4);
+        let worker = SetupTask(tokio::spawn(advertise_after_check(pc.0.clone(), rx, output, 1)));
+        let candidate = |address: &str| {
+            let json = format!(r#"{{"candidate":"candidate:x 1 udp 100 {address} 54321 typ srflx","sdpMid":"0","sdpMLineIndex":0}}"#);
+            candidate_frame(1, &json).unwrap()
+        };
+        let public = candidate("8.8.8.8");
+        let private = candidate("192.168.1.2");
+        input.send(SetupEvent::Send(public.clone())).await.unwrap();
+        input.send(SetupEvent::Send(private.clone())).await.unwrap();
+        assert!(matches!(received.recv().await, Some(SetupEvent::Send(b)) if b == private));
+        assert!(timeout(Duration::from_millis(150), received.recv()).await.is_err());
+        assert!(matches!(timeout(Duration::from_secs(4), received.recv()).await,
+            Ok(Some(SetupEvent::Send(b))) if b == public));
+        drop(worker);
+    }
 
     #[test]
     fn new_offer_is_sent_only_to_a_peer_advertising_both_capabilities() {

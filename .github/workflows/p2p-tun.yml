@@ -2,7 +2,7 @@ name: P2P client builds
 
 on:
   push:
-    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics, p2p-synchronized-ice, p2p-observed-paths-79]
+    branches: [p2p-tun, p2p-live, p2p-cellular, ios-cellular-diagnostics, p2p-synchronized-ice, p2p-observed-paths-79, windows-first-check-80]
   workflow_dispatch:
 
 permissions:
