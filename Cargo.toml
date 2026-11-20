@@ -258,9 +258,9 @@ tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "e
 # Pinned by rev, not branch: a fork branch can be rewritten out from under the lockfile.
 # webrtc: SettingEngine cannot reach the ICE agent's max_binding_requests, which decides how
 # long the answerer keeps checking a pair that has not answered yet.
-webrtc = { git = "https://github.com/linhemin/webrtc", rev = "d28f4aca73248a518bf54832699d08ffe5211e6c" }
-webrtc-util = { git = "https://github.com/linhemin/webrtc", rev = "d28f4aca73248a518bf54832699d08ffe5211e6c" }
-webrtc-sctp = { git = "https://github.com/linhemin/webrtc", rev = "d28f4aca73248a518bf54832699d08ffe5211e6c" }
+webrtc = { git = "https://github.com/linhemin/webrtc", rev = "0a700a642cdfae5c5e4eb4b58bc483ab6c707f20" }
+webrtc-util = { git = "https://github.com/linhemin/webrtc", rev = "0a700a642cdfae5c5e4eb4b58bc483ab6c707f20" }
+webrtc-sctp = { git = "https://github.com/linhemin/webrtc", rev = "0a700a642cdfae5c5e4eb4b58bc483ab6c707f20" }
 
 [package.metadata.winres]
 LegalCopyright = "Copyright © 2026 Purslane Tech Pte. Ltd. All rights reserved."
