@@ -746,6 +746,12 @@ impl Client {
             None
         };
         let has_webrtc_offerer = webrtc_offerer.is_some();
+        #[cfg(target_os = "ios")]
+        let initial_observation = webrtc_offerer.as_ref().map(|stream| {
+            let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "initial");
+            observation.observe(stream);
+            observation
+        });
         let fut = Self::_start_inner(
             peer.to_owned(),
             key.to_owned(),
@@ -761,6 +767,16 @@ impl Client {
             contained,
             direct_permission,
         );
+        #[cfg(target_os = "ios")]
+        let fut = async move {
+            let mut observation = initial_observation;
+            let result = fut.await;
+            if let Some(observation) = observation.as_mut() {
+                let direct_webrtc = matches!(&result, Ok(((Stream::WebRTC(_), true, ..), ..)));
+                observation.finish_initial(direct_webrtc, result.is_err());
+            }
+            result
+        };
         // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
         // punch is off — it would reach `connect()` with nothing to try and just open a second
         // relay.

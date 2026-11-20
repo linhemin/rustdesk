@@ -19,10 +19,6 @@ use hbb_common::{
 };
 use std::{collections::VecDeque, future::pending, net::IpAddr};
 
-#[cfg(any(target_os = "ios", test))]
-#[path = "ios_p2p_diagnostics.rs"]
-mod ios_diagnostics;
-
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const START: &[u8] = b"\x00RD-live-v1-start";
@@ -389,7 +385,7 @@ fn make_attempt(
     let (candidates, mut remote_candidates) = mpsc::channel::<String>(MAX_CANDIDATES);
     let events = events.clone();
     #[cfg(target_os = "ios")]
-    let mut observation = ios_diagnostics::Observation::new(offerer);
+    let mut observation = crate::ios_p2p_diagnostics::Observation::new(offerer, "relay-upgrade");
     let task = tokio::spawn(async move {
         let mut stage = "capacity";
         let outcome: ResultType<Rtc> = async {

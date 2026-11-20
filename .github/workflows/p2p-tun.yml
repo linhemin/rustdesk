@@ -163,20 +163,25 @@ jobs:
         run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
       - name: Build the unsigned iPhone app
         working-directory: flutter
-        run: flutter build ios --release --no-codesign --build-number=76
+        run: flutter build ios --release --no-codesign --build-number=77
+      - name: Test copying the active iPhone connection report
+        working-directory: flutter
+        run: flutter test --no-pub test/mobile_p2p_diagnostics_test.dart
       - name: Verify and package the app
         run: |
           app=flutter/build/ios/iphoneos/Runner.app
           info="$app/Info.plist"
           test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
-          test "$(plutil -extract CFBundleVersion raw "$info")" = 76
+          test "$(plutil -extract CFBundleVersion raw "$info")" = 77
           python3 - "$info" <<'PY'
           import pathlib, plistlib, sys
           info = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
           assert info.get("UIFileSharingEnabled")
           assert info.get("UISupportsDocumentBrowser") or info.get("LSSupportsOpeningDocumentsInPlace")
           runner = (pathlib.Path(sys.argv[1]).parent / info["CFBundleExecutable"]).read_bytes()
-          assert b"RustDesk-P2P-diagnostics.txt" in runner and b"RustDesk P2P diagnostics" in runner
+          assert all(s in runner for s in (b"RustDesk-P2P-diagnostics.txt", b"format=udp-reads-v1", b"udpCandidate", b"udpRequest"))
+          flutter = (pathlib.Path(sys.argv[1]).parent / "Frameworks/App.framework/App").read_bytes()
+          assert b"Copy P2P diagnostics" in flutter and b"format=udp-reads-v1" in flutter
           PY
           executable=$(plutil -extract CFBundleExecutable raw "$info")
           lipo "$app/$executable" -verify_arch arm64

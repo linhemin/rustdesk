@@ -14,6 +14,8 @@ mod server;
 #[cfg(not(any(target_os = "ios")))]
 pub use self::server::*;
 mod client;
+#[cfg(any(target_os = "ios", test))]
+mod ios_p2p_diagnostics;
 mod lan;
 mod live_direct;
 mod p2p;

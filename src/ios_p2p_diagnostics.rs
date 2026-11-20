@@ -2,10 +2,10 @@
 use std::{collections::VecDeque, fs, io::Write, path::Path};
 
 const FILENAME: &str = "RustDesk-P2P-diagnostics.txt";
-const HEADER: &str = "RustDesk P2P diagnostics\n";
+const HEADER: &str = "RustDesk P2P diagnostics\nformat=udp-reads-v1\n";
 const MAX_FILE: usize = 48 * 1024;
 const MAX_ATTEMPTS: usize = 16;
-const MAX_SNAPSHOT: usize = 4096;
+const MAX_SNAPSHOT: usize = 6 * 1024;
 
 // The ICE library builds fixed labels and counts, without copying candidate strings. Also
 // enforce its vocabulary here, at the file boundary; a future human-readable error, changed
@@ -15,7 +15,12 @@ fn safe_snapshot(text: &str) -> bool {
         local remote pairs states traffic nominated host srflx prflx relay udp tcp none unavailable \
         stats limit no ICE reports timeout waiting checking succeeded failed reqSent reqSendError \
         reqReceivedValid respSent respSendError respReceivedMatched connected new connecting closed \
-        disconnected completed unspecified Unspecified Unknown established closing";
+        disconnected completed unspecified Unspecified Unknown established closing \
+        udpCandidate readers reads readErrors nonStun stunDecodeError bindingRequest bindingSuccess \
+        bindingError bindingIndication otherStun udpRequest roleConflict usernameMissing usernameInvalid \
+        integrityMissing integrityInvalid candidateFailed accepted udpResponse unknownRemote \
+        unknownTransaction wrongEndpoint noPair udpGather matchedResponse udpNat64 sourceDrop bindingRequestDrop \
+        bindingRequestHeader knownSource unlistedSource";
     if text.is_empty()
         || text.len() > MAX_SNAPSHOT
         || !text
@@ -55,18 +60,19 @@ fn safe_snapshot(text: &str) -> bool {
 }
 
 #[derive(Default)]
-struct History(VecDeque<String>);
+struct History(VecDeque<(u64, String)>);
 
 impl History {
-    fn push(&mut self, entry: String) -> String {
-        self.0.push_back(entry);
-        let mut size = HEADER.len() + self.0.iter().map(String::len).sum::<usize>();
+    fn update(&mut self, attempt: u64, entry: String) -> String {
+        self.0.retain(|(id, _)| *id != attempt);
+        self.0.push_back((attempt, entry));
+        let mut size = HEADER.len() + self.0.iter().map(|(_, text)| text.len()).sum::<usize>();
         while self.0.len() > MAX_ATTEMPTS || size > MAX_FILE {
-            size -= self.0.pop_front().unwrap().len();
+            size -= self.0.pop_front().unwrap().1.len();
         }
         let mut file = String::with_capacity(size);
         file.push_str(HEADER);
-        for entry in &self.0 {
+        for (_, entry) in &self.0 {
             file.push_str(entry);
         }
         file
@@ -91,7 +97,7 @@ fn save(path: &Path, contents: &str, seq: u64) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "ios")]
-pub(super) use recorder::Observation;
+pub(crate) use recorder::Observation;
 
 #[cfg(target_os = "ios")]
 mod recorder {
@@ -101,7 +107,7 @@ mod recorder {
     };
     use std::{
         sync::{
-            atomic::{AtomicU32, AtomicU8, Ordering},
+            atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering},
             mpsc::{sync_channel, SyncSender},
             Arc, Mutex, OnceLock,
         },
@@ -130,8 +136,8 @@ mod recorder {
     // One bounded queue/writer per process. Dropping an ICE task never blocks on the filesystem
     // and concurrent sessions cannot interleave file writes. History takes only typed local
     // events; an existing user-edited file is never read back into a new diagnostic report.
-    fn writer() -> Option<&'static SyncSender<String>> {
-        static WRITER: OnceLock<Option<SyncSender<String>>> = OnceLock::new();
+    fn writer() -> Option<&'static SyncSender<(u64, String)>> {
+        static WRITER: OnceLock<Option<SyncSender<(u64, String)>>> = OnceLock::new();
         WRITER
             .get_or_init(|| {
                 let (tx, rx) = sync_channel(16);
@@ -139,10 +145,10 @@ mod recorder {
                     .name("p2p-diagnostics".into())
                     .spawn(move || {
                         let mut history = History::default();
-                        for (seq, entry) in rx.into_iter().enumerate() {
+                        for (seq, (id, entry)) in rx.into_iter().enumerate() {
                             let path = Config::path(FILENAME);
                             if path.is_absolute() {
-                                let _ = save(&path, &history.push(entry), seq as u64);
+                                let _ = save(&path, &history.update(id, entry), seq as u64);
                             }
                         }
                     })
@@ -152,70 +158,136 @@ mod recorder {
             .as_ref()
     }
 
-    type Sample = Arc<Mutex<Option<(Instant, String)>>>;
-
-    pub(in super::super) struct Observation {
+    #[derive(Clone, Copy)]
+    struct Attempt {
+        id: u64,
         started: Instant,
         start_path: &'static str,
         offerer: bool,
-        result: &'static str,
+        phase: &'static str,
+    }
+
+    struct Progress {
+        latest: Option<(Instant, String)>,
         stage: &'static str,
-        sample: Sample,
+        ended: bool,
+    }
+
+    impl Progress {
+        fn update(&mut self, text: String) {
+            if !safe_snapshot(&text) {
+                return;
+            }
+            // Closing a PC can discard the agent before the final snapshot. Keep the last
+            // measured socket counters, with their actual age, instead of replacing them.
+            let measured = |s: &str| s.lines().any(|line| line.starts_with("udpCandidate ["));
+            if !measured(&text) && self.latest.as_ref().map_or(false, |(_, s)| measured(s)) {
+                return;
+            }
+            self.latest = Some((Instant::now(), text));
+        }
+    }
+
+    impl Attempt {
+        fn publish(&self, progress: &Progress, result: &str) {
+            let side = if self.offerer {
+                "controller"
+            } else {
+                "controlled"
+            };
+            let written = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let mut entry = format!(
+                "\n{written} version={} build={} role={side} phase={} default_path_start={} default_path_end={} duration_ms={} result={result} stage={}\n",
+                env!("CARGO_PKG_VERSION"), BUILD.load(Ordering::Relaxed), self.phase, self.start_path,
+                path_label(), self.started.elapsed().as_millis(), progress.stage,
+            );
+            match &progress.latest {
+                Some((at, text)) => {
+                    entry.push_str(&format!("sample_age_ms={}\n", at.elapsed().as_millis()));
+                    entry.push_str(text.trim_end());
+                    entry.push('\n');
+                }
+                None => entry.push_str("sample=unavailable\n"),
+            }
+            if let Some(tx) = writer() {
+                let _ = tx.try_send((self.id, entry));
+            }
+        }
+    }
+
+    pub(crate) struct Observation {
+        attempt: Attempt,
+        result: &'static str,
+        progress: Arc<Mutex<Progress>>,
         sampler: Option<tokio::task::JoinHandle<()>>,
     }
 
     impl Observation {
-        pub(in super::super) fn new(offerer: bool) -> Self {
-            Self {
+        pub(crate) fn new(offerer: bool, phase: &'static str) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let attempt = Attempt {
+                id: NEXT.fetch_add(1, Ordering::Relaxed),
                 started: Instant::now(),
                 start_path: path_label(),
                 offerer,
-                result: "cancelled",
+                phase,
+            };
+            let progress = Progress {
+                latest: None,
                 stage: "starting",
-                sample: Default::default(),
+                ended: false,
+            };
+            attempt.publish(&progress, "in-progress");
+            Self {
+                attempt,
+                result: "cancelled",
+                progress: Arc::new(Mutex::new(progress)),
                 sampler: None,
             }
         }
 
-        pub(in super::super) fn observe(&mut self, pc: &WebRTCStream) {
-            self.stage = "negotiating";
+        pub(crate) fn observe(&mut self, pc: &WebRTCStream) {
+            self.set_stage("negotiating");
             let pc = pc.clone();
-            let sample = self.sample.clone();
+            let progress = self.progress.clone();
+            let attempt = self.attempt;
             self.sampler = Some(tokio::spawn(async move {
                 loop {
                     let text = pc.ice_path_diagnostics().await;
-                    if let Ok(mut latest) = sample.lock() {
-                        *latest = Some((Instant::now(), text));
+                    if let Ok(mut state) = progress.lock() {
+                        if state.ended {
+                            return;
+                        }
+                        state.update(text);
+                        attempt.publish(&state, "in-progress");
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             }));
         }
 
-        pub(in super::super) fn set_stage(&mut self, stage: &'static str) {
-            self.stage = stage;
+        pub(crate) fn set_stage(&mut self, stage: &'static str) {
+            if let Ok(mut state) = self.progress.lock() {
+                state.stage = stage;
+            }
         }
 
         // On the terminal transition try the same snapshot once without waiting. If it
         // needs to await a lock, keep the last live snapshot with its visible age. An aborted
         // attempt uses that same snapshot and releases the sampler when this guard drops.
-        pub(in super::super) fn sample_now(&mut self, pc: &WebRTCStream) {
+        pub(crate) fn sample_now(&mut self, pc: &WebRTCStream) {
             if let Some(sampler) = self.sampler.take() {
                 sampler.abort();
             }
             if let Some(text) = pc.ice_path_diagnostics().now_or_never() {
-                if let Ok(mut latest) = self.sample.lock() {
-                    *latest = Some((Instant::now(), text));
+                if let Ok(mut state) = self.progress.lock() {
+                    state.update(text);
                 }
             }
         }
 
-        pub(in super::super) fn finish(
-            &mut self,
-            stage: &'static str,
-            err: Option<&anyhow::Error>,
-        ) {
-            self.stage = stage;
+        pub(crate) fn finish(&mut self, stage: &'static str, err: Option<&anyhow::Error>) {
+            self.set_stage(stage);
             self.result = match err {
                 None => "direct-ready",
                 Some(e)
@@ -227,6 +299,16 @@ mod recorder {
                 Some(_) => "failed",
             };
         }
+
+        pub(crate) fn finish_initial(&mut self, direct_webrtc: bool, failed: bool) {
+            self.result = if direct_webrtc {
+                "direct-ready"
+            } else if failed {
+                "failed"
+            } else {
+                "other-transport"
+            };
+        }
     }
 
     impl Drop for Observation {
@@ -234,28 +316,9 @@ mod recorder {
             if let Some(sampler) = self.sampler.take() {
                 sampler.abort();
             }
-            let side = if self.offerer {
-                "controller"
-            } else {
-                "controlled"
-            };
-            let finished = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-            let mut entry = format!(
-                "\n{finished} version={} build={} role={side} default_path_start={} default_path_end={} duration_ms={} result={} stage={}\n",
-                env!("CARGO_PKG_VERSION"), BUILD.load(Ordering::Relaxed), self.start_path,
-                path_label(), self.started.elapsed().as_millis(), self.result, self.stage,
-            );
-            let sample = self.sample.lock().ok().and_then(|mut guard| guard.take());
-            match sample {
-                Some((at, text)) if safe_snapshot(&text) => {
-                    entry.push_str(&format!("sample_age_ms={}\n", at.elapsed().as_millis()));
-                    entry.push_str(text.trim_end());
-                    entry.push('\n');
-                }
-                _ => entry.push_str("sample=unavailable\n"),
-            }
-            if let Some(tx) = writer() {
-                let _ = tx.try_send(entry);
+            if let Ok(mut state) = self.progress.lock() {
+                state.ended = true;
+                self.attempt.publish(&state, self.result);
             }
         }
     }
@@ -269,6 +332,9 @@ mod tests {
     fn rejects_identifiers_and_accepts_count_only_snapshots() {
         let valid = "ice=checking dtls=new sctp=connecting pc=connecting\nselected=none\npublic4 local=[0, 1, 0, 0, 0] remote=[0, 1, 0, 0, 0]\nlocal=public4->remote=public4 pairs=12 traffic=[753, 0, 0, 0, 0, 0]\n";
         assert!(safe_snapshot(valid));
+        assert!(safe_snapshot(
+            "udpCandidate [readers,reads,bindingRequest,bindingRequestHeader]=[2,4,3,4]\nudpRequest [usernameInvalid,knownSource,unlistedSource]=[1,2,1]\n"
+        ));
         for unsafe_input in [
             "ice=10.0.0.1:53047",
             "selected=2001:db8::1",
@@ -286,11 +352,20 @@ mod tests {
     }
 
     #[test]
+    fn live_samples_replace_the_same_attempt_without_repeating_its_counts() {
+        let mut history = History::default();
+        history.update(1, "first running\n".into());
+        history.update(2, "second running\n".into());
+        let report = history.update(1, "first completed\n".into());
+        assert_eq!(report, format!("{HEADER}second running\nfirst completed\n"));
+    }
+
+    #[test]
     fn keeps_complete_bounded_records_and_replaces_the_shared_file() {
         let mut history = History::default();
         let mut report = String::new();
         for i in 0..30 {
-            report = history.push(format!("attempt-{i} {}\n", "x".repeat(4000)));
+            report = history.update(i, format!("attempt-{i} {}\n", "x".repeat(4000)));
         }
         assert!(report.starts_with(HEADER));
         assert!(report.len() <= MAX_FILE && history.0.len() <= MAX_ATTEMPTS);
