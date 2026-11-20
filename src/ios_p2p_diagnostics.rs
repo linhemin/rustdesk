@@ -21,7 +21,7 @@ fn safe_snapshot(text: &str) -> bool {
         integrityMissing integrityInvalid candidateFailed accepted udpResponse unknownRemote \
         unknownTransaction wrongEndpoint noPair udpGather matchedResponse udpNat64 sourceDrop bindingRequestDrop \
         bindingRequestHeader knownSource unlistedSource udpMapping sockets stable portChanged \
-        addressChanged insufficient alternateTested alternateChanged";
+        addressChanged insufficient alternateTested alternateChanged orderedMappings constantStep irregular";
     if text.is_empty()
         || text.len() > MAX_SNAPSHOT
         || !text
@@ -428,6 +428,7 @@ mod tests {
     fn rejects_identifiers_and_accepts_count_only_snapshots() {
         let valid = "ice=checking dtls=new sctp=connecting pc=connecting\nselected=none\npublic4 local=[0, 1, 0, 0, 0] remote=[0, 1, 0, 0, 0]\nlocal=public4->remote=public4 pairs=12 traffic=[753, 0, 0, 0, 0, 0]\n";
         assert!(safe_snapshot(valid));
+        assert!(safe_snapshot("orderedMappings [stable,constantStep,irregular,insufficient]=[0,2,1,4]\n"));
         assert!(safe_snapshot(
             "udpCandidate [readers,reads,bindingRequest,bindingRequestHeader]=[2,4,3,4]\nudpRequest [usernameInvalid,knownSource,unlistedSource]=[1,2,1]\n"
         ));
