@@ -1,0 +1,267 @@
+name: Build P2P clients on owner runners
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Client to build
+        type: choice
+        options: [ios, windows]
+        default: ios
+      source_run:
+        description: P2P client build run containing the source revision and generated Flutter bridge
+        type: string
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  source:
+    if: github.actor == 'linhemin' && github.triggering_actor == 'linhemin' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.resolve.outputs.revision }}
+    steps:
+      - id: resolve
+        name: Resolve the owner's P2P build revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.source_run }}
+        shell: bash
+        run: |
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > "$RUNNER_TEMP/source-run.json"
+          revision=$(jq -er --arg repo "$GITHUB_REPOSITORY" '
+            select(.event == "push" and .actor.login == "linhemin" and .head_repository.full_name == $repo
+              and .path == ".github/workflows/p2p-tun.yml") | .head_sha | select(test("^[0-9a-f]{40}$"))
+          ' "$RUNNER_TEMP/source-run.json")
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "Source revision: $revision" >> "$GITHUB_STEP_SUMMARY"
+  ios:
+    if: inputs.platform == 'ios'
+    needs: source
+    environment: mac-runner-approval
+    runs-on: rustdesk-macos-arm64
+    timeout-minutes: 150
+    env:
+      FLUTTER_VERSION: '3.24.5'
+      VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+    steps:
+      - name: Check the Apple toolchain
+        shell: bash
+        run: |
+          test "$(uname -s)" = Darwin && test "$(uname -m)" = arm64
+          if [[ -x /opt/homebrew/bin/brew ]]; then echo /opt/homebrew/bin >> "$GITHUB_PATH"; fi
+          selected="$(xcode-select -p 2>/dev/null || true)"
+          candidates=("$selected")
+          for app in /Applications/Xcode*.app "$HOME"/Applications/Xcode*.app; do
+            candidates+=("$app/Contents/Developer")
+          done
+          while IFS= read -r app; do
+            candidates+=("$app/Contents/Developer")
+          done < <(mdfind 'kMDItemCFBundleIdentifier == "com.apple.dt.Xcode"')
+          for developer in "${candidates[@]}"; do
+            if [[ -d "$developer/Platforms/iPhoneOS.platform" ]]; then export DEVELOPER_DIR="$developer"; break; fi
+          done
+          : "${DEVELOPER_DIR:?A full installation of Xcode with the iPhoneOS platform is required}"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.source.outputs.revision }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bridge-artifact
+          run-id: ${{ inputs.source_run }}
+          github-token: ${{ github.token }}
+      - name: Read this revision's build number
+        shell: bash
+        run: |
+          number=$(sed -nE 's/^version: [0-9]+\.[0-9]+\.[0-9]+\+([0-9]+)$/\1/p' flutter/pubspec.yaml)
+          [[ "$number" =~ ^[0-9]+$ ]]
+          echo "BUILD_NUMBER=$number" >> "$GITHUB_ENV"
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - name: Prepare Flutter and native tools
+        run: |
+          sdk="$(dirname "$(dirname "$(which flutter)")")"
+          patch="$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if ! git -C "$sdk" apply --reverse --check "$patch" 2>/dev/null; then git -C "$sdk" apply "$patch"; fi
+          tools=()
+          for tool in nasm yasm cmake ninja pkg-config autoconf automake libtool pod; do
+            if ! command -v "$tool" >/dev/null; then
+              case "$tool" in pod) tools+=(cocoapods);; *) tools+=("$tool");; esac
+            fi
+          done
+          if (( ${#tools[@]} )); then brew install "${tools[@]}"; fi
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 'stable'
+          targets: aarch64-apple-ios
+      - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+      - name: Install iOS native dependencies
+        run: '"$VCPKG_ROOT/vcpkg" install --triplet arm64-ios --x-install-root="$VCPKG_ROOT/installed"'
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          prefix-key: rustdesk-p2p-ios
+          key: aarch64-apple-ios
+          cache-on-failure: true
+      - name: Compile RustDesk for iPhone
+        run: cargo build --locked --features flutter,hwcodec --release --target aarch64-apple-ios --lib
+      - name: Build the unsigned iPhone app
+        working-directory: flutter
+        run: flutter build ios --release --no-codesign --build-number="$BUILD_NUMBER"
+      - name: Test copying the active iPhone connection report
+        working-directory: flutter
+        run: flutter test --no-pub test/mobile_p2p_diagnostics_test.dart
+      - name: Verify and package the app
+        run: |
+          app=flutter/build/ios/iphoneos/Runner.app
+          info="$app/Info.plist"
+          test "$(plutil -extract CFBundleIdentifier raw "$info")" = com.linhemin.rustdesk.p2p
+          test "$(plutil -extract CFBundleVersion raw "$info")" = "$BUILD_NUMBER"
+          python3 - "$info" <<'PY'
+          import pathlib, plistlib, sys
+          info = plistlib.loads(pathlib.Path(sys.argv[1]).read_bytes())
+          assert info.get("UIFileSharingEnabled")
+          assert info.get("UISupportsDocumentBrowser") or info.get("LSSupportsOpeningDocumentsInPlace")
+          runner = (pathlib.Path(sys.argv[1]).parent / info["CFBundleExecutable"]).read_bytes()
+          assert all(s in runner for s in (b"RustDesk-P2P-diagnostics.txt", b"format=udp-paths-v3", b"udpCandidate", b"udpMapping", b"syncUdp peer"))
+          flutter = (pathlib.Path(sys.argv[1]).parent / "Frameworks/App.framework/App").read_bytes()
+          assert b"Copy P2P diagnostics" in flutter and b"format=udp-paths-v3" in flutter
+          PY
+          executable=$(plutil -extract CFBundleExecutable raw "$info")
+          lipo "$app/$executable" -verify_arch arm64
+          mkdir -p package/Payload
+          ditto "$app" package/Payload/RustDesk.app
+          (cd package && ditto -c -k --keepParent Payload rustdesk-p2p-ios-arm64-unsigned.ipa)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustdesk-p2p-ios-arm64-unsigned
+          path: package/rustdesk-p2p-ios-arm64-unsigned.ipa
+          if-no-files-found: error
+
+  windows:
+    if: inputs.platform == 'windows'
+    needs: source
+    environment: windows-runner-approval
+    runs-on: rustdesk-windows-x64
+    timeout-minutes: 180
+    env:
+      FLUTTER_VERSION: '3.24.5'
+      VCPKG_COMMIT_ID: 9e593bb18ea69cc5095e012465dcd675a822ed0d
+    steps:
+      - name: Prepare the Windows build environment
+        shell: powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_ARCH -ne 'X64') { throw 'Expected the x64 runner' }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Workload.NativeDesktop Microsoft.VisualStudio.Component.VC.CMake.Project -property installationPath
+          if (!$vs) { throw 'Visual Studio Desktop development with C++ and CMake tools are required' }
+          foreach ($path in @('Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin','Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja','MSBuild/Current/Bin')) {
+            Join-Path $vs $path | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          }
+          $python = Get-Command python.exe -ErrorAction SilentlyContinue
+          if (!$python -or $python.Source -like '*WindowsApps*') {
+            $pythonPath = 'C:/ProgramData/miniconda3'
+            if (!(Test-Path -LiteralPath (Join-Path $pythonPath 'python.exe'))) { throw 'Python 3 required' }
+            $pythonPath | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          }
+          $version = '7.7.0'
+          $psDir = Join-Path $env:RUNNER_TOOL_CACHE "powershell-$version-x64"
+          if (!(Test-Path -LiteralPath (Join-Path $psDir pwsh.exe))) {
+            $zip = Join-Path $env:RUNNER_TEMP 'pwsh.zip'
+            $url = "https://github.com/PowerShell/PowerShell/releases/download/v$version/PowerShell-$version-win-x64.zip"
+            (New-Object Net.WebClient).DownloadFile($url, $zip)
+            if ((Get-FileHash -LiteralPath $zip).Hash -ne '7C74E03B20A75B59715847439D046A6214B1863EE79B187872980F139BB4A05F') { throw 'PowerShell archive digest mismatch' }
+            Unblock-File -LiteralPath $zip
+            Expand-Archive -LiteralPath $zip -DestinationPath $psDir -Force
+          }
+          $psDir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.source.outputs.revision }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bridge-artifact
+          run-id: ${{ inputs.source_run }}
+          github-token: ${{ github.token }}
+      - uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+        with:
+          version: '15.0.6'
+          directory: ${{ runner.temp }}/llvm
+      - uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+      - name: Prepare RustDesk's Windows Flutter engine
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}"
+        run: |
+          flutter precache --windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $flutterRoot = Split-Path (Split-Path (Get-Command flutter).Source -Parent) -Parent
+          Copy-Item windows-x64-release/* "$flutterRoot/bin/cache/artifacts/engine/windows-x64-release/" -Force
+      - name: Patch Flutter 3.24.5
+        shell: bash
+        run: |
+          sdk="$(dirname "$(dirname "$(which flutter)")")"
+          patch="$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if ! git -C "$sdk" apply --reverse --check "$patch" 2>/dev/null; then git -C "$sdk" apply "$patch"; fi
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 'stable'
+          targets: x86_64-pc-windows-msvc
+      - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
+        with:
+          vcpkgDirectory: ${{ runner.tool_cache }}/vcpkg-p2p
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+      - name: Install native build dependencies
+        shell: bash
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: '"$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"'
+      - name: Build and test the Windows client
+        shell: bash
+        run: |
+          python build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          FEATURES=$(python build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features)
+          cargo test --locked --release --lib --features "$FEATURES" 'p2p::'
+          cargo test --locked --release --lib --features "$FEATURES" client::webrtc_race_tests
+          cargo test --locked --release --lib --features "$FEATURES" client::path_rtt::tests
+          cargo test --locked --release --lib --features "$FEATURES" client::tcp_family_tests
+          cargo test --locked --release --lib --features "$FEATURES" server::video_qos::tests
+          cargo test --locked --release --lib --features "$FEATURES" client::video_delivery::tests
+          cargo test --locked --release --lib --features "$FEATURES" flutter::rgba_frame::tests
+          cargo test --locked --release --lib --features "$FEATURES" live_direct::
+          cargo test --locked --release --lib --features "$FEATURES" ios_p2p_diagnostics::tests
+          cargo test --locked --release --lib --features "$FEATURES" common::tests::test_secure_tcp
+          cargo test --locked --release --lib --features "$FEATURES" common::tests::test_confirm_signed_direct_permission
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustdesk-p2p-tun-windows-x64-unsigned
+          path: flutter/build/windows/x64/runner/Release/
+          if-no-files-found: error
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce
+      - name: Package the Windows installer
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}"
+        run: ./.github/scripts/package-p2p-windows.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustdesk-p2p-windows-x64-msi
+          path: p2p-package/*.msi
+          if-no-files-found: error
