@@ -6,11 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   late Directory documents;
   late File report;
-  const header = 'RustDesk P2P diagnostics\nformat=udp-reads-v1';
+  const header = 'RustDesk P2P diagnostics\nformat=udp-sync-v2';
   final opened = DateTime.parse('2026-11-20T02:00:00.123456Z');
-  const current = '2026-11-20T02:00:00.123Z version=1.5.3 build=77\n'
-      'result=in-progress\n';
-  const older = '2026-11-20T01:59:59.000Z version=1.5.3 build=77\n'
+  const current = '2026-11-20T02:00:00.123Z version=1.5.3 build=78\n'
+      'result=in-progress\nsyncPunch=started localWakes=2\n';
+  const older = '2026-11-20T01:59:59.000Z version=1.5.3 build=78\n'
       'result=cancelled\n';
 
   setUp(() async {
@@ -32,6 +32,7 @@ void main() {
     for (final contents in [
       '$header\n',
       '$header\n\n$older',
+      'RustDesk P2P diagnostics\nformat=udp-reads-v1\n\n$current',
       'RustDesk P2P diagnostics\n\n$current',
     ]) {
       await report.writeAsString(contents);

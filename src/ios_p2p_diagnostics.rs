@@ -2,7 +2,7 @@
 use std::{collections::VecDeque, fs, io::Write, path::Path};
 
 const FILENAME: &str = "RustDesk-P2P-diagnostics.txt";
-const HEADER: &str = "RustDesk P2P diagnostics\nformat=udp-reads-v1\n";
+const HEADER: &str = "RustDesk P2P diagnostics\nformat=udp-sync-v2\n";
 const MAX_FILE: usize = 48 * 1024;
 const MAX_ATTEMPTS: usize = 16;
 const MAX_SNAPSHOT: usize = 6 * 1024;
@@ -20,7 +20,8 @@ fn safe_snapshot(text: &str) -> bool {
         bindingError bindingIndication otherStun udpRequest roleConflict usernameMissing usernameInvalid \
         integrityMissing integrityInvalid candidateFailed accepted udpResponse unknownRemote \
         unknownTransaction wrongEndpoint noPair udpGather matchedResponse udpNat64 sourceDrop bindingRequestDrop \
-        bindingRequestHeader knownSource unlistedSource";
+        bindingRequestHeader knownSource unlistedSource udpMapping sockets stable portChanged \
+        addressChanged insufficient alternateTested alternateChanged";
     if text.is_empty()
         || text.len() > MAX_SNAPSHOT
         || !text
@@ -61,6 +62,33 @@ fn safe_snapshot(text: &str) -> bool {
 
 #[derive(Default)]
 struct History(VecDeque<(u64, String)>);
+
+// READY carries only bounded anonymous counts for this attempt. Keep a missing peer READY
+// distinguishable from a READY that actually reported zero measured sockets.
+fn append_punch_status(out: &mut String, status: &crate::live_direct::PunchStatus) {
+    use std::fmt::Write;
+    let state = if status.started { "started" } else { "waiting" };
+    let _ = writeln!(out, "syncPunch={state} localWakes={}", status.local_wakes);
+    match status.remote_wakes {
+        Some(wakes) => {
+            let _ = writeln!(out, "remoteWakes={wakes}");
+        }
+        None => out.push_str("remoteWakes=unavailable\n"),
+    }
+    for (side, mapping) in [
+        ("local", status.local_mapping),
+        ("peer", status.remote_mapping),
+    ] {
+        match mapping {
+            Some(counts) => {
+                let _ = writeln!(out, "syncMapping {side} [stable,portChanged,addressChanged,insufficient,alternateTested,alternateChanged]={counts:?}");
+            }
+            None => {
+                let _ = writeln!(out, "syncMapping {side}=unavailable");
+            }
+        }
+    }
+}
 
 impl History {
     fn update(&mut self, attempt: u64, entry: String) -> String {
@@ -169,6 +197,7 @@ mod recorder {
 
     struct Progress {
         latest: Option<(Instant, String)>,
+        punch: Option<tokio::sync::watch::Receiver<crate::live_direct::PunchStatus>>,
         stage: &'static str,
         ended: bool,
     }
@@ -209,6 +238,9 @@ mod recorder {
                 }
                 None => entry.push_str("sample=unavailable\n"),
             }
+            if let Some(punch) = &progress.punch {
+                append_punch_status(&mut entry, &punch.borrow());
+            }
             if let Some(tx) = writer() {
                 let _ = tx.try_send((self.id, entry));
             }
@@ -234,6 +266,7 @@ mod recorder {
             };
             let progress = Progress {
                 latest: None,
+                punch: None,
                 stage: "starting",
                 ended: false,
             };
@@ -269,6 +302,15 @@ mod recorder {
         pub(crate) fn set_stage(&mut self, stage: &'static str) {
             if let Ok(mut state) = self.progress.lock() {
                 state.stage = stage;
+            }
+        }
+
+        pub(crate) fn set_punch_status(
+            &mut self,
+            status: tokio::sync::watch::Receiver<crate::live_direct::PunchStatus>,
+        ) {
+            if let Ok(mut state) = self.progress.lock() {
+                state.punch = Some(status);
             }
         }
 
@@ -327,6 +369,28 @@ mod recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_ready_summaries_keep_missing_and_observed_results_distinct() {
+        let mut status = crate::live_direct::PunchStatus::default();
+        status.local_mapping = Some([1, 0, 0, 2, 0, 0]);
+        let mut text = String::new();
+        append_punch_status(&mut text, &status);
+        assert!(
+            text.contains("syncPunch=waiting") && text.contains("syncMapping peer=unavailable")
+        );
+        status.started = true;
+        status.remote_mapping = Some([0, 1, 0, 0, 1, 1]);
+        status.local_wakes = 2;
+        status.remote_wakes = Some(1);
+        text.clear();
+        append_punch_status(&mut text, &status);
+        assert!(text.contains("syncPunch=started localWakes=2\nremoteWakes=1"));
+        assert!(text
+            .lines()
+            .any(|s| s.starts_with("syncMapping peer [") && s.ends_with("=[0, 1, 0, 0, 1, 1]")));
+        assert!(safe_snapshot("udpMapping [sockets,stable,portChanged,addressChanged,insufficient,alternateTested,alternateChanged]=[4,1,1,0,2,1,1]\n"));
+    }
 
     #[test]
     fn rejects_identifiers_and_accepts_count_only_snapshots() {

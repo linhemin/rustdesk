@@ -38,14 +38,12 @@ impl InterfaceStunProvider for Interface {
         source == self.address
     }
 
-    async fn bind_and_resolve(
+    async fn resolve_for_socket(
         &self,
         source: Ipv4Addr,
         host: &str,
         server_port: u16,
-        local_port_min: u16,
-        local_port_max: u16,
-    ) -> Option<(Arc<dyn InterfaceStunConn + Send + Sync>, SocketAddrV4)> {
+    ) -> Option<SocketAddrV4> {
         if !self.supports_source(source)
             || !WebRTCStream::is_default_stun_endpoint(host, server_port)
         {
@@ -71,13 +69,25 @@ impl InterfaceStunProvider for Interface {
         })
         .await
         .ok()??;
-        // Recheck after DNS in case the GUI choice, proxy, or adapter changed mid-gather.
+        // The GUI or adapter may have changed while Windows was resolving this host.
         if !still_selected() {
             return None;
         }
+        Some(SocketAddrV4::new(addr, server_port))
+    }
+
+    async fn bind_and_resolve(
+        &self,
+        source: Ipv4Addr,
+        host: &str,
+        server_port: u16,
+        local_port_min: u16,
+        local_port_max: u16,
+    ) -> Option<(Arc<dyn InterfaceStunConn + Send + Sync>, SocketAddrV4)> {
+        let destination = self.resolve_for_socket(source, host, server_port).await?;
         let socket =
-            crate::platform::bind_p2p_stun_udp(source, index, local_port_min, local_port_max)?;
-        Some((Arc::new(socket), SocketAddrV4::new(addr, server_port)))
+            crate::platform::bind_p2p_stun_udp(source, self.index, local_port_min, local_port_max)?;
+        Some((Arc::new(socket), destination))
     }
 }
 
@@ -137,6 +147,7 @@ mod tests {
             (iface.address, "unconfigured.invalid", 3478),
             (iface.address, "stun.cloudflare.com", 1234),
         ] {
+            assert!(iface.resolve_for_socket(source, host, port).await.is_none());
             assert!(iface
                 .bind_and_resolve(source, host, port, 0, 0)
                 .await
