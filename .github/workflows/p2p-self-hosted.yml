@@ -188,6 +188,16 @@ jobs:
             Expand-Archive -LiteralPath $zip -DestinationPath $psDir -Force
           }
           $psDir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          $sevenZip = Join-Path $env:RUNNER_TOOL_CACHE '7zip-26.06-x64'
+          if (!(Test-Path -LiteralPath (Join-Path $sevenZip '7z.exe'))) {
+            $sfx = Join-Path $env:RUNNER_TEMP '7z2606-x64.exe'
+            (New-Object Net.WebClient).DownloadFile('https://github.com/ip7z/7zip/releases/download/26.06/7z2606-x64.exe', $sfx)
+            if ((Get-FileHash -LiteralPath $sfx).Hash -ne '9B697F65ECC2D9B0152F5EE96D72DDE522A7827690349D9307935DACF40F42EC') { throw '7-Zip archive digest mismatch' }
+            New-Item -ItemType Directory -Path $sevenZip -Force | Out-Null
+            & "$env:SystemRoot/System32/tar.exe" -xf $sfx -C $sevenZip 7z.exe 7z.dll
+            if ($LASTEXITCODE -ne 0) { throw 'Portable 7-Zip extraction failed' }
+          }
+          $sevenZip | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ needs.source.outputs.revision }}
