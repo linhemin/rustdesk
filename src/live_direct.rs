@@ -43,6 +43,10 @@ const PUNCH_OFFER: u8 = 9;
 const PUNCH_READY: u8 = 10;
 const PUNCH_GO: u8 = 11;
 const PUNCH_DONE: u8 = 12;
+// Optional counters requested by the controller. Build 78 ignores unknown control kinds.
+const PUNCH_IO_REQUEST: u8 = 13;
+const PUNCH_IO: u8 = 14;
+const IO_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const PUNCH_DELAYS_MS: [u64; 3] = [0, 180, 320];
 // The agent waits up to 680 ms for trickled sockets, then up to 3 s for observers.
 // Keep its partial results while bounding the independent READY task.
@@ -176,6 +180,13 @@ fn decode(bytes: &[u8]) -> Option<(u8, u64, &[u8])> {
     let bytes = bytes.strip_prefix(MAGIC)?;
     let number = u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?);
     Some((bytes[0], number, &bytes[9..]))
+}
+
+fn candidate_frame(id: u64, json: &str) -> Option<Bytes> {
+    if json.is_empty() || json.len() > MAX_CANDIDATE {
+        return None;
+    }
+    Some(frame(ICE_CANDIDATE, id, json.as_bytes()))
 }
 
 struct Rtc(WebRTCStream);
@@ -404,6 +415,37 @@ impl CandidateCounts {
 // these messages. The actual destinations are the current ICE agent's existing pairs.
 type MappingCounts = [u8; 6];
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PunchIo {
+    pub(crate) elapsed_ms: u32,
+    pub(crate) counts: [u32; 6],
+}
+
+impl PunchIo {
+    fn payload(self) -> [u8; 28] {
+        let mut bytes = [0; 28];
+        for (slot, value) in bytes
+            .chunks_exact_mut(4)
+            .zip(std::iter::once(self.elapsed_ms).chain(self.counts))
+        {
+            slot.copy_from_slice(&value.to_be_bytes());
+        }
+        bytes
+    }
+
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        let bytes: &[u8; 28] = bytes.try_into().ok()?;
+        let mut words = [0; 7];
+        for (value, bytes) in words.iter_mut().zip(bytes.chunks_exact(4)) {
+            *value = u32::from_be_bytes(bytes.try_into().ok()?);
+        }
+        Some(Self {
+            elapsed_ms: words[0],
+            counts: words[1..].try_into().ok()?,
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PunchStatus {
     pub(crate) local_mapping: Option<MappingCounts>,
@@ -411,6 +453,7 @@ pub(crate) struct PunchStatus {
     pub(crate) started: bool,
     pub(crate) local_wakes: u8,
     pub(crate) remote_wakes: Option<u8>,
+    pub(crate) remote_io: Option<PunchIo>,
 }
 
 struct PunchControl {
@@ -418,6 +461,7 @@ struct PunchControl {
     peer_ready: Option<oneshot::Sender<()>>,
     start: Option<oneshot::Sender<()>>,
     ready_sent: bool,
+    report_io: watch::Sender<bool>,
 }
 
 impl PunchControl {
@@ -425,12 +469,14 @@ impl PunchControl {
         let (status, _) = watch::channel(PunchStatus::default());
         let (peer_ready, ready_rx) = oneshot::channel();
         let (start, start_rx) = oneshot::channel();
+        let (report_io, _) = watch::channel(false);
         (
             Self {
                 status,
                 peer_ready: Some(peer_ready),
                 start: Some(start),
                 ready_sent: false,
+                report_io,
             },
             ready_rx,
             start_rx,
@@ -461,6 +507,22 @@ impl PunchControl {
 
     fn receive(&mut self, kind: u8, data: &[u8], offerer: bool) {
         match (kind, data) {
+            (PUNCH_IO_REQUEST, []) if !offerer => {
+                self.report_io.send_replace(true);
+            }
+            (PUNCH_IO, data) if offerer => {
+                if let Some(sample) = PunchIo::decode(data) {
+                    self.status.send_if_modified(|s| {
+                        if s.remote_io
+                            .is_some_and(|old| old.elapsed_ms >= sample.elapsed_ms)
+                        {
+                            return false;
+                        }
+                        s.remote_io = Some(sample);
+                        true
+                    });
+                }
+            }
             (PUNCH_READY, _) => self.receive_ready(data),
             (PUNCH_GO, []) if !offerer => self.start(),
             (PUNCH_DONE, [count])
@@ -471,6 +533,29 @@ impl PunchControl {
                 });
             }
             _ => {}
+        }
+    }
+}
+
+async fn report_punch_io(
+    pc: WebRTCStream,
+    events: mpsc::Sender<SetupEvent>,
+    id: u64,
+    mut requested: watch::Receiver<bool>,
+) {
+    let started = Instant::now();
+    if requested.wait_for(|yes| *yes).await.is_err() {
+        return;
+    }
+    let mut sampling = interval(IO_SAMPLE_INTERVAL);
+    sampling.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    loop {
+        sampling.tick().await;
+        if let Some(counts) = pc.direct_punch_io().await {
+            let elapsed_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+            let sample = PunchIo { elapsed_ms, counts };
+            // Never delay candidate signaling or relay application data for diagnostics.
+            let _ = events.try_send(SetupEvent::Send(frame(PUNCH_IO, id, &sample.payload())));
         }
     }
 }
@@ -490,6 +575,20 @@ async fn coordinated_punch(
         .await
         .unwrap_or_default();
     status.send_modify(|s| s.local_mapping = Some(mapping));
+    // The agent shares only mappings observed on the sockets it is currently using.
+    // Emit these before READY so the other side can enqueue them before the GO checks.
+    for json in pc
+        .observed_udp_candidates()
+        .await
+        .into_iter()
+        .take(MAX_CANDIDATES)
+    {
+        if let Some(bytes) = candidate_frame(id, &json) {
+            if events.send(SetupEvent::Send(bytes)).await.is_err() {
+                return;
+            }
+        }
+    }
     if events
         .send(SetupEvent::Send(frame(PUNCH_READY, id, &mapping)))
         .await
@@ -565,6 +664,10 @@ fn make_attempt(
     let (answer, wait_for_answer) = oneshot::channel::<String>();
     let (candidates, mut remote_candidates) = mpsc::channel::<String>(MAX_CANDIDATES);
     let events = events.clone();
+    let io_requested = punch
+        .as_ref()
+        .filter(|_| !offerer)
+        .map(|c| c.report_io.subscribe());
     #[cfg(target_os = "ios")]
     let mut observation = crate::ios_p2p_diagnostics::Observation::new(offerer, "relay-upgrade");
     #[cfg(target_os = "ios")]
@@ -597,6 +700,20 @@ fn make_attempt(
                 .await
                 .map_err(|_| hbb_common::anyhow::anyhow!("The session closed"))?;
 
+            // A Build 78 controller will never request these samples. A Build 78
+            // responder ignores the request and continues normal trickle and punching.
+            if offerer && mode == OfferMode::Coordinated {
+                let _ = events.try_send(SetupEvent::Send(frame(PUNCH_IO_REQUEST, id, &[])));
+            }
+            let _io_reporter = io_requested.map(|requested| {
+                SetupTask(tokio::spawn(report_punch_io(
+                    rtc.0.clone(),
+                    events.clone(),
+                    id,
+                    requested,
+                )))
+            });
+
             // Queue SDP first on the ordered authenticated relay. Local candidates can then
             // reach the answerer even while we are waiting for its SDP.
             let _send_ice = if trickle {
@@ -608,18 +725,10 @@ fn make_attempt(
                 Some(SetupTask(tokio::spawn(async move {
                     let mut sent = 0;
                     while let Some(candidate) = rx.recv().await {
-                        if candidate.is_empty() || candidate.len() > MAX_CANDIDATE {
+                        let Some(bytes) = candidate_frame(id, &candidate) else {
                             continue;
-                        }
-                        if events
-                            .send(SetupEvent::Send(frame(
-                                ICE_CANDIDATE,
-                                id,
-                                candidate.as_bytes(),
-                            )))
-                            .await
-                            .is_err()
-                        {
+                        };
+                        if events.send(SetupEvent::Send(bytes)).await.is_err() {
                             break;
                         }
                         sent += 1;
@@ -640,18 +749,35 @@ fn make_attempt(
                 rtc.0.set_remote_endpoint(&sdp).await?;
             }
             // Remote candidates that arrived early remain queued until the peer's SDP is set.
+            let (first_candidate, peer_candidate) = oneshot::channel();
             let _receive_ice = if trickle {
                 let pc = rtc.0.clone();
                 Some(SetupTask(tokio::spawn(async move {
+                    let mut first_candidate = Some(first_candidate);
                     while let Some(candidate) = remote_candidates.recv().await {
                         if pc.add_remote_ice_candidate(&candidate).await.is_err() {
                             log::trace!("Live direct attempt {id} rejected a remote ICE candidate");
+                        } else if let Some(first) = first_candidate.take() {
+                            let _ = first.send(());
                         }
                     }
                 })))
             } else {
                 None
             };
+            let _gateway = (mode == OfferMode::Coordinated).then(|| {
+                let pc = rtc.0.clone();
+                let events = events.clone();
+                SetupTask(tokio::spawn(async move {
+                    if peer_candidate.await.is_ok() {
+                        if let Some(json) = pc.gather_gateway_candidate().await {
+                            if let Some(bytes) = candidate_frame(id, &json) {
+                                let _ = events.send(SetupEvent::Send(bytes)).await;
+                            }
+                        }
+                    }
+                }))
+            });
             let _coordinator = coordination.map(|(status, ready, start)| {
                 SetupTask(tokio::spawn(coordinated_punch(
                     rtc.0.clone(),
@@ -830,6 +956,38 @@ mod tests {
     }
 
     #[test]
+    fn peer_udp_samples_are_requested_and_scoped_to_the_correct_role() {
+        let (mut controller, _, _) = PunchControl::new();
+        let (mut host, _, _) = PunchControl::new();
+        let sample = PunchIo {
+            elapsed_ms: 2100,
+            counts: [91, 4, 3, 2, 1, 2],
+        };
+        let bytes = sample.payload();
+        assert!(!*host.report_io.borrow());
+        host.receive(PUNCH_IO_REQUEST, &[1], false);
+        controller.receive(PUNCH_IO_REQUEST, &[], true);
+        assert!(!*host.report_io.borrow() && !*controller.report_io.borrow());
+        host.receive(PUNCH_IO_REQUEST, &[], false);
+        assert!(*host.report_io.borrow());
+        controller.receive(PUNCH_IO, &bytes[..27], true);
+        host.receive(PUNCH_IO, &bytes, false);
+        assert!(controller.status.borrow().remote_io.is_none());
+        assert!(host.status.borrow().remote_io.is_none());
+        controller.receive(PUNCH_IO, &bytes, true);
+        controller.receive(
+            PUNCH_IO,
+            &PunchIo {
+                elapsed_ms: 100,
+                counts: [0; 6],
+            }
+            .payload(),
+            true,
+        );
+        assert_eq!(controller.status.borrow().remote_io, Some(sample));
+    }
+
+    #[test]
     fn candidate_diagnostics_distinguish_signaled_base_families() {
         let mut counts = CandidateCounts::default();
         for line in [
@@ -976,6 +1134,8 @@ mod tests {
             (PUNCH_READY, &[0, 0, 0, 0, 0, 0][..]),
             (PUNCH_GO, &[][..]),
             (PUNCH_DONE, &[3][..]),
+            (PUNCH_IO_REQUEST, &[][..]),
+            (PUNCH_IO, &[0; 28][..]),
         ] {
             old.send_raw(frame(kind, 70, bytes).to_vec()).await.unwrap();
         }
@@ -1113,7 +1273,7 @@ async fn run(
                             setup.receive_candidate(data);
                         }
                     }
-                    Some((kind @ (PUNCH_READY | PUNCH_GO | PUNCH_DONE), number, data)) if number == attempt => {
+                    Some((kind @ (PUNCH_READY | PUNCH_GO | PUNCH_DONE | PUNCH_IO_REQUEST | PUNCH_IO), number, data)) if number == attempt => {
                         if let Some(control) = setup.as_mut().and_then(|a| a.punch.as_mut()) {
                             control.receive(kind, data, offerer);
                         }

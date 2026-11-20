@@ -2,7 +2,7 @@
 use std::{collections::VecDeque, fs, io::Write, path::Path};
 
 const FILENAME: &str = "RustDesk-P2P-diagnostics.txt";
-const HEADER: &str = "RustDesk P2P diagnostics\nformat=udp-sync-v2\n";
+const HEADER: &str = "RustDesk P2P diagnostics\nformat=udp-paths-v3\n";
 const MAX_FILE: usize = 48 * 1024;
 const MAX_ATTEMPTS: usize = 16;
 const MAX_SNAPSHOT: usize = 6 * 1024;
@@ -74,6 +74,11 @@ fn append_punch_status(out: &mut String, status: &crate::live_direct::PunchStatu
             let _ = writeln!(out, "remoteWakes={wakes}");
         }
         None => out.push_str("remoteWakes=unavailable\n"),
+    }
+    if let Some(sample) = status.remote_io {
+        let _ = writeln!(out, "syncUdp peer elapsedMs={} [reads,bindingRequestHeader,reqAccepted,respSent,respSendError,respReceivedMatched]={:?}", sample.elapsed_ms, sample.counts);
+    } else {
+        out.push_str("syncUdp peer=unavailable\n");
     }
     for (side, mapping) in [
         ("local", status.local_mapping),
@@ -379,13 +384,19 @@ mod tests {
         assert!(
             text.contains("syncPunch=waiting") && text.contains("syncMapping peer=unavailable")
         );
+        assert!(text.contains("syncUdp peer=unavailable"));
         status.started = true;
         status.remote_mapping = Some([0, 1, 0, 0, 1, 1]);
         status.local_wakes = 2;
         status.remote_wakes = Some(1);
+        status.remote_io = Some(crate::live_direct::PunchIo {
+            elapsed_ms: 4210,
+            counts: [15, 8, 7, 6, 1, 3],
+        });
         text.clear();
         append_punch_status(&mut text, &status);
         assert!(text.contains("syncPunch=started localWakes=2\nremoteWakes=1"));
+        assert!(text.contains("syncUdp peer elapsedMs=4210 [reads,bindingRequestHeader,reqAccepted,respSent,respSendError,respReceivedMatched]=[15, 8, 7, 6, 1, 3]"));
         assert!(text
             .lines()
             .any(|s| s.starts_with("syncMapping peer [") && s.ends_with("=[0, 1, 0, 0, 1, 1]")));
