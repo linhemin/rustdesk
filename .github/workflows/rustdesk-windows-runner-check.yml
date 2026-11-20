@@ -1,0 +1,70 @@
+name: RustDesk Windows x64 Runner Check
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  compile-and-run:
+    if: github.actor == 'linhemin' && github.triggering_actor == 'linhemin' && github.ref == 'refs/heads/master'
+    runs-on: rustdesk-windows-x64
+    environment: windows-runner-approval
+    timeout-minutes: 10
+    steps:
+      - name: Verify Windows x64 and run an MSVC-built executable
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_OS -ne 'Windows' -or $env:RUNNER_ARCH -ne 'X64' -or
+              [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
+            throw 'This job requires a Windows x64 runner.'
+          }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or -not $vs) {
+            throw 'MSVC x64 was not found.'
+          }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+
+          $build = Join-Path $env:RUNNER_TEMP "msvc-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -Path $build -ItemType Directory | Out-Null
+          Push-Location $build
+          try {
+            Set-Content -LiteralPath smoke.cpp -Encoding Ascii -Value @'
+          #include <windows.h>
+          #include <cstdio>
+
+          #ifndef _M_X64
+          #error MSVC must target x64.
+          #endif
+
+          int main() {
+              static_assert(sizeof(void*) == 8, "Expected a 64-bit executable.");
+              std::puts("MSVC Windows x64 smoke test passed.");
+              return 0;
+          }
+          '@
+            Set-Content -LiteralPath compile.cmd -Encoding Ascii -Value @"
+          @echo off
+          call "$vcvars" || exit /b 1
+          cl /nologo /W4 /WX /Fe:smoke.exe smoke.cpp
+          "@
+            & $env:ComSpec /d /c compile.cmd
+            if ($LASTEXITCODE -ne 0) {
+              throw "MSVC failed with exit code $LASTEXITCODE."
+            }
+            $pe = [IO.File]::ReadAllBytes((Join-Path $build 'smoke.exe'))
+            $machine = [BitConverter]::ToUInt16($pe, [BitConverter]::ToInt32($pe, 0x3c) + 4)
+            if ($machine -ne 0x8664) {
+              throw ('Expected AMD64 PE machine 0x8664, got 0x{0:X4}.' -f $machine)
+            }
+            Write-Host 'Verified AMD64 PE machine 0x8664.'
+            & .\smoke.exe
+            if ($LASTEXITCODE -ne 0) {
+              throw "The x64 executable failed with exit code $LASTEXITCODE."
+            }
+          } finally {
+            Pop-Location
+          }
