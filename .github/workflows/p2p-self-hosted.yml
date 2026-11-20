@@ -274,6 +274,34 @@ jobs:
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
         run: '"$VCPKG_ROOT/vcpkg" install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"'
+      - name: Prepare Flutter plugin directories for the runner account
+        working-directory: flutter
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File "{0}"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'flutter-pub-get.log'
+          & flutter pub get *> $log
+          if ($LASTEXITCODE -ne 0 -and !(Select-String -Quiet -SimpleMatch 'Building with plugins requires symlink support.' -LiteralPath $log)) {
+            Get-Content -LiteralPath $log -Tail 16
+            throw 'Flutter dependency resolution failed'
+          }
+          $metadata = Get-Content -Raw -LiteralPath '.flutter-plugins-dependencies' | ConvertFrom-Json
+          foreach ($platform in @('windows', 'linux')) {
+            $dir = Join-Path $PWD "$platform/flutter/ephemeral/.plugin_symlinks"
+            if (!(Test-Path -LiteralPath $platform) -or !$metadata.plugins.$platform) { continue }
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            foreach ($plugin in $metadata.plugins.$platform) {
+              if ($plugin.name -notmatch '^[a-z][a-z0-9_]*$') { throw 'Invalid plugin name' }
+              $dest = Join-Path $dir $plugin.name
+              $target = (Resolve-Path -LiteralPath $plugin.path).Path
+              if (!(Test-Path -LiteralPath $dest)) {
+                New-Item -ItemType Junction -Path $dest -Target $target | Out-Null
+              }
+            }
+          }
+          & flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter failed to reuse the prepared plugin directories' }
       - name: Build and test the Windows client
         shell: bash
         run: |
