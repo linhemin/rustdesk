@@ -36,3 +36,27 @@ Future<String?> readIosP2pDiagnostics(
   }
   return records.isEmpty ? null : '$header\n\n${records.join('\n\n')}\n';
 }
+
+/// Only copy a local, recent quality sample from the currently open mobile session.
+String formatIosMediaSample({
+  required DateTime opened, required DateTime now, DateTime? videoAt, DateTime? delayAt,
+  String? codec, String? chroma, String? fps, String? delay, String? target, bool? direct,
+}) {
+  bool fresh(DateTime? t) => t != null && !t.isBefore(opened) && !now.isBefore(t) &&
+      now.difference(t) <= const Duration(seconds: 5);
+  final fields = <String>['media', 'path=${direct == null ? "unknown" : (direct ? "direct" : "relay")}'];
+  if (fresh(videoAt)) {
+    if (codec != null && RegExp(r'^(H\.?26[45]|VP[89]|AV1|YUV|RGB)$', caseSensitive: false).hasMatch(codec)) {
+      fields.add('codec=$codec');
+    }
+    if (chroma == '4:2:0' || chroma == '4:4:4') fields.add('chroma=$chroma');
+    if (fps != null && RegExp(r'^\d{1,3}( \d{1,3}){0,7}$').hasMatch(fps)) fields.add('displayFps=[$fps]');
+  }
+  if (fresh(delayAt)) {
+    final rtt = int.tryParse(delay ?? '');
+    final kbps = int.tryParse(target ?? '');
+    if (rtt != null && rtt >= 0) fields.add('rttMs=$rtt');
+    if (kbps != null && kbps >= 0) fields.add('targetKbps=$kbps');
+  }
+  return fields.join(' ');
+}

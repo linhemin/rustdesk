@@ -833,7 +833,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         showToast(translate('Waiting'));
         return;
       }
-      await Clipboard.setData(ClipboardData(text: report));
+      final quality = gFFI.qualityMonitorModel;
+      final data = quality.data;
+      final media = formatIosMediaSample(
+        opened: _sessionOpened, now: DateTime.now(), videoAt: quality.lastVideoSample,
+        delayAt: quality.lastDelaySample, codec: data.codecFormat, chroma: data.chroma,
+        fps: data.fps, delay: data.delay, target: data.targetBitrate,
+        direct: gFFI.ffiModel.direct,
+      );
+      await Clipboard.setData(ClipboardData(text: '$report\n$media'));
       if (mounted) showToast(translate('Copied'));
     } catch (_) {
       if (mounted) showToast(translate('Failed'));

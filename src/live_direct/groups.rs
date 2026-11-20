@@ -120,6 +120,9 @@ impl Exchange<'_> {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
+        if let Some(counts) = pc.ordered_mapping_profiles().await {
+            self.send(PROFILE, &counts).await?;
+        }
         let mut wire = Vec::new();
         for (_, addr, rank) in &local {
             wire.extend_from_slice(&addr.ip().octets());

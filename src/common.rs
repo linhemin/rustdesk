@@ -2356,6 +2356,7 @@ async fn key_exchange(
                         // The signed X25519 high bit marks servers that sign their parameters.
                         // X25519 ignores that bit, so old clients use the key unchanged; keep
                         // the bytes as signed, since the transcript and KxParams carry them so.
+                        let mut signed_observers = Vec::new();
                         let signed_direct_permission = if their_pk_b[31] & 0x80 != 0
                             || !ex.signed_params.is_empty()
                         {
@@ -2372,11 +2373,12 @@ async fn key_exchange(
                             if params.pk[..] != their_pk_b[..] || params.version != ex.version {
                                 bail!("Key exchange version or public key does not match its signature");
                             }
+                            signed_observers = params.udp_mapping_observers;
                             params.allow_session_direct
                         } else {
                             false
                         };
-                        let (asymmetric_value, symmetric_value, key) =
+                        let (asymmetric_value, symmetric_value, session_key) =
                             create_symmetric_key_msg(their_pk_b);
                         let picked = hbb_common::tcp::kx_version_for(ex.version);
                         let mut msg_out = RendezvousMessage::new();
@@ -2387,7 +2389,7 @@ async fn key_exchange(
                         });
                         timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
                         conn.set_negotiated_key(
-                            key,
+                            session_key,
                             true,
                             &hbb_common::tcp::KxTranscript {
                                 initiator_pk: &asymmetric_value,
@@ -2396,6 +2398,12 @@ async fn key_exchange(
                                 picked,
                             },
                         )?;
+                        #[cfg(any(target_os = "windows", target_os = "ios"))]
+                        if signed_direct_permission && picked >= 1 && conn.is_secured() {
+                            if let Stream::Tcp(socket) = conn {
+                                socket.stage_signed_observers(key, signed_observers);
+                            }
+                        }
                         if log_on_success {
                             log::info!("Connection secured");
                         }
@@ -2426,6 +2434,11 @@ pub(crate) async fn secure_tcp_with_direct_permission(
 /// Prove that this same connection has the key for the just-verified advertisement.
 /// hbbs keeps the connection open after this reserved TestNatRequest for the real request.
 pub(crate) async fn confirm_signed_direct_permission(conn: &mut Stream) -> ResultType<bool> {
+    #[cfg(any(target_os = "windows", target_os = "ios"))]
+    let pending = match conn {
+        Stream::Tcp(socket) => socket.take_signed_observers(),
+        _ => None,
+    };
     if !conn.is_secured() {
         return Ok(false);
     }
@@ -2440,7 +2453,14 @@ pub(crate) async fn confirm_signed_direct_permission(conn: &mut Stream) -> Resul
         let Ok(response) = RendezvousMessage::parse_from_bytes(&bytes) else { return Ok(false) };
         Ok(matches!(response.union, Some(rendezvous_message::Union::TestNatResponse(r)) if (1..=65535).contains(&r.port)))
     }).await;
-    result.unwrap_or(Ok(false))
+    let allowed = result.unwrap_or(Ok(false))?;
+    #[cfg(any(target_os = "windows", target_os = "ios"))]
+    if allowed {
+        if let Some((key, observers)) = pending {
+            hbb_common::webrtc::WebRTCStream::remember_signed_observers(&key, &observers);
+        }
+    }
+    Ok(allowed)
 }
 
 pub async fn secure_tcp(conn: &mut Stream, key: &str) -> ResultType<()> {

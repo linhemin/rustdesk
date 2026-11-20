@@ -3172,10 +3172,10 @@ impl Connection {
                 if let Some(tm) = self.last_test_delay {
                     self.last_test_delay = None;
                     let new_delay = tm.elapsed().as_millis() as u32;
-                    video_service::VIDEO_QOS
-                        .lock()
-                        .unwrap()
-                        .user_network_delay(self.inner.id(), new_delay);
+                    let mut qos = video_service::VIDEO_QOS.lock().unwrap();
+                    qos.user_video_delivery(self.inner.id(), t.delivered_video_kbps, t.delivered_video_fps, t.queued_video_percent);
+                    qos.user_network_delay(self.inner.id(), new_delay);
+                    drop(qos);
                     self.network_delay = new_delay;
                 }
             }

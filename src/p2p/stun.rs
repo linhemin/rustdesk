@@ -72,11 +72,13 @@ impl InterfaceStunProvider for PhysicalStun {
         host: &str,
         server_port: u16,
     ) -> Option<SocketAddrV4> {
-        if !self.supports_source(source)
-            || !WebRTCStream::is_default_stun_endpoint(host, server_port)
-        {
-            return None;
+        if !self.supports_source(source) { return None; }
+        if let Ok(ip) = host.parse::<Ipv4Addr>() {
+            let endpoint = SocketAddrV4::new(ip, server_port);
+            return (public_stun_address(ip) && WebRTCStream::signed_observer(endpoint))
+                .then_some(endpoint);
         }
+        if !WebRTCStream::is_default_stun_endpoint(host, server_port) { return None; }
         let index = self.interface.index;
         let still_selected =
             || current_interface().is_some_and(|i| i.index == index && i.address == source);

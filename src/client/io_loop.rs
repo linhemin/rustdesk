@@ -94,6 +94,7 @@ pub struct Remote<T: InvokeUiSession> {
     #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
     client_conn_id: i32, // used for file clipboard
     data_count: Arc<AtomicUsize>,
+    video_delivery: super::video_delivery::DeliveryWindow,
     video_format: CodecFormat,
     elevation_requested: bool,
     peer_info: ParsedPeerInfo,
@@ -151,6 +152,7 @@ impl<T: InvokeUiSession> Remote<T> {
             #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
             client_conn_id: 0,
             data_count: Arc::new(AtomicUsize::new(0)),
+            video_delivery: Default::default(),
             video_format: CodecFormat::Unknown,
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
@@ -193,6 +195,7 @@ impl<T: InvokeUiSession> Remote<T> {
         self.peer_info.live_direct = false;
         self.peer_info.live_direct_trickle = false;
         self.peer_info.live_direct_punch = false;
+        self.video_delivery = Default::default();
         self.peer_info.live_direct_timed = false;
         self.peer_info.live_direct_groups = false;
         let mut received = false;
@@ -1801,6 +1804,14 @@ impl<T: InvokeUiSession> Remote<T> {
                     let Some(thread) = self.video_threads.get_mut(&display) else {
                         return true;
                     };
+                    let depth = thread.video_queue.read().unwrap().len();
+                    use video_frame::Union::*;
+                    let frames = match &vf.union {
+                        Some(Vp8s(f) | Vp9s(f) | Av1s(f) | H264s(f) | H265s(f)) => f.frames.len(),
+                        Some(_) => 1,
+                        None => 0,
+                    };
+                    self.video_delivery.frame(data.len(), frames, depth);
                     if Self::contains_key_frame(&vf) {
                         thread
                             .video_sender
@@ -2564,7 +2575,13 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     _ => {}
                 },
-                Some(message::Union::TestDelay(t)) => {
+                Some(message::Union::TestDelay(mut t)) => {
+                    if !t.from_client {
+                        let (kbps, fps, queued) = self.video_delivery.finish(std::time::Instant::now()).unwrap_or_default();
+                        t.delivered_video_kbps = kbps;
+                        t.delivered_video_fps = fps;
+                        t.queued_video_percent = queued;
+                    }
                     self.handler.handle_test_delay(t, peer).await;
                 }
                 Some(message::Union::AudioFrame(frame)) => {

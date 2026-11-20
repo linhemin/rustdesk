@@ -3916,6 +3916,8 @@ class QualityMonitorModel with ChangeNotifier {
   QualityMonitorModel(this.parent);
   var _show = false;
   final _data = QualityMonitorData();
+  DateTime? lastVideoSample;
+  DateTime? lastDelaySample;
 
   bool get show => _show;
   QualityMonitorData get data => _data;
@@ -3948,6 +3950,7 @@ class QualityMonitorModel with ChangeNotifier {
         _data.speed = evt['speed'];
       }
       if (evt.containsKey('fps') && (evt['fps'] as String).isNotEmpty) {
+        lastVideoSample = DateTime.now();
         final fps = jsonDecode(evt['fps']) as Map<String, dynamic>;
         final pi = parent.target?.ffiModel.pi;
         if (pi != null) {
@@ -3969,6 +3972,7 @@ class QualityMonitorModel with ChangeNotifier {
         }
       }
       if (evt.containsKey('delay') && (evt['delay'] as String).isNotEmpty) {
+        lastDelaySample = DateTime.now();
         _data.delay = evt['delay'];
       }
       if (evt.containsKey('target_bitrate') &&

@@ -4,6 +4,16 @@ import 'package:flutter_hbb/mobile/ios_p2p_diagnostics.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('copy includes only current, typed media samples', () {
+    final now = DateTime.utc(2026, 1, 1);
+    final start = now.subtract(const Duration(seconds: 20));
+    expect(formatIosMediaSample(opened: start, now: now, videoAt: now,
+      delayAt: now, fps: '58', codec: 'H265', chroma: '4:2:0', delay: '48',
+      target: '7000', direct: true),
+      'media path=direct codec=H265 chroma=4:2:0 displayFps=[58] rttMs=48 targetKbps=7000');
+    expect(formatIosMediaSample(opened: start, now: now, videoAt: start,
+      delayAt: now, fps: '60', codec: 'H265', delay: 'secret', direct: false), 'media path=relay');
+  });
   late Directory documents;
   late File report;
   const header = 'RustDesk P2P diagnostics\nformat=udp-paths-v3';

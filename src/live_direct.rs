@@ -533,6 +533,7 @@ impl PunchIo {
 pub(crate) struct PunchStatus {
     pub(crate) group_local: Option<timed::GroupSample>,
     pub(crate) group_peer: Option<timed::GroupSample>,
+    pub(crate) peer_profiles: Option<[u8; 4]>,
     pub(crate) timed_local: Option<timed::Sample>,
     pub(crate) timed_peer: Option<timed::Sample>,
     pub(crate) local_mapping: Option<MappingCounts>,
@@ -1414,6 +1415,13 @@ async fn run(
                     Some((ICE_CANDIDATE, number, data)) if number == attempt => {
                         if let Some(setup) = setup.as_mut() {
                             setup.receive_candidate(data);
+                        }
+                    }
+                    Some((timed::PROFILE, number, data)) if number == attempt && data.len() == 4 => {
+                        if let Some(p) = setup.as_ref().filter(|a| a.grouped).and_then(|a| a.punch.as_ref()) {
+                            if let Ok(counts) = <[u8; 4]>::try_from(data) {
+                                p.status.send_modify(|s| s.peer_profiles = Some(counts));
+                            }
                         }
                     }
                     Some((timed::GROUP_RESULT, number, data)) if number == attempt => {
