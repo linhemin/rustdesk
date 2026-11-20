@@ -1,4 +1,4 @@
-name: macOS self-hosted runner check
+name: macOS ARM64 self-hosted runner check
 
 on:
   workflow_dispatch:
@@ -9,15 +9,16 @@ jobs:
   compiler-check:
     if: github.actor == 'linhemin' && github.triggering_actor == 'linhemin' && github.ref == 'refs/heads/master'
     environment: mac-runner-approval
-    runs-on: rustdesk-mac-gated
+    runs-on: rustdesk-macos-arm64
     timeout-minutes: 5
     steps:
-      - name: Verify Apple Silicon and compile a test program
+      - name: Compile and run an ARM64-only test program
         shell: bash
         run: |
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
           printf '%s\n' 'int main(void) { return 0; }' |
-            xcrun clang -x c - -o "$RUNNER_TEMP/rustdesk-runner-check"
+            xcrun clang -arch arm64 -x c - -o "$RUNNER_TEMP/rustdesk-runner-check"
+          test "$(xcrun lipo -archs "$RUNNER_TEMP/rustdesk-runner-check")" = arm64
           "$RUNNER_TEMP/rustdesk-runner-check"
-          echo "Apple Silicon compiler check passed"
+          echo "macOS ARM64 compiler check passed"
