@@ -2453,7 +2453,8 @@ pub(crate) async fn confirm_signed_direct_permission(conn: &mut Stream) -> Resul
         let Ok(response) = RendezvousMessage::parse_from_bytes(&bytes) else { return Ok(false) };
         Ok(matches!(response.union, Some(rendezvous_message::Union::TestNatResponse(r)) if (1..=65535).contains(&r.port)))
     }).await;
-    let allowed = result.unwrap_or(Ok(false))?;
+    let confirmed: ResultType<bool> = result.unwrap_or(Ok(false));
+    let allowed = confirmed?;
     #[cfg(any(target_os = "windows", target_os = "ios"))]
     if allowed {
         if let Some((key, observers)) = pending {
