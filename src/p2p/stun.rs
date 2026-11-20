@@ -11,6 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "pcp.rs"]
+mod pcp;
+
 pub(crate) fn configured_stun_provider() -> Option<Arc<dyn InterfaceStunProvider>> {
     Some(Arc::new(PhysicalStun::new(current_interface()?)))
 }
@@ -50,6 +53,15 @@ fn public_stun_address(ip: Ipv4Addr) -> bool {
 
 #[async_trait::async_trait]
 impl InterfaceStunProvider for PhysicalStun {
+    async fn bind_mapped_peer(
+        &self,
+        peer: Ipv4Addr,
+        local_port_min: u16,
+        local_port_max: u16,
+    ) -> Option<(Arc<dyn InterfaceStunConn + Send + Sync>, SocketAddrV4)> {
+        pcp::bind_peer(self.interface, peer, local_port_min, local_port_max).await
+    }
+
     fn supports_source(&self, source: Ipv4Addr) -> bool {
         source == self.interface.address
     }
