@@ -11,11 +11,11 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const RustDeskPreview());
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Connect'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(find.text('Enter a remote ID'), findsOneWidget);
     await tester.enterText(find.byType(TextFormField), '123 456 789');
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Connect'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(find.text('UI preview only — no remote connection is made.'),
         findsOneWidget);
@@ -54,7 +54,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     await tester.pumpWidget(const RustDeskPreview());
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.byType(BottomNavigationBar), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.tap(find.byTooltip('Dark appearance'));
     await tester.pumpAndSettle();

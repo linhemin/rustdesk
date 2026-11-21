@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../lib/common/widgets/workspace.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 void main() => runApp(const RustDeskPreview());
 
@@ -124,18 +124,17 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
                 )),
               ])),
           if (compact)
-            NavigationBar(
-              selectedIndex: selected,
+            BottomNavigationBar(
+              currentIndex: selected,
               backgroundColor: Theme.of(context).cardColor,
-              indicatorColor: WorkspaceStyle.accent.withOpacity(.12),
-              onDestinationSelected: (value) =>
-                  setState(() => selected = value),
-              destinations: const [
-                NavigationDestination(
+              type: BottomNavigationBarType.fixed,
+              onTap: (value) => setState(() => selected = value),
+              items: const [
+                BottomNavigationBarItem(
                     icon: Icon(Icons.devices_outlined), label: 'Connection'),
-                NavigationDestination(
+                BottomNavigationBarItem(
                     icon: Icon(Icons.star_outline_rounded), label: 'Favorites'),
-                NavigationDestination(
+                BottomNavigationBarItem(
                     icon: Icon(Icons.tune_rounded), label: 'Settings'),
               ],
             ),
@@ -151,11 +150,12 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
             const Row(children: [
               WorkspaceIcon(icon: Icons.swap_horiz_rounded, size: 40),
               SizedBox(width: 12),
-              Text('RustDesk',
-                  style: TextStyle(
-                      fontSize: 23,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -.6)),
+              Flexible(
+                  child: Text('RustDesk',
+                      style: TextStyle(
+                          fontSize: 23,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -.6))),
             ]),
             const SizedBox(height: 40),
             muted('WORKSPACE', size: 10),

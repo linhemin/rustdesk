@@ -2,7 +2,8 @@
 
 A backend-free Flutter catalog for reviewing the new visual direction. It imports
 the **production** `WorkspaceStyle`, `WorkspacePanel`, `WorkspaceHeading`,
-`WorkspaceIcon`, and `WorkspaceSidebar` from `lib/common/widgets/workspace.dart`.
+`WorkspaceIcon`, and `WorkspaceSidebar` from the local `rustdesk_ui` package
+(re-exported by the app's `lib/common/widgets/workspace.dart`).
 The application uses those same primitives on desktop and mobile; its existing
 controllers, native bridge, permission checks, and connection actions stay intact.
 

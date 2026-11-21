@@ -4,6 +4,8 @@ publish_to: none
 environment:
   sdk: '>=3.5.0 <4.0.0'
 dependencies:
+  rustdesk_ui:
+    path: ../packages/rustdesk_ui
   flutter:
     sdk: flutter
 dev_dependencies:

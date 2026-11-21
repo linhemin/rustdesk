@@ -565,7 +565,7 @@ class MyTheme {
     colorScheme: ColorScheme.dark(
       primary: Colors.blue,
       secondary: accent,
-      background: Color(0xFF24252B),
+      background: WorkspaceStyle.night,
     ),
     popupMenuTheme: PopupMenuThemeData(
         shape: RoundedRectangleBorder(
