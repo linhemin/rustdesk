@@ -49,7 +49,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Edit server settings'));
     await tester.pumpAndSettle();
-    final bounds = tester.getRect(find.byType(AlertDialog));
+    final bounds = tester.getRect(find.descendant(
+        of: find.byType(AlertDialog), matching: find.byType(Material)).first);
     expect(bounds.left, greaterThanOrEqualTo(20));
     expect(bounds.right, lessThanOrEqualTo(300));
     expect(find.text('API server'), findsOneWidget);

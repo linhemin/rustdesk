@@ -10,12 +10,20 @@ import '../../common.dart';
 import '../../models/platform_model.dart';
 import '../../common/widgets/workspace.dart';
 
-Widget _workspaceDialog({required Widget title, required Widget content,
+CustomAlertDialog _workspaceDialog({required Widget title, required Widget content,
     List<Widget> actions = const []}) => isMobile
-    ? MobileWorkspaceDialogTheme(child: CustomAlertDialog(
-        title: title, content: content, actions: actions,
-        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 20)))
+    ? _MobileWorkspaceAlertDialog(title: title, content: content, actions: actions)
     : CustomAlertDialog(title: title, content: content, actions: actions);
+
+class _MobileWorkspaceAlertDialog extends CustomAlertDialog {
+  const _MobileWorkspaceAlertDialog({required super.title,
+      required super.content, required super.actions})
+      : super(titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 20));
+
+  @override
+  Widget build(BuildContext context) => MobileWorkspaceDialogTheme(
+      child: Builder(builder: (context) => super.build(context)));
+}
 
 void _showSuccess() {
   showToast(translate("Successful"));
