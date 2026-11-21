@@ -80,8 +80,22 @@ final class AwesunSessionOverlay {
         host.didMove(toParent: flutterVC)
         self.surface = surface
         self.host = host
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)),
+                                               name: UIResponder.keyboardWillChangeFrameNotification,
+                                               object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(cancelMouseInput),
                                                name: UIApplication.willResignActiveNotification, object: nil)
+    }
+
+    @objc private func keyboardWillChangeFrame(_ notification: Notification) {
+        guard model.active, let surface = surface, let window = surface.window,
+              let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue
+        else { return }
+        let inWindow = window.convert(value.cgRectValue, from: window.screen.coordinateSpace)
+        let end = surface.convert(inWindow, from: window)
+        let overlap = surface.bounds.intersection(end)
+        let docked = !overlap.isEmpty && end.maxY >= surface.bounds.maxY - 1
+        AwesunBridge.shared.command("systemKeyboardTarget", ["inset": docked ? Double(overlap.height) : 0])
     }
 
     @objc private func cancelMouseInput() {
@@ -300,7 +314,7 @@ private final class AwesunMouseInput: UIView {
                 let motion = CGSize(width: current.x - origin.x, height: current.y - origin.y)
                 let next = CGPoint(x: old.x + motion.width, y: old.y + motion.height)
                 let layout = geometry(surface, center: next)
-                surface.model.moveVirtualPointer(anchor: layout.center, point: layout.aim)
+                surface.model.moveVirtualPointer(anchor: layout.center, point: layout.pointer)
                 updateEdgeMotion(motion, layout: layout, locked: surface.model.displayLocked)
             }
         case .wheelTop:
@@ -417,7 +431,7 @@ private final class AwesunMouseInput: UIView {
             stopEdgeMotion()
             return
         }
-        AwesunBridge.shared.virtualMove(to: layout.aim, canvasDelta: CGSize(
+        AwesunBridge.shared.virtualMove(to: layout.pointer, canvasDelta: CGSize(
             width: velocity.width * edgeInterval, height: velocity.height * edgeInterval))
     }
 

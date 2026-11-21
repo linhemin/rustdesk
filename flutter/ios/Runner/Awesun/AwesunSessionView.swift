@@ -267,23 +267,19 @@ enum AwesunControlLayout {
         let screen = CGRect(origin: .zero, size: area)
         let video = viewport?.intersection(screen) ?? screen
         let visible = video.isNull || video.isEmpty ? screen : video
-        let controlsScale = obstruction > 0 ? min(1, max(0.35, area.height / mouseSize)) : 1
-        let reachableBottom = max(0, area.height - 14)
-        let keyboardLimit = max(visible.minY + 12, area.height - (wheelOffset + wheelRadius) * controlsScale)
-        let maxCenter = CGPoint(x: max(0, area.width - 14), y: obstruction > 0
-                                ? min(reachableBottom, keyboardLimit) : reachableBottom)
-        let minCenter = CGPoint(
-            x: min(maxCenter.x, max(14, visible.minX + 12)),
-            y: min(maxCenter.y, max(14, visible.minY + 12)))
+        let controlsScale = obstruction > 0 ? min(1, max(0.25, area.height / mouseSize)) : 1
+        let gap = CGSize(width: 94 * controlsScale, height: 72 * controlsScale)
+        let rightButton = (arcRadius + arcWidth / 2) * controlsScale
+        let lowerButton = (wheelOffset + wheelRadius) * controlsScale
+        let minCenter = CGPoint(x: visible.minX + gap.width, y: visible.minY + gap.height)
+        let maxCenter = CGPoint(
+            x: max(minCenter.x, min(screen.maxX - rightButton, visible.maxX - 1 + gap.width)),
+            y: max(minCenter.y, min(screen.maxY - lowerButton, visible.maxY - 1 + gap.height)))
         let raw = center ?? CGPoint(x: size.width * 0.64, y: size.height * 0.56)
         let center = CGPoint(x: min(max(raw.x, minCenter.x), maxCenter.x),
                              y: min(max(raw.y, minCenter.y), maxCenter.y))
-        let aim = CGPoint(x: center.x - 94 * controlsScale,
-                          y: center.y - 72 * controlsScale)
-        let pointer = CGPoint(
-            x: min(max(aim.x, visible.minX), max(visible.minX, visible.maxX - 1)),
-            y: min(max(aim.y, visible.minY), max(visible.minY, visible.maxY - 1)))
-        return AwesunMouseGeometry(center: center, aim: aim, pointer: pointer,
+        let tip = CGPoint(x: center.x - gap.width, y: center.y - gap.height)
+        return AwesunMouseGeometry(center: center, pointer: tip,
                                   minCenter: minCenter, maxCenter: maxCenter, scale: controlsScale)
     }
 
@@ -332,22 +328,17 @@ private struct AwesunKeyboardPanelSize: PreferenceKey {
 
 struct AwesunMouseGeometry {
     let center: CGPoint
-    let aim: CGPoint
     let pointer: CGPoint
     let minCenter: CGPoint
     let maxCenter: CGPoint
     let scale: CGFloat
 
     func canvasVelocity(toward motion: CGSize) -> CGSize {
-        let band: CGFloat = 30
-        let maxSpeed: CGFloat = 600
+        let speed: CGFloat = 600
         func axis(_ location: CGFloat, _ lower: CGFloat, _ upper: CGFloat, _ step: CGFloat) -> CGFloat {
-            // Very short viewports cannot expose opposing edge bands at once.
-            let span = min(band, (upper - lower) / 2)
-            guard span >= 4, step != 0 else { return 0 }
-            let distance = step < 0 ? location - lower : upper - location
-            guard distance < span else { return 0 }
-            return (step < 0 ? 1 : -1) * maxSpeed * (1 - distance / span)
+            if step < 0 && location <= lower { return speed }
+            if step > 0 && location >= upper { return -speed }
+            return 0
         }
         return CGSize(width: axis(center.x, minCenter.x, maxCenter.x, motion.width),
                       height: axis(center.y, minCenter.y, maxCenter.y, motion.height))

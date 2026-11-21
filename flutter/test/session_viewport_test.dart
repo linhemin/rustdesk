@@ -99,14 +99,14 @@ void main() {
         const Offset(0, -50), Offset.zero & size, const Offset(292, 900));
     final before = Offset(canvas.x, canvas.y);
     expect(before.dy, -50);
-    final shift =
-        nativeKeyboardRevealOffset(before.dy, ffi.cursorModel.y, 1000, 640);
+    final shift = nativeKeyboardLift(size.height, 640);
+    expect(shift, -360);
     canvas.setNativeKeyboardOffset(shift);
-    expect(canvas.y + ffi.cursorModel.y, 320);
+    expect(canvas.y, before.dy - 360);
     expect(canvas.getSize(), size);
     canvas.setNativeKeyboardOffset(shift / 2);
     expect(canvas.y, before.dy + shift / 2);
-    canvas.setNativeKeyboardOffset(0);
+    canvas.setNativeKeyboardOffset(nativeKeyboardLift(size.height, size.height));
     expect(Offset(canvas.x, canvas.y), before);
     expect(canvas.scale, 1);
     canvas.dispose();

@@ -93,13 +93,5 @@ Offset? clampNativePointer(Offset tip, Rect video, Rect viewport) {
   );
 }
 
-double nativeKeyboardRevealOffset(double originY, double inputInImageY,
-    double imageHeight, double visibleHeight) {
-  if (visibleHeight <= 0 || inputInImageY < 0 || inputInImageY >= imageHeight) {
-    return 0;
-  }
-  final inputOnScreen = originY + inputInImageY;
-  final margin = math.min(24.0, visibleHeight / 5);
-  if (inputOnScreen >= 0 && inputOnScreen < visibleHeight - margin) return 0;
-  return visibleHeight / 2 - inputOnScreen;
-}
+double nativeKeyboardLift(double fullHeight, double visibleHeight) =>
+    (visibleHeight - fullHeight).clamp(-fullHeight, 0.0).toDouble();

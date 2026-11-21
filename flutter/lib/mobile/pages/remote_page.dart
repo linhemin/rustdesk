@@ -151,6 +151,7 @@ class _RemotePageState extends State<RemotePage>
   Rect? _nativeMouseViewport;
   bool _nativeMouseViewportScheduled = false;
   double _nativeKeyboardPanel = 0;
+  double? _nativeSystemKeyboardTarget;
   ({Size full, double visible})? _nativeKeyboardViewport;
   late final AnimationController _nativeKeyboardShift =
       AnimationController.unbounded(vsync: this)
@@ -856,8 +857,10 @@ class _RemotePageState extends State<RemotePage>
     });
   }
 
-  Rect _nativePointerViewport(RenderBox box) {
-    final keyboardInset = _nativePresentation?.inset ?? 0;
+  Rect _nativePointerViewport(RenderBox box, {bool keyboardTarget = false}) {
+    final currentInset = _nativePresentation?.inset ?? 0;
+    final keyboardInset =
+        keyboardTarget ? _nativeSystemKeyboardTarget ?? currentInset : currentInset;
     final obstruction = keyboardInset > 0 ? keyboardInset + 38 : _nativeKeyboardPanel;
     final keyboardTop = MediaQuery.sizeOf(context).height - obstruction;
     final bottom = obstruction <= 0
@@ -973,6 +976,7 @@ class _RemotePageState extends State<RemotePage>
       _nativeMouseViewport = null;
       _nativeKeyboardViewport = null;
       _nativeKeyboardPanel = 0;
+      _nativeSystemKeyboardTarget = null;
       if (!active) _nativeKeyboardShift.value = 0;
       _lastNativePerformance = const {};
       _syncNativePresentation();
@@ -1033,6 +1037,13 @@ class _RemotePageState extends State<RemotePage>
         }
       case 'chat':
         _sessionAction(SessionAction.chat);
+      case 'systemKeyboardTarget':
+        final inset = arguments['inset'];
+        if (inset is num && inset.isFinite && inset >= 0 &&
+            _nativeSystemKeyboardTarget != inset) {
+          _nativeSystemKeyboardTarget = inset.toDouble();
+          _scheduleSessionViewportUpdate();
+        }
       case 'keyboardPanelHeight':
         final height = arguments['height'];
         if (height is num && height.isFinite && height >= 0 &&
@@ -1478,26 +1489,17 @@ class _RemotePageState extends State<RemotePage>
   }
 
   void _updateNativeKeyboardViewport(RenderBox box) {
-    final viewport = (full: box.size, visible: _nativePointerViewport(box).height);
+    final viewport = (full: box.size, visible: _nativePointerViewport(box, keyboardTarget: true).height);
     if (_nativeKeyboardViewport == viewport) return;
     _nativeKeyboardViewport = viewport;
     final canvas = gFFI.canvasModel;
     canvas.updateMobileSessionViewport(viewport.full, keyboardOpen: false);
-    var shift = 0.0;
-    final display = gFFI.ffiModel.rect;
-    if (display != null && viewport.visible < viewport.full.height) {
-      shift = nativeKeyboardRevealOffset(
-        canvas.y - _nativeKeyboardShift.value,
-        (gFFI.cursorModel.y - display.top) * canvas.scale,
-        canvas.getDisplayHeight() * canvas.scale,
-        viewport.visible,
-      );
-    }
+    final shift = nativeKeyboardLift(viewport.full.height, viewport.visible);
     if (MediaQuery.disableAnimationsOf(context)) {
       _nativeKeyboardShift.value = shift;
     } else {
       _nativeKeyboardShift.animateTo(shift,
-          duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+          duration: const Duration(milliseconds: 220), curve: Curves.linear);
     }
     _scheduleNativeMouseViewport();
   }
