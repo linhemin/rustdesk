@@ -48,7 +48,20 @@ struct AwesunSessionView: View {
         }
     }
 
+    @ViewBuilder
     private var controls: some View {
+#if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer { floatingControls }
+        } else {
+            floatingControls
+        }
+#else
+        floatingControls
+#endif
+    }
+
+    private var floatingControls: some View {
         ZStack {
             AwesunDockButton(placement: $model.lockPlacement, size: size,
                              label: model.displayLocked ? "解除锁定" : "锁定显示",
@@ -88,8 +101,7 @@ struct AwesunSessionView: View {
                     Image(systemName: symbol).resizable().scaledToFit()
                 }
             }
-                .foregroundColor(accent ? AwesunPalette.brandRed : .white)
-                .modifier(AwesunFloatingChrome())
+                .modifier(AwesunFloatingChrome(accent: accent))
         }
         .buttonStyle(AwesunPressStyle())
         .accessibilityLabel(Text(label))
@@ -511,12 +523,32 @@ struct AwesunDockPlacement: Codable {
 }
 
 struct AwesunFloatingChrome: ViewModifier {
+    var accent = false
+
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.frame(width: AwesunControlLayout.glyphSize, height: AwesunControlLayout.glyphSize)
+        let control = content
+            .frame(width: AwesunControlLayout.glyphSize, height: AwesunControlLayout.glyphSize)
             .frame(width: AwesunControlLayout.controlRadius * 2,
                    height: AwesunControlLayout.controlRadius * 2)
-            .background(Circle().fill(Color.black.opacity(0.78)))
             .contentShape(Circle())
+#if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            control
+                .foregroundColor(accent ? AwesunPalette.brandRed : .primary)
+                .glassEffect(.regular.interactive(), in: Circle())
+        } else {
+            fallback(control)
+        }
+#else
+        fallback(control)
+#endif
+    }
+
+    private func fallback(_ control: some View) -> some View {
+        control
+            .foregroundColor(accent ? AwesunPalette.brandRed : .white)
+            .background(Circle().fill(Color.black.opacity(0.78)))
     }
 }
 
@@ -532,7 +564,6 @@ struct AwesunDockButton<Glyph: View>: View {
         let anchor = AwesunControlLayout.dockCenter(placement, in: size)
         let button = CGPoint(x: anchor.x + drag.width, y: anchor.y + drag.height)
         glyph()
-            .foregroundColor(.white)
             .modifier(AwesunFloatingChrome())
             .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("awesunControls"))
                 .updating($drag) { value, state, _ in state = value.translation }

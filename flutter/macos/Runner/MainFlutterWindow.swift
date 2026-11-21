@@ -67,6 +67,9 @@ class MainFlutterWindow: NSWindow {
         setMethodHandler(registrar: registrar)
 
         RegisterGeneratedPlugins(registry: flutterViewController)
+        AppleWorkspaceNavigationFactory.register(
+            with: flutterViewController.registrar(forPlugin: "AppleWorkspaceNavigation")
+        )
 
         FlutterMultiWindowPlugin.setOnWindowCreatedCallback { controller in
             // Register the plugin which you want access from other isolate.

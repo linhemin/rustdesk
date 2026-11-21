@@ -42,6 +42,9 @@ import Network
   func sceneWillConnect(window: UIWindow?, launchURL: URL?) {
     self.window = window
     GeneratedPluginRegistrant.register(with: self)
+    if let registrar = registrar(forPlugin: "AppleWorkspaceNavigation") {
+      AppleWorkspaceNavigationFactory.register(with: registrar)
+    }
     var launchOptions: [UIApplication.LaunchOptionsKey: Any] = [:]
     if let launchURL = launchURL {
       launchOptions[.url] = launchURL
