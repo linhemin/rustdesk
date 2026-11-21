@@ -4,3 +4,4 @@
 
 #include <stdint.h>
 void rustdesk_ios_diagnostic_path(uint8_t kind, uint32_t build);
+void rustdesk_ios_p2p_wake(void);

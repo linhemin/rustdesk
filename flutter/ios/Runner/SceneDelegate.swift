@@ -18,4 +18,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       _ = appDelegate.application(UIApplication.shared, open: context.url, options: [:])
     }
   }
+
+  func sceneDidBecomeActive(_ scene: UIScene) {
+    rustdesk_ios_p2p_wake()
+  }
 }

@@ -21,6 +21,9 @@ import Network
       else if path.usesInterfaceType(.cellular) { kind = 2 }
       else { kind = 3 }
       rustdesk_ios_diagnostic_path(kind, build)
+      if path.status == .satisfied {
+        rustdesk_ios_p2p_wake()
+      }
     }
     diagnosticPath.start(queue: DispatchQueue(label: "com.rustdesk.diagnostic-path"))
     do {
