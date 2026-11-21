@@ -14,6 +14,7 @@ pub(crate) struct FullSample {
     written: u16,
     ingress: Option<u16>,
     finished: bool,
+    pub(in crate::live_direct) empty_pool: bool,
 }
 
 impl FullSample {
@@ -27,7 +28,7 @@ impl FullSample {
         ]) {
             slot.copy_from_slice(&value.to_be_bytes());
         }
-        data[8] = u8::from(self.finished);
+        data[8] = if self.empty_pool { 2 } else { u8::from(self.finished) };
         data
     }
 
@@ -40,7 +41,8 @@ impl FullSample {
         if usize::from(local.max(peer)) > MAX_FULL_ENDPOINTS
             || ((local == 0 || peer == 0) && written > 0)
             || (ingress != u16::MAX && ingress > written)
-            || finished > 1
+            || finished > 2
+            || (finished == 2 && local != 0)
         {
             return None;
         }
@@ -49,7 +51,8 @@ impl FullSample {
             peer,
             written,
             ingress: (ingress != u16::MAX).then_some(ingress),
-            finished: finished == 1,
+            finished: finished != 0,
+            empty_pool: finished == 2,
         })
     }
 }
@@ -58,8 +61,8 @@ impl fmt::Display for FullSample {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "freshLocal={} freshPeer={} writes={} finished={} exactIngress=",
-            self.local, self.peer, self.written, self.finished,
+            "freshLocal={} freshPeer={} writes={} finished={} emptyPool={} exactIngress=",
+            self.local, self.peer, self.written, self.finished, self.empty_pool,
         )?;
         match self.ingress {
             Some(n) => write!(f, "{n}"),
@@ -127,6 +130,9 @@ async fn check_rounds(
         report.local = local.len() as u16;
         status.send_modify(|s| s.full = Some(*report));
         exchange.send(FULL_SELECT, &wire).await?;
+        if local.is_empty() && pc.expanded_udp_pool_complete().await {
+            break;
+        }
         let (kind, data) = exchange
             .incoming
             .recv()
@@ -174,8 +180,6 @@ async fn check_rounds(
                 next = Instant::now() + plan.spacing();
             }
             round += 1;
-        } else if local.is_empty() && pc.expanded_udp_pool_complete().await {
-            break;
         }
         status.send_modify(|s| s.full = Some(*report));
         at = Instant::now() + Duration::from_millis(240);
@@ -224,9 +228,12 @@ pub(in crate::live_direct) async fn run_full(
         Err(_) => hbb_common::log::trace!("Full candidate exchange timed out"),
     }
     report.finished = true;
+    report.empty_pool = report.local == 0
+        && pc.expanded_udp_pool_complete().await
+        && pc.expanded_udp_candidates().await.is_empty();
     report.ingress = pc.expanded_pair_ingress(&checked).await.map(|n| n as u16);
-    status.send_modify(|s| s.full = Some(report));
     let _ = exchange.send(FULL_RESULT, &report.bytes()).await;
+    status.send_modify(|s| s.full = Some(report));
     if id <= 3 || id.is_power_of_two() {
         hbb_common::log::info!(
             "RustDesk expanded ports attempt {id} {:?}: {report}",
@@ -252,7 +259,16 @@ mod tests {
             written: 900,
             ingress: Some(2),
             finished: true,
+            empty_pool: false,
         };
         assert_eq!(FullSample::decode(&sample.bytes()).unwrap().written, 900);
+    }
+
+    #[test]
+    fn empty_pool_report_requires_a_confirmed_zero_local_count() {
+        let sample = FullSample { finished: true, empty_pool: true, ..Default::default() };
+        assert!(FullSample::decode(&sample.bytes()).unwrap().empty_pool);
+        let forged = FullSample { local: 1, ..sample };
+        assert!(FullSample::decode(&forged.bytes()).is_none());
     }
 }

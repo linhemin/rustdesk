@@ -73,6 +73,7 @@ const RTC_TIMEOUT: u64 = 18_000;
 const LITE_TIMEOUT: u64 = 12_000;
 const LITE_IDLE_WINDOW: Duration = Duration::from_secs(5);
 const CHECK_STAGE: &str = "ICE/DTLS/data-channel checks";
+const EMPTY_POOL_STAGE: &str = "full UDP port pool exhausted";
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
 static FULL_PORT_POOLS: Semaphore = Semaphore::const_new(2);
 #[cfg(test)]
@@ -182,10 +183,12 @@ impl RetrySchedule {
             self.next_profile = Some(OfferMode::Full);
             return Duration::from_millis(250);
         }
-        self.next_profile = (mode == OfferMode::Full).then_some(OfferMode::Timed);
+        let empty_pool = mode == OfferMode::Full && stage == EMPTY_POOL_STAGE;
+        self.next_profile = (mode == OfferMode::Full && !empty_pool).then_some(OfferMode::Timed);
         let delay = self.delay_seconds;
         self.delay_seconds = (delay * 2).min(30);
-        Duration::from_secs(delay)
+        // Answerers rate-limit replacement offers for three seconds after accepting one.
+        Duration::from_secs(if empty_pool { delay.max(3) } else { delay })
     }
 }
 
@@ -820,16 +823,20 @@ impl Attempt {
     }
 }
 
+async fn ice_has_no_authenticated_traffic(pc: &WebRTCStream) -> bool {
+    let (io, pair) = tokio::join!(
+        pc.direct_punch_io(),
+        timeout(Duration::from_millis(250), pc.is_relayed()),
+    );
+    // Accepted ICE requests and matched responses can precede nomination and DTLS.
+    matches!(io, Some([_, _, 0, _, _, 0])) && matches!(pair, Ok(None | Some(true)))
+}
+
 async fn wait_lite_connected(pc: &mut WebRTCStream) -> ResultType<()> {
     let probe = pc.clone();
     let idle = async {
         tokio::time::sleep(LITE_IDLE_WINDOW).await;
-        let (io, pair) = tokio::join!(
-            probe.direct_punch_io(),
-            timeout(Duration::from_millis(250), probe.is_relayed()),
-        );
-        // Accepted ICE requests and matched responses can precede nomination and DTLS.
-        if !matches!(io, Some([_, _, 0, _, _, 0])) || !matches!(pair, Ok(None | Some(true))) {
+        if !ice_has_no_authenticated_traffic(&probe).await {
             pending::<()>().await;
         }
     };
@@ -837,6 +844,27 @@ async fn wait_lite_connected(pc: &mut WebRTCStream) -> ResultType<()> {
         biased;
         connected = pc.wait_connected(LITE_TIMEOUT) => connected,
         _ = idle => bail!("No authenticated ICE traffic during the lightweight window"),
+    }
+}
+
+async fn wait_full_connected(
+    pc: &mut WebRTCStream,
+    ms: u64,
+    mut status: watch::Receiver<PunchStatus>,
+) -> Option<ResultType<()>> {
+    let probe = pc.clone();
+    let exhausted = async {
+        let reported = status.wait_for(|status|
+            status.full.is_some_and(|sample| sample.empty_pool)
+                || status.full_peer.is_some_and(|sample| sample.empty_pool)).await.is_ok();
+        if !reported || !ice_has_no_authenticated_traffic(&probe).await {
+            pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        biased;
+        connected = pc.wait_connected(ms) => Some(connected),
+        _ = exhausted => None,
     }
 }
 
@@ -864,6 +892,7 @@ fn make_attempt(
     let (candidates, mut remote_candidates) = mpsc::channel::<String>(MAX_CANDIDATES);
     let events = events.clone();
     let timed_job = timed_rx.zip(punch.as_ref().map(|p| p.status.clone()));
+    let full_status = punch.as_ref().filter(|_| plan.is_some()).map(|p| p.status.subscribe());
     let io_requested = punch
         .as_ref()
         .filter(|_| !offerer)
@@ -1043,7 +1072,15 @@ fn make_attempt(
             if let Some(observation) = observation.as_mut() {
                 observation.set_stage(stage);
             }
-            let connected = if offerer && mode == OfferMode::Lite {
+            let connected = if let Some(status) = full_status {
+                match wait_full_connected(&mut rtc.0, rtc_timeout, status).await {
+                    Some(result) => result,
+                    None => {
+                        stage = EMPTY_POOL_STAGE;
+                        Err(hbb_common::anyhow::anyhow!("A peer finished without fresh UDP endpoints"))
+                    }
+                }
+            } else if offerer && mode == OfferMode::Lite {
                 wait_lite_connected(&mut rtc.0).await
             } else {
                 rtc.0.wait_connected(rtc_timeout).await
@@ -1235,6 +1272,16 @@ mod tests {
         legacy.failed(Grouped, CHECK_STAGE);
         assert!(legacy.next(Grouped, 2) == Grouped);
         assert_ne!(Grouped.frame_kind(), FULL_OFFER);
+    }
+
+    #[test]
+    fn confirmed_empty_full_pool_retries_lightweight_without_the_old_strategy() {
+        let mut retries = RetrySchedule::default();
+        assert_eq!(
+            retries.failed(OfferMode::Full, EMPTY_POOL_STAGE),
+            Duration::from_secs(3)
+        );
+        assert!(retries.next(OfferMode::Full, 3) == OfferMode::Lite);
     }
 
     #[test]
