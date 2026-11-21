@@ -827,5 +827,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Request approval", "בקש אישור"),
         ("Forever", "לתמיד"),
         ("username-login-disabled-oidc-unavailable", "כניסה באמצעות שם משתמש וסיסמה מושבתת, ואין שיטות כניסה זמינות באמצעות OIDC."),
+        ("Copy P2P diagnostics", ""),
+        ("Connect to a peer first, then try again in a minute.", ""),
+        ("Record P2P diagnostics", ""),
     ].iter().cloned().collect();
 }

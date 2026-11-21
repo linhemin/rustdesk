@@ -182,6 +182,7 @@ const String kOptionEnableIpv6Punch = "enable-ipv6-punch";
 const String kOptionAllowSyncClipboardBetweenSessions =
     "allow-sync-clipboard-between-sessions";
 const String kOptionEnableWebrtc = "enable-webrtc";
+const String kOptionRecordP2pDiagnostics = "record-p2p-diagnostics";
 const String kOptionRelayFallbackDelay = "relay-fallback-delay";
 const String kOptionEnableTrustedDevices = "enable-trusted-devices";
 const String kOptionTrustedDeviceExpiration = "trusted-device-expiration-days";
@@ -196,6 +197,7 @@ const String kOptionShowTerminalCtrlKeys = "show-terminal-extra-ctrl-keys";
 
 // network options
 const String kOptionAllowWebSocket = "allow-websocket";
+const String kOptionP2pInterfaceIp = "p2p-interface-ip";
 const String kOptionAllowInsecureTLSFallback = "allow-insecure-tls-fallback";
 const String kOptionDisableUdp = "disable-udp";
 const String kOptionEnableFlutterHttpOnRust = "enable-flutter-http-on-rust";

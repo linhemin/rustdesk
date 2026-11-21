@@ -1019,6 +1019,13 @@ pub fn main_get_option_sync(key: String) -> SyncReturn<String> {
     SyncReturn(get_option(key))
 }
 
+pub fn main_get_p2p_interfaces() -> String {
+    #[cfg(target_os = "windows")]
+    return crate::p2p::interface_choices();
+    #[cfg(not(target_os = "windows"))]
+    "{}".to_owned()
+}
+
 pub fn main_get_error() -> String {
     get_error()
 }
@@ -1281,7 +1288,13 @@ pub fn main_set_env(key: String, value: Option<String>) -> SyncReturn<()> {
 pub fn main_set_local_option(key: String, value: String) {
     let is_texture_render_key = key.eq(keys::OPTION_TEXTURE_RENDER);
     let is_d3d_render_key = key.eq(keys::OPTION_ALLOW_D3D_RENDER);
+    #[cfg(target_os = "ios")]
+    let stop_p2p_diagnostics = key == keys::OPTION_RECORD_P2P_DIAGNOSTICS && value != "Y";
     set_local_option(key, value.clone());
+    #[cfg(target_os = "ios")]
+    if stop_p2p_diagnostics {
+        crate::ios_p2p_diagnostics::disable();
+    }
     let is_render_target =
         |session: &crate::flutter::FlutterSession| session.is_default() || session.is_view_camera();
     if is_texture_render_key {

@@ -15,12 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::c_void,
+    future::Future,
     net::SocketAddr,
     ops::Deref,
     str::FromStr,
     sync::{
         mpsc::{self, RecvTimeoutError},
-        Arc, Mutex, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
     },
 };
 use uuid::Uuid;
@@ -31,7 +32,7 @@ use crate::{
     create_symmetric_key_msg, decode_id_pk, decode_id_pk_dtls, dtls_fingerprint_bound, get_rs_pk,
     is_keyboard_mode_supported,
     kcp_stream::KcpStream,
-    secure_tcp, secure_tcp_required,
+    secure_tcp, secure_tcp_with_direct_permission,
     ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
@@ -55,7 +56,7 @@ use hbb_common::{
     rand,
     rendezvous_proto::*,
     sha2::{Digest, Sha256},
-    socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6, new_direct_udp_for_unverified},
+    socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6},
     sodiumoxide::{base64, crypto::sign},
     timeout,
     tokio::{
@@ -94,6 +95,7 @@ use crate::ui_session_interface::SessionPermissionConfig;
 pub use super::lang::*;
 
 mod login_method;
+mod path_rtt;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
@@ -105,6 +107,7 @@ mod audio_state_tests;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
+mod video_delivery;
 pub mod screenshot;
 
 pub const MILLI1: Duration = Duration::from_millis(1);
@@ -236,6 +239,8 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
     let mut window_started = false;
     loop {
         tokio::select! {
+            // When both the deadline and a completed direct connection are ready, keep direct.
+            biased;
             res = async {
                 match webrtc_fut.as_mut() {
                     Some(fut) => fut.await,
@@ -339,13 +344,85 @@ async fn race_transports_prefer_webrtc<'a, T: 'a>(
     }
 }
 
+type PeerConnection = (
+    (Stream, bool, Option<Vec<u8>>, Option<KcpStream>, &'static str),
+    (i32, String),
+    bool,
+);
+
+// The punch requests share one round. A grant from another rendezvous in the fallback
+// list cannot authorize the server which actually returned the relay.
+#[derive(Default)]
+struct DirectRetryPermission {
+    checked: OnceLock<String>,
+    permitted: OnceLock<String>,
+}
+
+impl DirectRetryPermission {
+    fn record_exchange(&self, server: &str, signed_grant: bool) {
+        let _ = self.checked.set(server.to_owned());
+        if signed_grant {
+            let _ = self.permitted.set(server.to_owned());
+        }
+    }
+
+    fn record_answer(&self, server: &str, authenticated_direct_offer: bool, answer: &str) {
+        if authenticated_direct_offer && WebRTCStream::endpoint_declares_all_ice(answer) {
+            let _ = self.permitted.set(server.to_owned());
+        }
+    }
+
+    fn decision(&self, server: &str) -> Option<bool> {
+        if self.permitted.get().map(String::as_str) == Some(server) {
+            Some(true)
+        } else if self.checked.get().map(String::as_str) == Some(server) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+}
+
+type ConnectedPeer = (
+    (Stream, bool, Option<Vec<u8>>, Option<KcpStream>, &'static str),
+    (i32, String),
+);
+
+async fn prefer_lan_connection<T>(
+    lan: impl Future<Output = ResultType<T>>,
+    fallback: impl Future<Output = ResultType<T>>,
+    grace: Duration,
+) -> ResultType<(T, Option<T>)> {
+    let deadline = Instant::now() + grace;
+    tokio::pin!(lan, fallback);
+    tokio::select! {
+        biased;
+        result = &mut lan => match result {
+            // Only compare already-open paths. Never hold a ready LAN for a second handshake.
+            Ok(connection) => Ok((connection, fallback.now_or_never().and_then(Result::ok))),
+            Err(err) => {
+                log::debug!("LAN direct attempt failed: {err}");
+                fallback.await.map(|connection| (connection, None))
+            }
+        },
+        result = &mut fallback => match result {
+            Ok(fallback) => match tokio::time::timeout_at(deadline, lan).await {
+                Ok(Ok(connection)) => Ok((connection, Some(fallback))),
+                _ => Ok((fallback, None)),
+            },
+            // The deadline limits how long we hold a working fallback. A failed rendezvous has
+            // nothing to offer: let the authenticated LAN probe finish its own bounded attempt.
+            Err(err) => lan.await.or(Err(err)).map(|connection| (connection, None)),
+        }
+    }
+}
+
 // A peer decides how many ICE candidates it sends, and the rendezvous route that carries them is
 // reachable without a prior punch, so these sites would otherwise let someone else set how much
 // this machine writes to its log file. One line a minute each, carrying the suppressed count.
 use hbb_common::log_throttle::LogThrottle;
 const ICE_LOG_INTERVAL: Duration = Duration::from_secs(60);
 static REJECTED_ICE_LOG: LogThrottle = LogThrottle::new(ICE_LOG_INTERVAL);
-static UDP_UAT_ERR_LOG: LogThrottle = LogThrottle::new(ICE_LOG_INTERVAL);
 static UNEXPECTED_ICE_LOG: LogThrottle = LogThrottle::new(ICE_LOG_INTERVAL);
 static PENDING_ICE_FULL_LOG: LogThrottle = LogThrottle::new(ICE_LOG_INTERVAL);
 
@@ -353,6 +430,74 @@ fn request_allows_tcp_punch(webrtc_sdp_offer: &str) -> bool {
     // WebRTC trickle ICE retains the rendezvous socket as its signaling bridge. Only a request
     // without an offer may close that socket and reuse its local address for TCP punching.
     webrtc_sdp_offer.is_empty()
+}
+
+fn mismatched_public_tcp_family(
+    eligible: bool,
+    local: SocketAddr,
+    response: &RendezvousMessage,
+) -> Option<bool> {
+    let Some(rendezvous_message::Union::PunchHoleResponse(ph)) = &response.union else {
+        return None;
+    };
+    if !eligible
+        || ph.socket_addr.is_empty()
+        || ph.is_local()
+        || ph.is_udp
+        || !ph.webrtc_sdp_answer.is_empty()
+        || ph.nat_type() == NatType::SYMMETRIC
+    {
+        return None;
+    }
+    let peer = AddrMangle::decode(&ph.socket_addr);
+    (peer.port() != 0 && !peer.ip().is_unspecified() && peer.is_ipv4() != local.is_ipv4())
+        .then_some(peer.is_ipv4())
+}
+
+fn usable_family_reply(response: &RendezvousMessage, ipv4: bool) -> bool {
+    match &response.union {
+        Some(rendezvous_message::Union::PunchHoleResponse(ph)) if ph.socket_addr.is_empty() => {
+            // The protobuf default (ID_NOT_EXIST) is indistinguishable from an empty reply.
+            // Keep the original successful punch on an empty response.
+            !ph.other_failure.is_empty() || ph.failure.value() != 0
+        }
+        Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
+            let peer = AddrMangle::decode(&ph.socket_addr);
+            peer.port() > 0 && !peer.ip().is_unspecified() && peer.is_ipv4() == ipv4 && !ph.is_udp
+        }
+        Some(rendezvous_message::Union::RelayResponse(rr)) => {
+            !rr.refuse_reason.is_empty() || (!rr.uuid.is_empty() && !rr.relay_server.is_empty())
+        }
+        _ => false,
+    }
+}
+
+async fn retry_tcp_punch_family(
+    server: &str,
+    key: &str,
+    ipv4: bool,
+    request: &RendezvousMessage,
+) -> ResultType<(Stream, RendezvousMessage)> {
+    // One shared deadline includes DNS, TCP, hbbs key exchange and a fresh punch reply.
+    // Hold the original result until this completes. Cancellation drops the new socket.
+    timeout(crate::p2p::FAMILY_RETRY_MS, async {
+        let mut conn = crate::p2p::authenticated_family_rendezvous(
+            server,
+            ipv4,
+            key,
+            crate::p2p::FAMILY_RETRY_MS,
+        )
+        .await?;
+        conn.send(request).await?;
+        let response = crate::get_next_nonkeyexchange_msg(&mut conn, None)
+            .await
+            .context("Missing family-specific rendezvous reply")?;
+        if !usable_family_reply(&response, ipv4) {
+            bail!("Rendezvous returned no usable TCP endpoint or explicit decision");
+        }
+        Ok((conn, response))
+    })
+    .await?
 }
 
 /// TCP punch is a user option like the other direct transports, but it is also the backstop:
@@ -377,20 +522,35 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(
-        (
-            Stream,
-            bool,
-            Option<Vec<u8>>,
-            Option<KcpStream>,
-            &'static str,
-        ),
-        (i32, String),
-    )> {
+    ) -> ResultType<ConnectedPeer> {
+        let (connection, _) =
+            Self::start_with_direct_permission(peer, key, token, conn_type, interface, None).await?;
+        Ok(connection)
+    }
+
+    async fn start_with_direct_permission(
+        peer: &str,
+        key: &str,
+        token: &str,
+        conn_type: ConnType,
+        interface: impl Interface,
+        initial_frames: Option<&mut path_rtt::InitialFrames>,
+    ) -> ResultType<(ConnectedPeer, Option<bool>)> {
         debug_assert!(peer == interface.get_id());
         interface.update_direct(None);
         interface.update_received(false);
-        match Self::_start(peer, key, token, conn_type, interface.clone()).await {
+        let permission = DirectRetryPermission::default();
+        let connection = Self::_start(
+            peer,
+            key,
+            token,
+            conn_type,
+            interface.clone(),
+            &permission,
+            initial_frames,
+        )
+        .await;
+        match connection {
             Err(err) => {
                 let err_str = err.to_string();
                 if err_str.starts_with("Failed") {
@@ -410,7 +570,9 @@ impl Client {
                         interface.get_lch().write().unwrap().set_direct_failure(n);
                     }
                 }
-                Ok((x.0, x.1))
+                let (_, rendezvous_server) = &x.1;
+                let allowed = permission.decision(rendezvous_server);
+                Ok(((x.0, x.1), allowed))
             }
         }
     }
@@ -422,17 +584,9 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-    ) -> ResultType<(
-        (
-            Stream,
-            bool,
-            Option<Vec<u8>>,
-            Option<KcpStream>,
-            &'static str,
-        ),
-        (i32, String),
-        bool,
-    )> {
+        direct_permission: &DirectRetryPermission,
+        initial_frames: Option<&mut path_rtt::InitialFrames>,
+    ) -> ResultType<PeerConnection> {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
         }
@@ -489,6 +643,58 @@ impl Client {
             }
         };
 
+        let lan = if !interface.is_force_relay()
+            && tcp_punch_allowed()
+            && conn_type == ConnType::DEFAULT_CONN
+            && interface.get_switch_code().is_empty()
+        {
+            crate::p2p::Interface::configured()
+        } else {
+            None
+        };
+        let lan_server = lan.map(|_| rendezvous_server.clone());
+        let existing = Self::start_via_rendezvous(
+            peer, key, token, conn_type, interface, rendezvous_server, servers, contained,
+            direct_permission,
+        );
+        if let Some((iface, server)) = lan.zip(lan_server) {
+            let (mut lan, alternate) = prefer_lan_connection(
+                Self::probe_lan(peer, key, token, &server, iface),
+                existing,
+                Duration::from_secs(1),
+            )
+            .await?;
+            if let (Some(mut other), Some(initial_frames)) = (alternate, initial_frames) {
+                let (lan_path, other_path) = (&mut lan.0, &mut other.0);
+                if path_rtt::can_compare(
+                    lan_path.1,
+                    lan_path.2.as_deref(),
+                    &lan_path.0,
+                    other_path.1,
+                    other_path.2.as_deref(),
+                    &other_path.0,
+                ) && path_rtt::prefer_alternate(&mut lan_path.0, &mut other_path.0, initial_frames)
+                    .await?
+                {
+                    return Ok(other);
+                }
+            }
+            return Ok(lan);
+        }
+        existing.await
+    }
+
+    async fn start_via_rendezvous(
+        peer: &str,
+        key: &str,
+        token: &str,
+        conn_type: ConnType,
+        interface: impl Interface,
+        rendezvous_server: String,
+        servers: Vec<String>,
+        contained: bool,
+        direct_permission: &DirectRetryPermission,
+    ) -> ResultType<PeerConnection> {
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
         // be used, so probing v6 reachability is wasted work on every such connection.
         if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() {
@@ -500,19 +706,25 @@ impl Client {
         // no need to care about multiple rendezvous servers case, since it is acutally not used any more.
         // Shared state for UDP NAT test result
         if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
-            if let Ok((socket, addr)) = new_direct_udp_for_unverified(&rendezvous_server).await {
+            if let Ok((socket, addr)) =
+                crate::p2p::rendezvous_punch_socket(&rendezvous_server, false).await
+            {
                 let udp_port = Arc::new(Mutex::new(0));
                 let up_cloned = udp_port.clone();
                 let socket_cloned = socket.clone();
                 let func = async move {
-                    allow_err!(test_udp_uat(socket_cloned, addr, up_cloned, stop_udp_rx).await);
+                    allow_err!(crate::p2p::udp_mapping::observe(&socket_cloned, addr, &up_cloned, stop_udp_rx).await);
                 };
                 tokio::spawn(func);
                 (Some(socket), Some(udp_port))
             } else {
+                #[cfg(target_os = "ios")]
+                crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "cannot bind rendezvous socket");
                 (None, None)
             }
         } else {
+            #[cfg(target_os = "ios")]
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "disabled or relay policy");
             (None, None)
         };
         // Under force-relay a direct IPv6 path is not allowed, so don't bind the v6 socket;
@@ -540,6 +752,12 @@ impl Client {
             None
         };
         let has_webrtc_offerer = webrtc_offerer.is_some();
+        #[cfg(target_os = "ios")]
+        let initial_observation = webrtc_offerer.as_ref().and_then(|stream| {
+            let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "initial")?;
+            observation.observe(stream);
+            Some(observation)
+        });
         let fut = Self::_start_inner(
             peer.to_owned(),
             key.to_owned(),
@@ -553,7 +771,18 @@ impl Client {
             rendezvous_server.clone(),
             servers.clone(),
             contained,
+            direct_permission,
         );
+        #[cfg(target_os = "ios")]
+        let fut = async move {
+            let mut observation = initial_observation;
+            let result = fut.await;
+            if let Some(observation) = observation.as_mut() {
+                let direct_webrtc = matches!(&result, Ok(((Stream::WebRTC(_), true, ..), ..)));
+                observation.finish_initial(direct_webrtc, result.is_err());
+            }
+            result
+        };
         // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
         // punch is off — it would reach `connect()` with nothing to try and just open a second
         // relay.
@@ -581,22 +810,60 @@ impl Client {
             rendezvous_server,
             servers,
             contained,
+            direct_permission,
         )
         .boxed();
-        if has_webrtc_offerer {
-            return race_transports_prefer_webrtc(
-                preferred_fut,
-                vec![fallback_fut],
-                Self::relay_fallback_delay_ms(),
-                |result| result.0 .1,
-            )
-            .await;
+        race_transports_prefer_webrtc(
+            preferred_fut,
+            vec![fallback_fut],
+            Self::relay_fallback_delay_ms(),
+            |result| result.0 .1,
+        )
+        .await
+    }
+
+    async fn probe_lan(
+        peer: &str,
+        key: &str,
+        token: &str,
+        server: &str,
+        iface: crate::p2p::Interface,
+    ) -> ResultType<PeerConnection> {
+        let address = crate::lan::probe_peer(peer, iface).await?;
+        let mut socket = crate::p2p::connect_rendezvous(server, None, 1_000).await?;
+        if !token.is_empty() {
+            secure_tcp(&mut socket, key).await?;
         }
-        let connect_futures = vec![preferred_fut, fallback_fut];
-        match select_ok(connect_futures).await {
-            Ok(conn) => Ok((conn.0 .0, conn.0 .1, conn.0 .2)),
-            Err(e) => Err(e),
+        let mut request = RendezvousMessage::new();
+        request.set_punch_hole_request(PunchHoleRequest {
+            id: peer.to_owned(),
+            licence_key: key.to_owned(),
+            token: token.to_owned(),
+            version: crate::VERSION.to_owned(),
+            lan_probe: true,
+            ..Default::default()
+        });
+        socket.send(&request).await?;
+        let Some(response) = crate::get_next_nonkeyexchange_msg(&mut socket, Some(1_000)).await else {
+            bail!("LAN rendezvous timed out");
+        };
+        let Some(rendezvous_message::Union::PunchHoleResponse(reply)) = response.union else {
+            bail!("LAN rendezvous declined");
+        };
+        if !reply.lan_probe || !reply.is_local() || reply.pk.is_empty() {
+            bail!("LAN rendezvous declined");
         }
+        let listener = AddrMangle::decode(&reply.socket_addr);
+        if !listener.ip().is_unspecified() || listener.port() == 0 {
+            bail!("Invalid LAN listener");
+        }
+        let mut stream = iface.connect(SocketAddr::from((address, listener.port())), 0, 1_000).await?;
+        let pk = Self::secure_connection(peer, reply.pk.into(), key, &mut stream).await?;
+        if pk.is_none() || !stream.is_secured() {
+            bail!("LAN peer identity could not be verified");
+        }
+        log::info!("Secure LAN direct connection to {address}:{}", listener.port());
+        Ok(((stream, true, pk, None, "TCP"), (0, server.to_owned()), false))
     }
 
     fn is_expected_webrtc_ice_candidate(ice: &IceCandidate, session_key: &str) -> bool {
@@ -633,7 +900,7 @@ impl Client {
     /// whose race timeout is tuned for a raw TCP SYN. Long enough for candidate trickle + ICE
     /// checks + DTLS on high-latency links; short enough that UDP-blocked networks settle on
     /// relay without a noticeable wait. The same role RFC 8305 calls a connection attempt delay.
-    const RELAY_FALLBACK_DELAY_MS: u64 = 2500;
+    const RELAY_FALLBACK_DELAY_MS: u64 = if cfg!(target_os = "ios") { 2000 } else { 2500 };
 
     /// The delay as the user configured it, falling back to `RELAY_FALLBACK_DELAY_MS`. The
     /// settings field holds seconds, which is what a user reasons about; everything here is
@@ -807,6 +1074,7 @@ impl Client {
         mut rendezvous_server: String,
         servers: Vec<String>,
         contained: bool,
+        direct_permission: &DirectRetryPermission,
     ) -> ResultType<(
         (
             Stream,
@@ -823,7 +1091,7 @@ impl Client {
         // into_inner() once the stream is adopted into a connection attempt.
         let mut webrtc_offerer = webrtc_offerer.map(OffererGuard::new);
         let mut start = Instant::now();
-        let mut socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await;
+        let mut socket = crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await;
         debug_assert!(!servers.contains(&rendezvous_server));
         let rtt = start.elapsed();
         log::debug!("TCP connection establishment time used: {:?}", rtt);
@@ -865,23 +1133,27 @@ impl Client {
         // wait rather than replacing it: the test runs beside both.
         let udp_nat_wait_from = Instant::now();
         let mut exchanged = false;
-        if carries_offer {
+        let mut handshake_grant = false;
+        if carries_offer || (udp.0.is_some() && !key.is_empty()) {
             // An offer puts both sides' ICE candidates, every interface address of both
             // machines, on this socket, so it goes out only once the server's key exchange has
             // encrypted it. When the server does not complete one, an hbbs from before the
             // exchange, the offer is dropped and this becomes a punch without WebRTC, on a fresh
             // socket since the failed exchange may have consumed a message on this one. Degrade
             // to no WebRTC, never to WebRTC signalling in the clear.
-            match secure_tcp_required(&mut socket, &key).await {
-                Ok(()) => exchanged = true,
+            match secure_tcp_with_direct_permission(&mut socket, &key, true).await {
+                Ok(signed_grant) => {
+                    exchanged = true;
+                    handshake_grant = signed_grant;
+                }
                 Err(err) => {
                     log::warn!(
-                        "WebRTC signalling to {} cannot be encrypted, punching without WebRTC: {}",
+                        "Direct signalling to {} cannot be encrypted, continuing without WebRTC: {}",
                         rendezvous_server,
                         err
                     );
                     webrtc_offerer = None;
-                    socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await?;
+                    socket = crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await?;
                     my_addr = socket.local_addr();
                 }
             }
@@ -924,12 +1196,27 @@ impl Client {
             .map(|(socket, addr)| (Some(socket), Some(addr)))
             .unwrap_or((None, None));
         let udp_nat_port = udp.1.map(|x| *x.lock().unwrap()).unwrap_or(0);
+        #[cfg(target_os = "ios")]
+        if udp.0.is_some() {
+            let stage = if udp_nat_port != 0 { "mapping advertised" } else { "no public mapping" };
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", stage);
+        }
         let webrtc_sdp_offer = webrtc_offerer
             .as_ref()
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
         let allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let mut family_retry_available = allow_tcp_punch
+            && !interface.is_force_relay()
+            && !Config::is_proxy()
+            && !use_ws()
+            && udp_nat_port == 0
+            && ipv6.1.is_none();
+        let authenticated_direct_offer = exchanged
+            && socket.is_secured()
+            && !interface.is_policy_relay()
+            && WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_offer);
         // Every direct transport this round carries, not one of them: a round can carry several
         // at once (a NAT port and an offer and a v6 address), and since the TCP punch became a
         // switch it can carry none — a single name had to misreport both. `relay` is not a punch,
@@ -995,11 +1282,38 @@ impl Client {
                 let timeout_ms = remaining
                     .as_millis()
                     .clamp(1, u64::MAX as u128) as u64;
-                let Some(msg_in) =
+                let Some(mut msg_in) =
                     crate::get_next_nonkeyexchange_msg(&mut socket, Some(timeout_ms)).await
                 else {
                     break;
                 };
+                // The signed key announcement alone can be replayed. A reply decrypted
+                // with our fresh session keys proves this rendezvous owns the signed key.
+                if authenticated_direct_offer
+                    && (msg_in.has_punch_hole_response() || msg_in.has_relay_response())
+                {
+                    crate::finish_signed_observer_exchange(&mut socket, handshake_grant);
+                    direct_permission.record_exchange(&rendezvous_server, handshake_grant);
+                }
+                if let Some(ipv4) =
+                    mismatched_public_tcp_family(family_retry_available, my_addr, &msg_in)
+                {
+                    family_retry_available = false;
+                    let family = if ipv4 { "IPv4" } else { "IPv6" };
+                    match retry_tcp_punch_family(&rendezvous_server, &key, ipv4, &msg_out).await {
+                        Ok((matching, answer)) => {
+                            log::info!(
+                                "Retried classic TCP punch via authenticated {family} rendezvous"
+                            );
+                            my_addr = matching.local_addr();
+                            socket = matching;
+                            msg_in = answer;
+                        }
+                        Err(err) => {
+                            log::debug!("Classic TCP {family} rendezvous retry unavailable: {err}")
+                        }
+                    }
+                }
                 match msg_in.union {
                     Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
                         if ph.socket_addr.is_empty() {
@@ -1029,20 +1343,31 @@ impl Client {
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
                             feedback = ph.feedback;
                             webrtc_sdp_answer = ph.webrtc_sdp_answer;
-                            let s = udp.0.take();
-                            if udp_nat_port > 0 && ph.is_udp && s.is_some() {
-                                if let Some(s) = s {
-                                    allow_err!(s.connect(peer_addr).await);
-                                    udp.0 = Some(s);
+                            if let Some(socket) = udp.0.take() {
+                                if udp_nat_port > 0 && ph.is_udp {
+                                    match socket.connect(peer_addr).await {
+                                        Ok(()) => udp.0 = Some(socket),
+                                        Err(err) => {
+                                            #[cfg(target_os = "ios")]
+                                            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "peer socket connect failed");
+                                            log::debug!("UDP peer route unavailable: {err}");
+                                        }
+                                    }
+                                } else if udp_nat_port > 0 {
+                                    #[cfg(target_os = "ios")]
+                                    crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "no UDP endpoint in peer answer");
                                 }
                             }
-                            let s = ipv6.0.take();
-                            if !ph.socket_addr_v6.is_empty() && s.is_some() {
-                                let addr = AddrMangle::decode(&ph.socket_addr_v6);
-                                if addr.port() > 0 {
-                                    if let Some(s) = s {
-                                        allow_err!(s.connect(addr).await);
-                                        ipv6.0 = Some(s);
+                            if let Some(socket) = ipv6.0.take() {
+                                if !ph.socket_addr_v6.is_empty() {
+                                    let addr = AddrMangle::decode(&ph.socket_addr_v6);
+                                    if addr.port() > 0 {
+                                        match socket.connect(addr).await {
+                                            Ok(()) => ipv6.0 = Some(socket),
+                                            Err(err) => {
+                                                log::debug!("IPv6 UDP peer route unavailable: {err}")
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1051,6 +1376,13 @@ impl Client {
                         }
                     }
                     Some(rendezvous_message::Union::RelayResponse(rr)) => {
+                        #[cfg(target_os = "ios")]
+                        if udp_nat_port > 0 {
+                            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "rendezvous returned relay instead of UDP");
+                        }
+                        if !rr.refuse_reason.is_empty() {
+                            bail!(rr.refuse_reason);
+                        }
                         log::info!(
                             "relay requested from peer, time used: {:?}, relay_server: {}",
                             start.elapsed(),
@@ -1088,6 +1420,10 @@ impl Client {
                                         log::warn!("failed to set WebRTC relay answer: {}", err);
                                         false
                                     } else {
+                                        direct_permission.record_answer(
+                                            &rendezvous_server, authenticated_direct_offer,
+                                            &rr.webrtc_sdp_answer,
+                                        );
                                         for candidate in pending_webrtc_ice.drain(..) {
                                             if let Err(err) =
                                                 webrtc.add_remote_ice_candidate(&candidate).await
@@ -1309,6 +1645,9 @@ impl Client {
                         log::warn!("failed to set WebRTC answer: {}", err);
                         false
                     } else {
+                        direct_permission.record_answer(
+                            &rendezvous_server, authenticated_direct_offer, &webrtc_sdp_answer,
+                        );
                         for candidate in pending_webrtc_ice.drain(..) {
                             if let Err(err) = webrtc.add_remote_ice_candidate(&candidate).await {
                                 log::warn!("failed to add buffered WebRTC ICE candidate: {}", err);
@@ -1467,7 +1806,7 @@ impl Client {
         // always direct; WebRTC is direct only when ICE nominated a non-TURN pair.
         let mut direct_futures = Vec::new();
         if allow_tcp_punch {
-            let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
+            let fut = crate::p2p::connect_punch(peer, local_addr, connect_timeout);
             direct_futures.push(
                 async move {
                     let conn = fut.await?;
@@ -5470,129 +5809,71 @@ pub mod peer_online {
     }
 }
 
-async fn test_udp_uat(
-    udp_socket: Arc<UdpSocket>,
-    server_addr: SocketAddr,
-    udp_port: Arc<Mutex<u16>>,
-    mut stop_udp_rx: oneshot::Receiver<()>,
-) -> ResultType<()> {
-    // The punch port must come only from the rendezvous server's TestNatResponse, which
-    // observes THIS socket's public mapping. A STUN probe binds a different socket and reports
-    // a different NAT mapping, so racing it here could advertise a port the peer can never
-    // reach (and, on symmetric NAT, silently poison the whole UDP punch).
-    let start = Instant::now();
-    let mut msg_out = RendezvousMessage::new();
-    msg_out.set_test_nat_request(TestNatRequest {
-        ..Default::default()
-    });
-    // Adaptive retry strategy that works within TCP RTT constraints
-    // Start with aggressive sending, then back off
-    let mut retry_interval = Duration::from_millis(20); // Start fast
-    const MAX_INTERVAL: Duration = Duration::from_millis(200);
-    let mut packets_sent = 0;
-
-    // Send initial burst to improve reliability
-    let data = msg_out.write_to_bytes()?;
-    for _ in 0..2 {
-        if let Err(e) = udp_socket.send_to(&data, server_addr).await {
-            log::warn!("Failed to send initial UDP NAT test packet: {}", e);
-        } else {
-            packets_sent += 1;
-        }
-    }
-    let mut last_send_time = Instant::now();
-    let mut buf = [0u8; 1500];
-
-    loop {
-        tokio::select! {
-            _ = &mut stop_udp_rx => {
-                log::debug!("UDP NAT test received stop signal after {} packets", packets_sent);
-                break;
-            }
-            _ = hbb_common::sleep(retry_interval.as_secs_f32()) => {
-                // Adaptive retry: send fewer packets as time goes on
-                let elapsed = last_send_time.elapsed();
-
-                if elapsed >= retry_interval {
-                    // Send single packet (not double) to reduce network load
-                    if let Err(e) = udp_socket.send_to(&data, server_addr).await {
-                        log::warn!("Failed to send UDP NAT test retry packet: {}", e);
-                    } else {
-                        packets_sent += 1;
-                    }
-
-                    // Exponentially increase interval to reduce network pressure
-                    retry_interval = std::cmp::min(
-                        Duration::from_millis((retry_interval.as_millis() as f64 * 1.5) as u64),
-                        MAX_INTERVAL
-                    );
-                    last_send_time = Instant::now();
-                }
-            }
-            res = udp_socket.recv(&mut buf[..]) => {
-                match res {
-                    Ok(n) => {
-                        match RendezvousMessage::parse_from_bytes(&buf[0..n]) {
-                            Ok(msg_in) => {
-                                if let Some(rendezvous_message::Union::TestNatResponse(response)) = msg_in.union {
-                                    *udp_port.lock().unwrap() = response.port as u16;
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to parse UDP NAT test response: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Same ICMP-driven errors as punch_udp sees. Without a pause this arm
-                        // re-arms recv immediately and spins the loop at CPU speed.
-                        if let Some(n) = UDP_UAT_ERR_LOG.due() {
-                            log::warn!("UDP NAT test socket error x{n}, last: {e}");
-                        }
-                        hbb_common::sleep(0.01).await;
-                    }
-                }
-            }
-        }
-    }
-
-    let final_port = *udp_port.lock().unwrap();
-    log::debug!(
-        "UDP NAT test to {:?} finished: time={:?}, port={}, packets_sent={}, success={}",
-        server_addr,
-        start.elapsed(),
-        final_port,
-        packets_sent,
-        final_port > 0
-    );
-    Ok(())
-}
-
 #[inline]
 async fn udp_nat_connect(
     socket: Arc<UdpSocket>,
     typ: &'static str,
     ms_timeout: u64,
 ) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    #[cfg(target_os = "ios")]
+    let record = |stage| {
+        if typ == "UDP" {
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", stage);
+        }
+    };
+    #[cfg(target_os = "ios")]
+    record("peer probing started");
     crate::punch_udp(socket.clone(), false)
         .await
         .map_err(|err| {
+            #[cfg(target_os = "ios")]
+            record("peer probe not acknowledged");
             log::debug!("{err}");
             anyhow!(err)
         })?;
+    #[cfg(target_os = "ios")]
+    record("peer probe acknowledged; entering KCP handshake");
     let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout))
         .await
         .map_err(|err| {
+            #[cfg(target_os = "ios")]
+            record("KCP handshake failed");
             log::debug!("Failed to connect KCP stream: {}", err);
             anyhow!(err)
         })?;
+    #[cfg(target_os = "ios")]
+    record("KCP handshake completed");
     Ok((res.1, Some(res.0), typ))
 }
 
 #[cfg(test)]
 mod webrtc_race_tests {
-    use super::race_transports_prefer_webrtc;
+    #[test]
+    fn live_direct_permission_requires_same_round_server_and_authenticated_direct_answer() {
+        use super::DirectRetryPermission;
+        let endpoint = |policy| {
+            format!("webrtc://{}", crate::encode64(format!(
+                r#"{{"type":"answer","sdp":"v=0","ice_policy":"{policy}"}}"#
+            )))
+        };
+        let permission = DirectRetryPermission::default();
+        assert_eq!(permission.decision("hbbs-a"), None);
+        permission.record_exchange("hbbs-a", false);
+        permission.record_answer("hbbs-a", false, &endpoint("all"));
+        permission.record_answer("hbbs-a", true, "");
+        permission.record_answer("hbbs-a", true, &endpoint("relay"));
+        assert_eq!(permission.decision("hbbs-a"), Some(false));
+        permission.record_answer("hbbs-a", true, &endpoint("all"));
+        assert_eq!(permission.decision("hbbs-a"), Some(true));
+        assert_eq!(permission.decision("hbbs-b"), None);
+        let next_round = DirectRetryPermission::default();
+        assert_eq!(next_round.decision("hbbs-a"), None);
+        next_round.record_exchange("hbbs-b", true);
+        assert_eq!(next_round.decision("hbbs-b"), Some(true));
+        assert_eq!(next_round.decision("hbbs-a"), None);
+    }
+
+    use super::{prefer_lan_connection, race_transports_prefer_webrtc};
     use hbb_common::{
         anyhow::anyhow,
         futures::future::{BoxFuture, FutureExt},
@@ -5618,6 +5899,79 @@ mod webrtc_race_tests {
     }
 
     const NOT_P2P: fn(&&'static str) -> bool = |_| false;
+
+    #[tokio::test]
+    async fn ready_public_connection_is_retained_for_comparison_when_lan_arrives() {
+        let got = prefer_lan_connection(
+            ok_after(60, "LAN"),
+            ok_after(0, "public direct"),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, ("LAN", Some("public direct")));
+    }
+
+    #[tokio::test]
+    async fn ready_lan_only_takes_an_alternate_that_is_already_open() {
+        let ready = || std::future::ready(Ok("LAN"));
+        let both = prefer_lan_connection(ready(), std::future::ready(Ok("other")), Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(both, ("LAN", Some("other")));
+        let only_lan = tokio::time::timeout(
+            Duration::from_millis(100),
+            prefer_lan_connection(ready(), std::future::pending(), Duration::from_secs(30)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(only_lan, ("LAN", None));
+    }
+
+    #[tokio::test]
+    async fn ready_public_connection_is_used_when_lan_quickly_fails() {
+        let got = tokio::time::timeout(
+            Duration::from_secs(1),
+            prefer_lan_connection(
+                err_after(20, "peer not on this LAN"),
+                ok_after(0, "public direct"),
+                Duration::from_secs(30),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(got, ("public direct", None));
+    }
+
+    #[tokio::test]
+    async fn slow_lan_does_not_block_a_ready_fallback_past_its_window() {
+        let got = tokio::time::timeout(
+            Duration::from_secs(1),
+            prefer_lan_connection(
+                std::future::pending(),
+                ok_after(0, "relay"),
+                Duration::from_millis(80),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(got, ("relay", None));
+    }
+
+    #[tokio::test]
+    async fn failed_fallback_does_not_cancel_lan_at_its_preference_deadline() {
+        let got = prefer_lan_connection(
+            ok_after(40, "LAN"),
+            err_after(0, "rendezvous unavailable"),
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
+        assert_eq!(got, ("LAN", None));
+    }
 
     // A direct result must win even when it lands first — the LAN ordering, where ICE beats the
     // relay's TCP connect. Parking it as if it were a relay commits the relay on arrival.
@@ -5798,6 +6152,10 @@ mod webrtc_race_tests {
 #[cfg(test)]
 #[path = "client/tests/trusted_devices_tests.rs"]
 mod trusted_devices_tests;
+
+#[cfg(test)]
+#[path = "client/tests/tcp_family_tests.rs"]
+mod tcp_family_tests;
 
 #[cfg(test)]
 mod kx_tests {

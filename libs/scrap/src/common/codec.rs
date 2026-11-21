@@ -289,6 +289,15 @@ impl Encoder {
                 auto_codec = CodecFormat::VP8
             }
         }
+        if preference == PreferCodec::Auto && !decodings.is_empty()
+            && decodings.iter().all(|(_, caps)| caps.prefer_chroma == Chroma::I444.into())
+        {
+            if av1_useable && av1_test && decodings.iter().all(|(_, caps)| caps.i444.av1) {
+                auto_codec = CodecFormat::AV1;
+            } else if decodings.iter().all(|(_, caps)| caps.ability_vp9 > 0 && caps.i444.vp9) {
+                auto_codec = CodecFormat::VP9;
+            }
+        }
 
         *format = match preference {
             PreferCodec::VP8 => CodecFormat::VP8,

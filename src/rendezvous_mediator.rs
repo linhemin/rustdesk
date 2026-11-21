@@ -20,7 +20,7 @@ use hbb_common::{
     protobuf::Message as _,
     rendezvous_proto::*,
     sleep,
-    socket_client::{self, connect_tcp, is_ipv4, new_direct_udp_for, new_udp_for},
+    socket_client::{self, connect_tcp, is_ipv4, new_udp_for},
     tokio::{
         self, select,
         sync::{mpsc, Mutex, Notify},
@@ -46,6 +46,7 @@ fn connection_meta(
     ConnectionMeta {
         control_permissions,
         controlled_context,
+        direct_retry_permitted: false,
     }
 }
 
@@ -722,6 +723,7 @@ impl RendezvousMediator {
             server,
             rr.secure,
             false,
+            false,
             Default::default(),
             String::new(),
             meta,
@@ -737,9 +739,10 @@ impl RendezvousMediator {
         server: ServerPtr,
         secure: bool,
         initiate: bool,
+        force_relay: bool,
         socket_addr_v6: bytes::Bytes,
         webrtc_sdp_answer: String,
-        meta: ConnectionMeta,
+        mut meta: ConnectionMeta,
     ) -> ResultType<()> {
         let peer_addr = AddrMangle::decode(&socket_addr);
         log::info!(
@@ -757,15 +760,52 @@ impl RendezvousMediator {
         // socket since the failed exchange may have consumed a message on this one, and the
         // controller falls back to its other transports.
         let mut webrtc_sdp_answer = webrtc_sdp_answer;
-        if !webrtc_sdp_answer.is_empty() {
+        let eligible = secure && !force_relay && !use_ws() && crate::live_direct::enabled();
+        let carries_answer = !webrtc_sdp_answer.is_empty();
+        let mut signed_grant = false;
+        if carries_answer || eligible {
             let key = crate::get_key(true).await;
-            if let Err(err) = crate::secure_tcp_required(&mut socket, &key).await {
-                log::warn!("relaying without the WebRTC answer, it cannot be encrypted: {err}");
-                webrtc_sdp_answer = String::new();
-                socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            let exchange = crate::secure_tcp_with_direct_permission(&mut socket, &key, true);
+            // Pre-KX servers wait for RelayResponse first. Don't delay an ordinary relay
+            // for their full handshake timeout when we only wanted the optional policy.
+            let exchange = if carries_answer {
+                exchange.await
+            } else {
+                hbb_common::timeout(1_250, exchange).await.map_err(anyhow::Error::from)
+                    .and_then(|result| result)
+            };
+            let verified = match exchange {
+                Ok(true) if eligible => {
+                    match crate::confirm_signed_direct_permission(&mut socket).await {
+                        Ok(true) => Ok(true),
+                        result if carries_answer => {
+                            // Keep the encrypted answer path when the optional observer
+                            // confirmation is unavailable.
+                            log::trace!("Rendezvous observer confirmation: {result:?}");
+                            Ok(false)
+                        }
+                        Ok(false) => Err(anyhow::anyhow!("Missing encrypted policy confirmation")),
+                        Err(err) => Err(err),
+                    }
+                }
+                Ok(_) => Ok(false),
+                Err(err) => Err(err),
+            };
+            match verified {
+                Ok(allowed) => signed_grant = allowed && !carries_answer,
+                Err(err) => {
+                    log::debug!("Rendezvous key exchange unavailable for relay response: {err}");
+                    webrtc_sdp_answer.clear();
+                    socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+                }
             }
         }
 
+        // A standalone RequestRelay needs an affirmative signed grant. On older hbbs
+        // we can only trust the specific pairing for which we sent a direct ICE answer.
+        meta.direct_retry_permitted = eligible && socket.is_secured()
+            && (signed_grant || (meta.direct_retry_permitted
+                && WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_answer)));
         let mut msg_out = Message::new();
         let mut rr = RelayResponse {
             socket_addr: socket_addr.into(),
@@ -794,7 +834,63 @@ impl RendezvousMediator {
         Ok(())
     }
 
+    fn lan_probe_interface() -> Option<crate::p2p::Interface> {
+        if config::is_disable_tcp_listen()
+            || !config::option2bool(
+                "enable-lan-discovery",
+                &Config::get_option("enable-lan-discovery"),
+            )
+        {
+            return None;
+        }
+        crate::p2p::Interface::configured()
+    }
+
+    async fn handle_lan_probe(&self, request: FetchLocalAddr, server: ServerPtr) -> ResultType<()> {
+        let Some(iface) = Self::lan_probe_interface() else {
+            return Ok(());
+        };
+        let Some(slot) = TCP_PUNCHES.take() else {
+            return Ok(());
+        };
+        let listener = hbb_common::tcp::new_listener(SocketAddr::from((iface.address, 0)), false).await?;
+        // The caller learns our interface address from its LAN discovery response.
+        let port = listener.local_addr()?.port();
+        let mut msg = Message::new();
+        let meta = connection_meta(request.control_permissions.into_option(), request.controlled_context.into_option());
+        msg.set_local_addr(LocalAddr {
+            id: Config::get_id(),
+            socket_addr: request.socket_addr,
+            local_addr: AddrMangle::encode(SocketAddr::from(([0, 0, 0, 0], port))).into(),
+            version: crate::VERSION.to_owned(),
+            lan_probe: true,
+            ..Default::default()
+        });
+        let mut signal = crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
+        signal.send(&msg).await?;
+        drop(signal);
+
+        let (stream, source) = hbb_common::timeout(2_000, async {
+            loop {
+                let (stream, source) = listener.accept().await?;
+                if let std::net::IpAddr::V4(ip) = source.ip() {
+                    if iface.on_link(ip) {
+                        return Ok::<_, std::io::Error>((stream, source));
+                    }
+                }
+            }
+        }).await??;
+        drop(slot);
+        let local = stream.local_addr()?;
+        crate::server::create_tcp_connection(
+            server, hbb_common::Stream::from(stream, local), source, true, meta
+        ).await
+    }
+
     async fn handle_intranet(&self, fla: FetchLocalAddr, server: ServerPtr) -> ResultType<()> {
+        if fla.lan_probe {
+            return self.handle_lan_probe(fla, server).await;
+        }
         let addr = AddrMangle::decode(&fla.socket_addr);
         let last = *LAST_MSG.lock().await;
         *LAST_MSG.lock().await = (addr, Instant::now());
@@ -845,6 +941,7 @@ impl RendezvousMediator {
             server,
             true,
             true,
+            relay,
             socket_addr_v6,
             String::new(),
             meta,
@@ -873,7 +970,8 @@ impl RendezvousMediator {
             );
             bail!("no place among the punches in flight");
         };
-        let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+        // Legacy controllers get the address of this socket as their LAN candidate.
+        let mut socket = crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
         let local_addr = socket.local_addr();
         // we saw invalid local_addr while using proxy, local_addr.ip() == "::1"
         let local_addr: SocketAddr =
@@ -1161,7 +1259,18 @@ impl RendezvousMediator {
         // connection this branch has already called relay-only. Do not gate the answerer on
         // nat_type to make the two agree.
         if relay_v4 {
+            if ph.udp_port > 0 {
+                hbb_common::throttled_log!(
+                    PUNCH_LOG_INTERVAL, info,
+                    "Ordinary UDP skipped (relay policy: {relay}, controller symmetric NAT: {}, controlled symmetric NAT: {})",
+                    ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC),
+                    Config::get_nat_type() == NatType::SYMMETRIC as i32
+                );
+            }
             let uuid = Uuid::new_v4().to_string();
+            let mut meta = meta;
+            meta.direct_retry_permitted = !relay
+                && WebRTCStream::endpoint_declares_all_ice(&ph.webrtc_sdp_offer);
             return self
                 .create_relay(
                     ph.socket_addr.into(),
@@ -1170,6 +1279,7 @@ impl RendezvousMediator {
                     server,
                     true,
                     true,
+                    relay,
                     socket_addr_v6.clone(),
                     webrtc_sdp_answer.clone(),
                     meta,
@@ -1186,6 +1296,7 @@ impl RendezvousMediator {
             version: crate::VERSION.to_owned(),
             socket_addr_v6,
             webrtc_sdp_answer,
+            udp_reply_token: ph.udp_reply_token,
             ..Default::default()
         };
         if ph.udp_port > 0 {
@@ -1210,13 +1321,30 @@ impl RendezvousMediator {
         }
         log::debug!("Punch tcp hole to {:?}", peer_addr);
         let mut socket = {
-            let socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
+            let mut socket =
+                crate::p2p::connect_rendezvous(&self.host, None, CONNECT_TIMEOUT).await?;
+            if slot_tcp.is_some() && socket.local_addr().is_ipv4() != peer_addr.is_ipv4() {
+                if let Ok(matching) = crate::p2p::authenticated_family_rendezvous(
+                    &self.host,
+                    peer_addr.is_ipv4(),
+                    &crate::get_key(true).await,
+                    500,
+                )
+                .await
+                {
+                    log::debug!("Matched the rendezvous TCP address family to the punch request");
+                    socket = matching;
+                }
+                // If this host cannot reach hbbs in the requested family, send the original
+                // reply anyway. Its observed source tells a dual-stack controller which family
+                // to use. This function still sends only one PunchHoleSent.
+            }
             let local_addr = socket.local_addr();
             // key important here for punch hole to tell my gateway incoming peer is safe.
             // Awaited rather than spawned so the mapping exists before `PunchHoleSent` goes out;
             // `local_addr` itself is shared, not exclusive - every socket here binds it with the
             // reuse flags `new_socket` sets.
-            allow_err!(socket_client::connect_tcp_local(peer_addr, Some(local_addr), 30).await);
+            allow_err!(crate::p2p::connect_punch(peer_addr, local_addr, 30).await);
             socket
         };
         let mut msg_out = Message::new();
@@ -1251,7 +1379,7 @@ impl RendezvousMediator {
     ) -> ResultType<()> {
         let mut msg_out = Message::new();
         msg_out.set_punch_hole_sent(msg_punch);
-        let (socket, addr) = new_direct_udp_for(&self.host).await?;
+        let (socket, addr) = crate::p2p::rendezvous_punch_socket(&self.host, true).await?;
         let data = msg_out.write_to_bytes()?;
         socket.send_to(&data, addr).await?;
         // The reply is out, and with it the answer and the v6 address: declined is the listen
@@ -1358,6 +1486,8 @@ impl RendezvousMediator {
         msg_out.set_register_peer(RegisterPeer {
             id,
             serial,
+            lan_probe: Self::lan_probe_interface().is_some(),
+            udp_punch_reply: true,
             ..Default::default()
         });
         socket.send(&msg_out).await?;
@@ -1533,13 +1663,22 @@ async fn udp_nat_listen(
     let socket_cloned = socket.clone();
     let func = async {
         socket.connect(peer_addr).await?;
+        if peer_addr.is_ipv4() {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP peer probing started");
+        }
         let init_packet = crate::punch_udp(socket.clone(), true).await?;
+        if peer_addr.is_ipv4() {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP received KCP SYN");
+        }
         let stream = crate::kcp_stream::KcpStream::accept(
             socket,
             Duration::from_millis(CONNECT_TIMEOUT as _),
             init_packet,
         )
         .await?;
+        if peer_addr.is_ipv4() {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP KCP handshake completed");
+        }
         // The KCP session is up: from here it is a connection like any other and the connection
         // layer's own limits apply to it, so the place goes back for the next punch.
         drop(slot);
@@ -1617,7 +1756,7 @@ async fn punch_tcp_until_connected(
     // willing to take a connection through it.
     let until = Instant::now() + Duration::from_millis(CONNECT_TIMEOUT);
     let punch = punch_until(until, peer_addr, |ms| {
-        socket_client::connect_tcp_local(peer_addr, Some(local_addr), ms)
+        crate::p2p::connect_punch(peer_addr, local_addr, ms)
     });
     let Some(listener) = listener else {
         if let Some(stream) = punch.await {

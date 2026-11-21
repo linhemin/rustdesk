@@ -265,6 +265,8 @@ struct UserData {
     quality: Option<(i64, Quality)>, // (time, quality)
     delay: UserDelay,
     record: bool,
+    delivery: VecDeque<(Instant, u32, u32)>, // video kbps and receiver queue pressure
+    probe_blocked_until: Option<Instant>,
     joined_at: Option<Instant>, // set by on_connection_open; the start-up guard's clock
 }
 
@@ -460,6 +462,68 @@ impl VideoQoS {
         }
     }
 
+    pub fn user_video_delivery(&mut self, id: i32, kbps: u32, fps: u32, queued: u32) {
+        let now = self.now();
+        let target = self.bitrate();
+        let floor_adaptation = self.displays.len() == 1 && self.in_vbr_state()
+            && self.latest_quality() == Quality::Best && target > 0;
+        let min_ratio = self.min_ratio();
+        if let Some(user) = self.users.get_mut(&id) {
+            if !(6..=1000).contains(&fps) || !(1..=1_000_000).contains(&kbps) || queued > 100 {
+                user.delivery.clear();
+                return;
+            }
+            if user.delivery.back().is_some_and(|(stamp, _, _)| now.saturating_duration_since(*stamp) > Duration::from_secs(5)) {
+                user.delivery.clear();
+            }
+            if user.delivery.len() == 3 { user.delivery.pop_front(); }
+            user.delivery.push_back((now, kbps, queued));
+            if floor_adaptation && user.delivery.len() == 3 {
+                let (_, _, oldest_queue) = user.delivery[0];
+                let (_, _, previous_queue) = user.delivery[1];
+                let delivery_floor = user.delivery.iter().map(|(_, kbps, _)| *kbps).min().unwrap_or(target);
+                // A low delivered rate alone is common on a still desktop. Act only
+                // when active samples also show that the receiver is falling behind.
+                if previous_queue >= oldest_queue && queued >= previous_queue.saturating_add(3)
+                    && queued >= 6 && kbps < target.saturating_mul(4) / 5
+                    && user.delay.avg_delay() >= 24
+                {
+                    let factor = (delivery_floor as f32 * 1.10 / target as f32).clamp(0.55, 0.85);
+                    self.ratio = (self.ratio * factor).max(min_ratio);
+                    let until = now + Duration::from_secs(6);
+                    user.probe_blocked_until = Some(user.probe_blocked_until.map_or(until, |old| old.max(until)));
+                    user.delivery.clear();
+                }
+            }
+        }
+    }
+
+    // The lower delivered rate across three active samples is evidence for a bounded
+    // trial increase, not an estimate of the link capacity. A static screen contributes
+    // no evidence. Every viewer sharing this encoder must be caught up.
+    fn delivery_growth_budget(&self, target_kbps: u32) -> (u32, bool) {
+        let now = self.now();
+        if target_kbps == 0 || self.users.is_empty() || self.displays.len() != 1 { return (150, false); }
+        let mut floor = u32::MAX;
+        let mut complete = true;
+        for viewer in self.users.values() {
+            if viewer.delivery.len() != 3 || viewer.delivery.iter().any(|(stamp, _, _)|
+                now.saturating_duration_since(*stamp) > Duration::from_secs(7)) {
+                complete = false;
+                continue;
+            }
+            if viewer.delivery.iter().filter(|(_, _, queued)| *queued >= 25).count() >= 2 {
+                return (0, false);
+            }
+            if viewer.probe_blocked_until.is_some_and(|deadline| now < deadline) {
+                complete = false;
+            }
+            floor = floor.min(viewer.delivery.iter().map(|(_, kbps, _)| *kbps).min().unwrap_or(0));
+        }
+        if !complete || floor < target_kbps.saturating_mul(8) / 10 { return (150, false); }
+        ((floor / 10).clamp(150, 1200), true)
+    }
+
     pub fn user_network_delay(&mut self, id: i32, delay: u32) {
         let target_ratio = self.latest_quality().ratio();
         // Fewer frames only save bytes with encoders that size frames for a fixed rate;
@@ -480,6 +544,8 @@ impl VideoQoS {
 
         let mut adjust_ratio = false;
         let mut reduce_bitrate = false;
+        let now = self.now();
+        let enhanced_best = self.abr_config && self.latest_quality() == Quality::Best;
         if let Some(user) = self.users.get_mut(&id) {
             let delay = delay.max(10);
             // The reply closes the outstanding probe, braked or not.
@@ -488,6 +554,16 @@ impl VideoQoS {
             let old_avg_delay = user.delay.avg_delay();
             if !braked {
                 user.delay.rtt_calculator.update(delay);
+            }
+            // A trial above the normal ceiling must not wait for the ordinary
+            // congestion brake. Queuing is measurable before frames start dropping.
+            let queue_ms = delay.saturating_sub(user.delay.rtt_calculator.get_rtt().unwrap_or(delay));
+            if queue_ms >= 24 || braked {
+                user.probe_blocked_until = Some(now + Duration::from_secs(60));
+                let ordinary_cap = target_ratio * MAX_BR_MULTIPLE;
+                if enhanced_best && !user.delivery.is_empty() && self.ratio > ordinary_cap {
+                    self.ratio = ordinary_cap;
+                }
             }
             user.delay.add_delay(delay);
             let mut avg_delay = user.delay.avg_delay();
@@ -755,15 +831,26 @@ impl VideoQoS {
         let current_ratio = self.ratio;
         let current_bitrate = self.bitrate();
 
-        // Calculate ratio for adding 150kbps bandwidth
-        let ratio_add_150kbps = if current_bitrate > 0 {
-            Some((current_bitrate + 150) as f32 * current_ratio / current_bitrate as f32)
+        let (growth_kbps, caught_up) = self.delivery_growth_budget(current_bitrate);
+        let ratio_growth_limit = if current_bitrate > 0 {
+            Some(current_bitrate.saturating_add(growth_kbps) as f32 * current_ratio / current_bitrate as f32)
         } else {
             None
         };
 
         let min = self.min_ratio();
-        let max = target_ratio * MAX_BR_MULTIPLE;
+        // Best can probe above the old fixed limit on sustained motion. Never send
+        // synthetic traffic to prove capacity: evaluate the next step using delivered
+        // video and queue feedback. Keep the last clear still frame when activity ends.
+        let base_cap = target_ratio * MAX_BR_MULTIPLE;
+        let max = if self.latest_quality() == Quality::Best && self.abr_config {
+            if dynamic_screen && caught_up && max_delay < 50 {
+                base_cap * 2.5
+            } else if current_ratio > base_cap {
+                if dynamic_screen && !caught_up { (current_ratio * 0.90).max(base_cap) }
+                else { current_ratio }
+            } else { base_cap }
+        } else { base_cap };
 
         let mut v = current_ratio;
 
@@ -785,12 +872,9 @@ impl VideoQoS {
         }
 
         // Limit quality increase rate for better stability
-        if let Some(ratio_add_150kbps) = ratio_add_150kbps {
-            if v > ratio_add_150kbps
-                && ratio_add_150kbps > current_ratio
-                && current_ratio >= BR_SPEED
-            {
-                v = ratio_add_150kbps;
+        if let Some(limit) = ratio_growth_limit {
+            if v > limit && (growth_kbps == 0 || current_ratio >= BR_SPEED) {
+                v = limit;
             }
         }
 
@@ -895,6 +979,85 @@ mod tests {
         }
         assert_eq!(qos.fps(), FPS);
         qos
+    }
+
+    #[test]
+    fn delivery_feedback_gates_probe_growth_and_expires() {
+        let mut qos = stable_qos();
+        qos.displays.insert("monitor".into(), DisplayData::default());
+        assert_eq!(qos.delivery_growth_budget(8000), (150, false));
+        for _ in 0..3 {
+            qos.advance_ms(1000);
+            qos.user_video_delivery(1, 7500, 50, 0);
+        }
+        assert_eq!(qos.delivery_growth_budget(8000), (750, true));
+        qos.users.insert(2, UserData::default());
+        assert_eq!(qos.delivery_growth_budget(8000), (150, false));
+        for _ in 0..2 { qos.user_video_delivery(1, 8000, 35, 45); }
+        assert_eq!(qos.delivery_growth_budget(8000), (0, false));
+        qos.users.remove(&2);
+        qos.advance_ms(8000);
+        assert_eq!(qos.delivery_growth_budget(8000), (150, false));
+        qos.user_video_delivery(1, 80, 1, 0);
+        assert!(qos.users[&1].delivery.is_empty());
+    }
+
+    #[test]
+    fn excess_delay_rolls_back_a_best_quality_probe_and_pauses_the_next_trial() {
+        let mut qos = stable_qos();
+        qos.new_display("monitor".into());
+        qos.set_support_changing_quality("monitor", true);
+        qos.users.get_mut(&1).unwrap().quality = Some((1, Quality::Best));
+        qos.ratio = BR_BEST * MAX_BR_MULTIPLE * 1.25;
+        for _ in 0..3 { qos.user_video_delivery(1, 8100, 60, 0); }
+        assert!(qos.delivery_growth_budget(8000).1);
+        qos.user_network_delay(1, 65);
+        assert!(qos.ratio <= BR_BEST * MAX_BR_MULTIPLE);
+        assert_eq!(qos.delivery_growth_budget(8000), (150, false));
+        qos.advance_ms(59_000);
+        for _ in 0..3 { qos.user_video_delivery(1, 8100, 60, 0); }
+        assert!(!qos.delivery_growth_budget(8000).1);
+        qos.advance_ms(1100);
+        assert!(qos.delivery_growth_budget(8000).1);
+    }
+
+    #[test]
+    fn falling_delivery_and_growing_backlog_lower_best_quality_before_slow_probe_brake() {
+        let mut qos = stable_qos();
+        qos.new_display("monitor".into());
+        qos.set_support_changing_quality("monitor", true);
+        qos.users.get_mut(&1).unwrap().quality = Some((1, Quality::Best));
+        qos.ratio = BR_BEST;
+        qos.store_bitrate(8000);
+        qos.user_network_delay(1, 80);
+        for (rate, queue) in [(4600, 0), (4500, 0), (4000, 0)] {
+            qos.advance_ms(500);
+            qos.user_video_delivery(1, rate, 30, queue);
+        }
+        assert_eq!(qos.ratio(), BR_BEST);
+        for (rate, queue) in [(4600, 2), (4500, 4), (4000, 8)] {
+            qos.advance_ms(500);
+            qos.user_video_delivery(1, rate, 30, queue);
+        }
+        assert!(qos.ratio() < BR_BEST * 0.8);
+    }
+
+    #[test]
+    fn best_quality_can_probe_above_its_original_ceiling_only_with_delivery_evidence() {
+        let mut qos = stable_qos();
+        qos.new_display("monitor".into());
+        qos.set_support_changing_quality("monitor", true);
+        qos.users.get_mut(&1).unwrap().quality = Some((1, Quality::Best));
+        qos.ratio = BR_BEST;
+        qos.store_bitrate(8000);
+        qos.adjust_ratio(true);
+        assert_eq!(qos.ratio, BR_BEST);
+        for _ in 0..3 { qos.user_video_delivery(1, 7900, 55, 0); }
+        qos.adjust_ratio(true);
+        assert!(qos.ratio > BR_BEST && qos.ratio < BR_BEST * 1.15);
+        qos.users.get_mut(&1).unwrap().quality = Some((2, Quality::Custom(BR_BEST)));
+        qos.adjust_ratio(true);
+        assert!(qos.ratio <= BR_BEST);
     }
 
     #[test]

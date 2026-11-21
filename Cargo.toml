@@ -125,12 +125,16 @@ winapi = { version = "0.3", features = [
     "cfgmgr32",
     "ioapiset",
     "winspool",
+    "winsock2",
 ] }
 windows = { version = "0.61", features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Win32",
     "Win32_Foundation",
+    "Win32_NetworkManagement_Dns",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
@@ -254,9 +258,9 @@ tungstenite = { git = "https://github.com/rustdesk-org/tungstenite-rs", rev = "e
 # Pinned by rev, not branch: a fork branch can be rewritten out from under the lockfile.
 # webrtc: SettingEngine cannot reach the ICE agent's max_binding_requests, which decides how
 # long the answerer keeps checking a pair that has not answered yet.
-webrtc = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
-webrtc-util = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
-webrtc-sctp = { git = "https://github.com/rustdesk-org/webrtc", rev = "49c89bd8d30e6e62e4c1a96cee38fdc11f79ef63" }
+webrtc = { git = "https://github.com/linhemin/webrtc", rev = "f07cef8b83998fc397339bff8c217fe0d3adcfc6" }
+webrtc-util = { git = "https://github.com/linhemin/webrtc", rev = "f07cef8b83998fc397339bff8c217fe0d3adcfc6" }
+webrtc-sctp = { git = "https://github.com/linhemin/webrtc", rev = "f07cef8b83998fc397339bff8c217fe0d3adcfc6" }
 
 [package.metadata.winres]
 LegalCopyright = "Copyright © 2026 Purslane Tech Pte. Ltd. All rights reserved."

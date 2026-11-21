@@ -272,13 +272,8 @@ impl Default for FlutterHandler {
     }
 }
 
-#[derive(Default, Clone)]
-struct RgbaData {
-    // SAFETY: [rgba] is guarded by [rgba_valid], and it's safe to reach [rgba] with `rgba_valid == true`.
-    // We must check the `rgba_valid` before reading [rgba].
-    data: Vec<u8>,
-    valid: bool,
-}
+mod rgba_frame;
+use rgba_frame::RgbaData;
 
 pub type FlutterRgbaRendererPluginOnRgba = unsafe extern "C" fn(
     texture_rgba: *mut c_void,
@@ -1116,8 +1111,10 @@ impl InvokeUiSession for FlutterHandler {
 
     #[inline]
     fn next_rgba(&self, _display: usize) {
-        if let Some(rgba_data) = self.display_rgbas.write().unwrap().get_mut(&_display) {
-            rgba_data.valid = false;
+        let notify = self.display_rgbas.write().unwrap().get_mut(&_display)
+            .is_some_and(RgbaData::release);
+        if notify {
+            self.notify_rgba_ready(_display);
         }
     }
 
@@ -1208,25 +1205,15 @@ impl InvokeUiSession for FlutterHandler {
 impl FlutterHandler {
     #[inline]
     fn on_rgba_soft_render(&self, display: usize, rgba: &mut scrap::ImageRgb) {
-        // If the current rgba is not fetched by flutter, i.e., is valid.
-        // We give up sending a new event to flutter.
-        let mut rgba_write_lock = self.display_rgbas.write().unwrap();
-        if let Some(rgba_data) = rgba_write_lock.get_mut(&display) {
-            if rgba_data.valid {
-                return;
-            } else {
-                rgba_data.valid = true;
-            }
-            // Return the rgba buffer to the video handler for reusing allocated rgba buffer.
-            std::mem::swap::<Vec<u8>>(&mut rgba.raw, &mut rgba_data.data);
-        } else {
-            let mut rgba_data = RgbaData::default();
-            std::mem::swap::<Vec<u8>>(&mut rgba.raw, &mut rgba_data.data);
-            rgba_data.valid = true;
-            rgba_write_lock.insert(display, rgba_data);
+        let keep_latest = cfg!(target_os = "ios") && !self.is_multi_ui_session();
+        let notify = self.display_rgbas.write().unwrap().entry(display).or_default()
+            .offer(&mut rgba.raw, keep_latest);
+        if notify {
+            self.notify_rgba_ready(display);
         }
-        drop(rgba_write_lock);
+    }
 
+    fn notify_rgba_ready(&self, display: usize) {
         let mut is_sent = false;
         let is_multi_sessions = self.is_multi_ui_session();
         for h in self.session_handlers.read().unwrap().values() {
@@ -1254,7 +1241,7 @@ impl FlutterHandler {
         // 2. "displays 0&1" will not send the event. Because it uses texutre render for now.
         if !is_sent {
             if let Some(rgba_data) = self.display_rgbas.write().unwrap().get_mut(&display) {
-                rgba_data.valid = false;
+                rgba_data.cancel();
             }
         }
     }

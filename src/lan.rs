@@ -218,6 +218,37 @@ fn send_query() -> ResultType<Vec<UdpSocket>> {
     Ok(sockets)
 }
 
+pub(crate) async fn probe_peer(id: &str, iface: crate::p2p::Interface) -> ResultType<Ipv4Addr> {
+    let socket = tokio::net::UdpSocket::bind((iface.address, 0)).await?;
+    socket.set_broadcast(true)?;
+    let mut msg = Message::new();
+    msg.set_peer_discovery(PeerDiscovery {
+        cmd: "ping".to_owned(),
+        ..Default::default()
+    });
+    let mask = u32::MAX << (32 - iface.prefix);
+    let broadcast = Ipv4Addr::from(u32::from(iface.address) | !mask);
+    socket.send_to(&msg.write_to_bytes()?, (broadcast, get_broadcast_port())).await?;
+
+    hbb_common::timeout(650, async {
+        let mut buf = [0; 2048];
+        loop {
+            let (len, source) = socket.recv_from(&mut buf).await?;
+            let IpAddr::V4(address) = source.ip() else { continue };
+            if source.port() != get_broadcast_port() || !iface.on_link(address) {
+                continue;
+            }
+            if let Ok(response) = Message::parse_from_bytes(&buf[..len]) {
+                if let Some(rendezvous_message::Union::PeerDiscovery(peer)) = response.union {
+                    if peer.cmd == "pong" && peer.id == id {
+                        return Ok(address);
+                    }
+                }
+            }
+        }
+    }).await?
+}
+
 fn wait_response(
     socket: UdpSocket,
     timeout: Option<std::time::Duration>,

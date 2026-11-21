@@ -672,6 +672,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("update-failed-check-msi-tip", "安装方式检测失败。请点击\"下载\"按钮，从发布网址下载，并手动升级。"),
         ("websocket_tip", "使用 WebSocket 时，仅支持中继连接。"),
         ("Use WebSocket", "使用 WebSocket"),
+        ("Physical adapter for direct connections", "直连使用的实体网卡"),
+        ("physical-adapter-p2p-tip", "选择以太网或 Wi-Fi 网卡。RustDesk 会使用该网卡的 DNS 查询 ID 服务器地址。"),
+        ("No active physical adapter with IPv4", "没有已连接且具有 IPv4 地址的实体网卡"),
         ("Trackpad speed", "触控板速度"),
         ("Default trackpad speed", "默认触控板速度"),
         ("Numeric one-time password", "一次性密码为数字"),
@@ -827,5 +830,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Request approval", "请求批准"),
         ("Forever", "永久"),
         ("username-login-disabled-oidc-unavailable", "用户名和密码登录已禁用，且没有可用的 OIDC 登录方式。"),
+        ("Copy P2P diagnostics", "复制 P2P 诊断"),
+        ("Connect to a peer first, then try again in a minute.", "请先连接远端设备，一分钟后再试。"),
+        ("Record P2P diagnostics", "记录 P2P 诊断"),
     ].iter().cloned().collect();
 }

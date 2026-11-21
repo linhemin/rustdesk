@@ -827,5 +827,8 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Request approval", "ஒப்புதல் கோரவும்"),
         ("Forever", "என்றென்றும்"),
         ("username-login-disabled-oidc-unavailable", "பயனர்பெயர் மற்றும் கடவுச்சொல் மூலம் உள்நுழைவது முடக்கப்பட்டுள்ளது, மேலும் OIDC உள்நுழைவு முறைகள் எதுவும் கிடைக்கவில்லை."),
+        ("Copy P2P diagnostics", ""),
+        ("Connect to a peer first, then try again in a minute.", ""),
+        ("Record P2P diagnostics", ""),
     ].iter().cloned().collect();
 }

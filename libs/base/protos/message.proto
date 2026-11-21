@@ -707,6 +707,10 @@ message TestDelay {
   bool from_client = 2;
   uint32 last_delay = 3;
   uint32 target_bitrate = 4;
+  // Receiver measurements from video messages only, over the last delay-echo interval.
+  uint32 delivered_video_kbps = 5;
+  uint32 delivered_video_fps = 6;
+  uint32 queued_video_percent = 7;
 }
 
 message PublicKey {

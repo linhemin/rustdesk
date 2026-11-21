@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:flutter_hbb/mobile/image_ready_samples.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -248,11 +249,15 @@ class FfiModel with ChangeNotifier {
   bool get keyboard => _permissions['keyboard'] != false;
 
   clear() {
+    final hadConnection = _direct != null;
     _pi = PeerInfo();
     lastUserDisplay = null;
     _cancelPendingMonitorRestore();
     _secure = null;
     _direct = null;
+    if (isMobile && hadConnection) {
+      parent.target?.qualityMonitorModel.connectionTypeChanged();
+    }
     _inputBlocked = false;
     _timer?.cancel();
     _timer = null;
@@ -266,11 +271,17 @@ class FfiModel with ChangeNotifier {
 
   setConnectionType(
       String peerId, bool secure, bool direct, String streamType) {
+    final changed = _secure != secure ||
+        _direct != direct ||
+        cachedPeerData.streamType != streamType;
     cachedPeerData.secure = secure;
     cachedPeerData.direct = direct;
     cachedPeerData.streamType = streamType;
     _secure = secure;
     _direct = direct;
+    if (isMobile && changed) {
+      parent.target?.qualityMonitorModel.connectionTypeChanged();
+    }
     try {
       var connectionType = ConnectionTypeState.find(peerId);
       connectionType.setSecure(secure);
@@ -281,16 +292,16 @@ class FfiModel with ChangeNotifier {
     }
   }
 
-  Widget? getConnectionImageText() {
+  Widget? getConnectionImageText({String? peerId}) {
     if (secure == null || direct == null) {
       return null;
-    } else {
-      final icon =
-          '${secure == true ? 'secure' : 'insecure'}${direct == true ? '' : '_relay'}';
+    }
+
+    Widget indicator(bool secure, bool direct, String streamType) {
+      final icon = '${secure ? 'secure' : 'insecure'}${direct ? '' : '_relay'}';
       final iconWidget =
           SvgPicture.asset('assets/$icon.svg', width: 48, height: 48);
-      String connectionText =
-          getConnectionText(secure!, direct!, cachedPeerData.streamType);
+      final connectionText = getConnectionText(secure, direct, streamType);
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -304,6 +315,17 @@ class FfiModel with ChangeNotifier {
         ],
       );
     }
+
+    if (peerId != null && isMobile) {
+      final path = ConnectionTypeState.find(peerId);
+      return Obx(() => path.isValid()
+          ? indicator(
+              path.secure.value == ConnectionType.strSecure,
+              path.direct.value == ConnectionType.strDirect,
+              path.stream_type.value)
+          : const SizedBox.shrink());
+    }
+    return indicator(secure!, direct!, cachedPeerData.streamType);
   }
 
   clearPermissions() {
@@ -1916,6 +1938,7 @@ class VirtualMouseMode with ChangeNotifier {
 }
 
 class ImageModel with ChangeNotifier {
+  final imageReady = ImageReadySamples();
   ui.Image? _image;
 
   ui.Image? get image => _image;
@@ -1938,7 +1961,10 @@ class ImageModel with ChangeNotifier {
 
   addCallbackOnFirstImage(Function(String) cb) => callbacksOnFirstImage.add(cb);
 
-  clearImage() => _image = null;
+  clearImage() {
+    _image = null;
+    imageReady.reset();
+  }
 
   bool _webDecodingRgba = false;
   final List<Uint8List> _webRgbaList = List.empty(growable: true);
@@ -1978,6 +2004,7 @@ class ImageModel with ChangeNotifier {
 
   decodeAndUpdate(int display, Uint8List rgba) async {
     final pid = parent.target?.id;
+    final upload = recordIosP2pDiagnostics ? (Stopwatch()..start()) : null;
     final rect = parent.target?.ffiModel.pi.getDisplayRect(display);
     final image = await img.decodeImageFromPixels(
       rgba,
@@ -1991,7 +2018,14 @@ class ImageModel with ChangeNotifier {
       image?.dispose();
       return;
     }
+    final uploadUs = upload?.elapsedMicroseconds;
     await update(image);
+    if (recordIosP2pDiagnostics &&
+        uploadUs != null &&
+        image != null &&
+        parent.target?.id == pid) {
+      imageReady.add(DateTime.now(), uploadUs);
+    }
   }
 
   Future<void> update(ui.Image? image,
@@ -3905,6 +3939,8 @@ class QualityMonitorModel with ChangeNotifier {
   QualityMonitorModel(this.parent);
   var _show = false;
   final _data = QualityMonitorData();
+  DateTime? lastVideoSample;
+  DateTime? lastDelaySample;
 
   bool get show => _show;
   QualityMonitorData get data => _data;
@@ -3919,6 +3955,28 @@ class QualityMonitorModel with ChangeNotifier {
     final streamType = ffiModel.cachedPeerData.streamType;
     if (!streamType.startsWith('WebRTC')) return null;
     return ffiModel.direct == false ? '$streamType (TURN)' : streamType;
+  }
+
+  String? get mobileConnection {
+    if (!isMobile) return null;
+    final model = parent.target?.ffiModel;
+    final direct = model?.direct;
+    if (model == null || direct == null) return null;
+    final connection =
+        translate(direct ? 'Direct Connection' : 'Relay Connection');
+    final transport = switch (model.cachedPeerData.streamType) {
+      'WebRTC' => direct ? 'WebRTC' : 'WebRTC / TURN',
+      'UDP' => 'KCP / UDP',
+      'IPv6' => 'KCP / IPv6',
+      'Relay' => 'TCP',
+      '' => null,
+      final transport => transport,
+    };
+    return transport == null ? connection : '$connection · $transport';
+  }
+
+  void connectionTypeChanged() {
+    if (_show) notifyListeners();
   }
 
   checkShowQualityMonitor(SessionID sessionId) async {
@@ -3937,6 +3995,7 @@ class QualityMonitorModel with ChangeNotifier {
         _data.speed = evt['speed'];
       }
       if (evt.containsKey('fps') && (evt['fps'] as String).isNotEmpty) {
+        if (recordIosP2pDiagnostics) lastVideoSample = DateTime.now();
         final fps = jsonDecode(evt['fps']) as Map<String, dynamic>;
         final pi = parent.target?.ffiModel.pi;
         if (pi != null) {
@@ -3958,6 +4017,7 @@ class QualityMonitorModel with ChangeNotifier {
         }
       }
       if (evt.containsKey('delay') && (evt['delay'] as String).isNotEmpty) {
+        if (recordIosP2pDiagnostics) lastDelaySample = DateTime.now();
         _data.delay = evt['delay'];
       }
       if (evt.containsKey('target_bitrate') &&

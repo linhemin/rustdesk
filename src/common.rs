@@ -130,6 +130,10 @@ pub fn init_sodium() {
 
 pub fn global_init() -> bool {
     init_sodium();
+    #[cfg(target_os = "windows")]
+    hbb_common::webrtc::WebRTCStream::set_interface_stun_provider_factory(
+        crate::p2p::configured_stun_provider,
+    );
     #[cfg(all(target_os = "linux", feature = "drm"))]
     crate::platform::linux::dispatch_wayland_display_probe();
     #[cfg(target_os = "linux")]
@@ -682,20 +686,39 @@ audio_rechannel!(audio_rechannel_8_7, 8, 7);
 
 pub struct CheckTestNatType {
     is_direct: bool,
+    #[cfg(target_os = "windows")]
+    p2p_route: (String, String),
 }
 
 impl CheckTestNatType {
     pub fn new() -> Self {
         Self {
             is_direct: Config::get_socks().is_none() && !config::use_ws(),
+            #[cfg(target_os = "windows")]
+            p2p_route: Self::p2p_route(),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn p2p_route() -> (String, String) {
+        (
+            Config::get_option(keys::OPTION_P2P_INTERFACE_IP),
+            Config::get_option(keys::OPTION_P2P_SERVER_IP),
+        )
     }
 }
 
 impl Drop for CheckTestNatType {
     fn drop(&mut self) {
         let is_direct = Config::get_socks().is_none() && !config::use_ws();
-        if self.is_direct != is_direct {
+        #[cfg(target_os = "windows")]
+        let p2p_route_changed = self.p2p_route != Self::p2p_route();
+        #[cfg(not(target_os = "windows"))]
+        let p2p_route_changed = false;
+        if p2p_route_changed {
+            Config::set_nat_type(NatType::UNKNOWN_NAT as i32);
+        }
+        if self.is_direct != is_direct || p2p_route_changed {
             test_nat_type();
         }
     }
@@ -761,7 +784,7 @@ async fn test_nat_type_() -> ResultType<bool> {
     for i in 0..2 {
         let server = if i == 0 { &*server1 } else { &*server2 };
         let mut socket =
-            socket_client::connect_tcp_local(server, local_addr, CONNECT_TIMEOUT).await?;
+            crate::p2p::connect_rendezvous(server, local_addr, CONNECT_TIMEOUT).await?;
         if i == 0 {
             // reuse the local addr is required for nat test
             local_addr = Some(socket.local_addr());
@@ -1363,15 +1386,14 @@ pub fn get_webrtc_enabled() -> bool {
 
 pub fn get_local_option(key: &str) -> String {
     let v = LocalConfig::get_option(key);
-    if key == keys::OPTION_ENABLE_UDP_PUNCH
-        || key == keys::OPTION_ENABLE_IPV6_PUNCH
-        || key == keys::OPTION_ENABLE_WEBRTC
+    if v.is_empty()
+        && (key == keys::OPTION_ENABLE_UDP_PUNCH
+            || key == keys::OPTION_ENABLE_IPV6_PUNCH
+            || (key == keys::OPTION_ENABLE_WEBRTC
+                && !cfg!(any(target_os = "windows", target_os = "ios"))))
+        && !is_public(&Config::get_rendezvous_server())
     {
-        if v.is_empty() {
-            if !is_public(&Config::get_rendezvous_server()) {
-                return "N".to_owned();
-            }
-        }
+        return "N".to_owned();
     }
     if key == "lang" && (v == "pt" || v == "br") {
         return "pt-br".to_owned();
@@ -2298,21 +2320,38 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
     false
 }
 
-async fn secure_tcp_impl(conn: &mut Stream, key: &str, log_on_success: bool) -> ResultType<()> {
+#[derive(Default)]
+struct SignedRendezvousPolicy {
+    session_direct: bool,
+    p2p_feedback: bool,
+}
+
+async fn secure_tcp_impl(
+    conn: &mut Stream,
+    key: &str,
+    required: bool,
+    log_on_success: bool,
+) -> ResultType<SignedRendezvousPolicy> {
     // Skip additional encryption when using WebSocket connections (wss://)
     // as WebSocket Secure (wss://) already provides transport layer encryption.
     // This doesn't affect the end-to-end encryption between clients,
     // it only avoids redundant encryption between client and server.
     if use_ws() {
-        return Ok(());
+        return Ok(SignedRendezvousPolicy::default());
     }
-    key_exchange(conn, key, log_on_success).await.map(|_| ())
+    match key_exchange(conn, key, log_on_success).await? {
+        Some(permission) => Ok(permission),
+        None if required => bail!("the rendezvous server did not complete the key exchange"),
+        None => Ok(SignedRendezvousPolicy::default()),
+    }
 }
 
-/// The server's key exchange on `conn`. `Ok(true)` once the stream is encrypted. `Ok(false)`
-/// when the server sent something else first, nothing parseable, or closed: `secure_tcp`
-/// tolerates that for servers from before the exchange, `secure_tcp_required` does not.
-async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> ResultType<bool> {
+/// Some(permission) once key installation completes. None is a peer predating the exchange.
+async fn key_exchange(
+    conn: &mut Stream,
+    key: &str,
+    log_on_success: bool,
+) -> ResultType<Option<SignedRendezvousPolicy>> {
     let rs_pk = get_rs_pk(key);
     let Some(rs_pk) = rs_pk else {
         bail!("Handshake failed: invalid public key from rendezvous server");
@@ -2332,7 +2371,11 @@ async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> Res
                         // The signed X25519 high bit marks servers that sign their parameters.
                         // X25519 ignores that bit, so old clients use the key unchanged; keep
                         // the bytes as signed, since the transcript and KxParams carry them so.
-                        if their_pk_b[31] & 0x80 != 0 || !ex.signed_params.is_empty() {
+                        let mut signed_observers = Vec::new();
+                        let mut policy = SignedRendezvousPolicy::default();
+                        if their_pk_b[31] & 0x80 != 0
+                            || !ex.signed_params.is_empty()
+                        {
                             let params = sign::verify(&ex.signed_params, &rs_pk)
                                 .ok()
                                 .and_then(|signed| {
@@ -2346,8 +2389,11 @@ async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> Res
                             if params.pk[..] != their_pk_b[..] || params.version != ex.version {
                                 bail!("Key exchange version or public key does not match its signature");
                             }
+                            signed_observers = params.udp_mapping_observers;
+                            policy.session_direct = params.allow_session_direct;
+                            policy.p2p_feedback = params.allow_p2p_feedback;
                         }
-                        let (asymmetric_value, symmetric_value, key) =
+                        let (asymmetric_value, symmetric_value, session_key) =
                             create_symmetric_key_msg(their_pk_b);
                         let picked = hbb_common::tcp::kx_version_for(ex.version);
                         let mut msg_out = RendezvousMessage::new();
@@ -2358,7 +2404,7 @@ async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> Res
                         });
                         timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
                         conn.set_negotiated_key(
-                            key,
+                            session_key,
                             true,
                             &hbb_common::tcp::KxTranscript {
                                 initiator_pk: &asymmetric_value,
@@ -2367,10 +2413,19 @@ async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> Res
                                 picked,
                             },
                         )?;
+                        if picked < 1 || !conn.is_secured() {
+                            policy = SignedRendezvousPolicy::default();
+                        }
+                        #[cfg(any(target_os = "windows", target_os = "ios"))]
+                        if policy.session_direct {
+                            if let Stream::Tcp(socket) = conn {
+                                socket.stage_signed_observers(key, signed_observers);
+                            }
+                        }
                         if log_on_success {
                             log::info!("Connection secured");
                         }
-                        return Ok(true);
+                        return Ok(Some(policy));
                     }
                     _ => {}
                 }
@@ -2378,15 +2433,37 @@ async fn key_exchange(conn: &mut Stream, key: &str, log_on_success: bool) -> Res
         }
         _ => {}
     }
-    Ok(false)
+    Ok(None)
 }
 
+/// Returns the rendezvous server's signed permission to negotiate a direct path in a relayed
+/// session. Older servers and WebSocket signaling do not grant it. `required` enforces the
+/// existing secure_tcp_required handshake semantics independently of the policy's value.
+pub(crate) async fn secure_tcp_with_direct_permission(
+    conn: &mut Stream,
+    key: &str,
+    required: bool,
+) -> ResultType<bool> {
+    secure_tcp_impl(conn, key, required, true).await.map(|policy| policy.session_direct)
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) async fn secure_tcp_with_feedback_permission(conn: &mut Stream, key: &str) -> ResultType<bool> {
+    secure_tcp_impl(conn, key, true, false).await.map(|policy| policy.p2p_feedback)
+}
+
+pub(crate) use crate::p2p::observer_policy::{
+    confirm_signed_direct_permission, finish_signed_observer_exchange,
+};
+
 pub async fn secure_tcp(conn: &mut Stream, key: &str) -> ResultType<()> {
-    secure_tcp_impl(conn, key, true).await
+    secure_tcp_with_direct_permission(conn, key, false)
+        .await
+        .map(|_| ())
 }
 
 async fn secure_tcp_silent(conn: &mut Stream, key: &str) -> ResultType<()> {
-    secure_tcp_impl(conn, key, false).await
+    secure_tcp_impl(conn, key, false, false).await.map(|_| ())
 }
 
 /// Like [`secure_tcp`], but returns only once the server's key exchange has actually encrypted
@@ -2395,14 +2472,9 @@ async fn secure_tcp_silent(conn: &mut Stream, key: &str) -> ResultType<()> {
 /// `secure_tcp` keeps tolerating such a server, which the paths from before the exchange depend
 /// on. WebSocket is treated as `secure_tcp` treats it, as a transport that is encrypted already.
 pub async fn secure_tcp_required(conn: &mut Stream, key: &str) -> ResultType<()> {
-    if use_ws() {
-        return Ok(());
-    }
-    if key_exchange(conn, key, true).await? {
-        Ok(())
-    } else {
-        bail!("the rendezvous server did not complete the key exchange");
-    }
+    secure_tcp_with_direct_permission(conn, key, true)
+        .await
+        .map(|_| ())
 }
 
 #[inline]
@@ -2928,15 +3000,14 @@ fn punch_tid(packet: &[u8], tag: &[u8; 4]) -> Option<u64> {
 /// Returning is therefore a fact rather than a guess, which is what lets the caller stop instead
 /// of handing a dead socket to a transport whose only way to discover the truth is to time out.
 ///
-/// A datagram that is neither probe nor acknowledgement is returned rather than dropped: it means
-/// the peer finished first and is already speaking KCP, whose SYN is never retransmitted.
+/// Preserve the peer's initial KCP SYN if it arrives while the punch is still running.
 ///
 /// Only the connector stops on its own acknowledgement, because only it has something to send
 /// next. An acknowledgement proves our probe came back, not that the peer's probe was answered -
 /// and after this returns nothing answers probes any more, since KCP's io loop drops anything
 /// shorter than its header. A listener that stopped here would go mute while a peer whose own
 /// probe or answer was lost - the normal state of a hole that is still opening - kept probing an
-/// endpoint that works, until it timed out. So the listener stops on the peer's first real packet.
+/// endpoint that works, until it timed out. The listener stops when it receives a KCP SYN.
 pub async fn punch_udp(
     socket: Arc<UdpSocket>,
     listen: bool,
@@ -2944,8 +3015,8 @@ pub async fn punch_udp(
     let tid = ((hbb_common::time_based_rand() as u64) << 32) | hbb_common::time_based_rand() as u64;
     let probe = punch_packet(&PUNCH_PROBE, tid);
     let mut data = [0u8; 1500];
-    // `connect` does not flush the receive queue, so the NAT test's extra replies are still in it.
-    while socket.try_recv(&mut data).is_ok() {}
+    // The queue can contain both old NAT test replies and the peer's first probe.
+    // Classify packets below so a probe that arrived before connect is not lost.
 
     let mut retry_interval = Duration::from_millis(20);
     const MAX_INTERVAL: Duration = Duration::from_millis(200);
@@ -3003,12 +3074,14 @@ pub async fn punch_udp(
                     } else if let Some(peer_tid) = punch_tid(&data[..n], &PUNCH_PROBE) {
                         probes_seen += 1;
                         socket.send(&punch_packet(&PUNCH_ACK, peer_tid)).await.ok();
-                    } else if ack.is_none() && n > 0 {
-                        log::debug!(
-                            "UDP punch confirmed by {n} bytes of peer data in {:?}, {probes_sent} probes sent",
-                            tm.elapsed()
-                        );
-                        return Ok(Some(bytes::BytesMut::from(&data[..n])));
+                    } else if listen && ack.is_none() {
+                        if let Some(syn) = crate::kcp_stream::KcpStream::incoming_syn(&data[..n]) {
+                            log::debug!(
+                                "UDP punch confirmed by KCP SYN in {:?}, {probes_sent} probes sent",
+                                tm.elapsed()
+                            );
+                            return Ok(Some(syn));
+                        }
                     }
                 }
             }
@@ -3216,6 +3289,27 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_udp_punch_uses_the_queued_syn_after_ignoring_old_packets() {
+        use kcp_sys::packet_def::KcpPacket;
+
+        let local = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        local.connect(peer.local_addr().unwrap()).await.unwrap();
+        peer.connect(local.local_addr().unwrap()).await.unwrap();
+
+        let mut syn = KcpPacket::new(0);
+        syn.mut_header().set_syn(true).set_src_session_id(1);
+        let syn = syn.inner();
+        peer.send(b"old rendezvous reply").await.unwrap();
+        peer.send(&syn).await.unwrap();
+        let packet = timeout(500, punch_udp(Arc::new(local), true))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(packet, Some(syn));
+    }
+
     #[test]
     fn untrusted_peer_id_validation() {
         let cases = [
@@ -3398,10 +3492,12 @@ mod tests {
         pk: &box_::PublicKey,
         sk: &sign::SecretKey,
         version: u32,
+        allow_session_direct: bool,
     ) -> KeyExchange {
         let params = KxParams {
             pk: pk.0.to_vec().into(),
             version,
+            allow_session_direct,
             ..Default::default()
         };
         let mut payload = hbb_common::tcp::KX_PARAMS_DOMAIN.to_vec();
@@ -3437,13 +3533,46 @@ mod tests {
         // The legacy call tolerates the same server, and the stream stays in the clear.
         let host = rendezvous_stub(serve).await;
         let mut conn = connect(&host).await;
-        secure_tcp(&mut conn, &key).await.unwrap();
+        assert!(!secure_tcp_with_direct_permission(&mut conn, &key, false)
+            .await
+            .unwrap());
         assert!(!conn.is_secured());
     }
 
     #[tokio::test]
+    async fn test_confirm_signed_direct_permission_waits_for_encrypted_nat_reply() {
+        for port in [0, 1, 65535, 65536] {
+            let key = secretbox::gen_key();
+            let client_key = key.clone();
+            let host = rendezvous_stub(move |mut conn| async move {
+                conn.set_key(key);
+                let bytes = conn.next_timeout(3000).await.unwrap().unwrap();
+                let req = RendezvousMessage::parse_from_bytes(&bytes).unwrap();
+                assert!(matches!(req.union, Some(rendezvous_message::Union::TestNatRequest(r)) if r.serial == -604180));
+                let mut msg = RendezvousMessage::new();
+                msg.set_test_nat_response(TestNatResponse { port, ..Default::default() });
+                conn.send(&msg).await.unwrap();
+            }).await;
+            let mut conn = connect(&host).await;
+            assert!(!confirm_signed_direct_permission(&mut conn).await.unwrap());
+            conn.set_key(client_key);
+            assert_eq!(
+                confirm_signed_direct_permission(&mut conn).await.unwrap(),
+                (1..=65535).contains(&port)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_secure_tcp_legacy_and_signed_servers_exchange_application_data() {
-        for (advertised, signed) in [(0, false), (1, true), (3, true)] {
+        for (advertised, signed, permission) in [
+            (0, false, false), // Legacy key exchange, no signed parameters.
+            (1, false, false), // Version alone never grants permission.
+            (0, true, true),   // Signed, but no transcript-bound transport.
+            (1, true, false),  // Missing/false in an otherwise signed advertisement.
+            (1, true, true),
+            (3, true, true), // Negotiates down to the newest shared version.
+        ] {
             for required in [false, true] {
                 let (key, sk) = server_key();
                 let host = rendezvous_stub(move |mut s| async move {
@@ -3451,10 +3580,11 @@ mod tests {
                     let mut msg = RendezvousMessage::new();
                     let ex = if signed {
                         eph_pk.0[31] |= 0x80;
-                        signed_key_exchange(&eph_pk, &sk, advertised)
+                        signed_key_exchange(&eph_pk, &sk, advertised, permission)
                     } else {
                         KeyExchange {
                             keys: vec![sign::sign(&eph_pk.0, &sk).into()],
+                            version: advertised,
                             ..Default::default()
                         }
                     };
@@ -3499,11 +3629,10 @@ mod tests {
                 })
                 .await;
                 let mut conn = connect(&host).await;
-                if required {
-                    secure_tcp_required(&mut conn, &key).await.unwrap();
-                } else {
-                    secure_tcp(&mut conn, &key).await.unwrap();
-                }
+                let allowed = secure_tcp_with_direct_permission(&mut conn, &key, required)
+                    .await
+                    .unwrap();
+                assert_eq!(allowed, permission && signed && advertised >= 1);
                 assert!(conn.is_secured());
                 let mut msg = RendezvousMessage::new();
                 msg.set_test_nat_request(TestNatRequest {
@@ -3536,12 +3665,13 @@ mod tests {
             "raised_version",
             "replaced_public_key",
             "invalid_signature",
+            "tampered_direct_permission",
             "wrong_signer",
             "unstructured_payload",
             "undomained_params",
             "signed_id_pk_as_params",
         ] {
-            let mut ex = signed_key_exchange(&eph_pk, &sk, 1);
+            let mut ex = signed_key_exchange(&eph_pk, &sk, 1, true);
             match case {
                 "missing_signature" => ex.signed_params = Bytes::new(),
                 "stripped_version_and_signature" => {
@@ -3563,8 +3693,16 @@ mod tests {
                     signed[0] ^= 1;
                     ex.signed_params = signed.into();
                 }
+                "tampered_direct_permission" => {
+                    // The encoded true boolean is the final byte of this signed KxParams.
+                    let mut signed = ex.signed_params.to_vec();
+                    assert_eq!(signed.pop(), Some(1));
+                    signed.push(0);
+                    ex.signed_params = signed.into();
+                }
                 "wrong_signer" => {
-                    ex.signed_params = signed_key_exchange(&eph_pk, &other_sk, 1).signed_params;
+                    ex.signed_params =
+                        signed_key_exchange(&eph_pk, &other_sk, 1, true).signed_params;
                 }
                 "unstructured_payload" => {
                     let mut payload = eph_pk.0.to_vec();

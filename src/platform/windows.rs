@@ -5047,3 +5047,22 @@ ProcessId=10136
         assert_eq!(pids.len(), 0);
     }
 }
+mod p2p;
+pub(crate) use p2p::{bind_p2p_stun_udp, is_physical_p2p_interface, resolve_p2p_ipv4};
+
+pub(crate) async fn connect_p2p_tcp(
+    peer: std::net::SocketAddr,
+    local: std::net::SocketAddr,
+    interface_index: u32,
+    timeout: u64,
+) -> hbb_common::ResultType<hbb_common::Stream> {
+    use hbb_common::tokio::net::TcpSocket;
+    let socket = TcpSocket::new_v4()?;
+    socket.set_reuseaddr(true)?;
+    p2p::set_unicast_interface(&socket, interface_index)?;
+    socket.bind(local)?;
+    let stream = hbb_common::timeout(timeout, socket.connect(peer)).await??;
+    stream.set_nodelay(true)?;
+    let source = stream.local_addr()?;
+    Ok(hbb_common::Stream::from(stream, source))
+}
