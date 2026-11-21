@@ -79,17 +79,18 @@ class HomePageState extends State<HomePage> {
             title: appTitle(),
             actions: _pages.elementAt(_selectedIndex).appBarActions,
           ),
-          bottomNavigationBar: NavigationBar(
+          bottomNavigationBar: BottomNavigationBar(
             key: navigationBarKey,
-            height: 76,
             backgroundColor: Theme.of(context).cardColor,
-            indicatorColor: MyTheme.accent.withOpacity(0.12),
-            destinations: _pages
+            items: _pages
                 .map((page) =>
-                    NavigationDestination(icon: page.icon, label: page.title))
+                    BottomNavigationBarItem(icon: page.icon, label: page.title))
                 .toList(),
-            selectedIndex: _selectedIndex,
-            onDestinationSelected: (index) => setState(() {
+            currentIndex: _selectedIndex,
+            type: BottomNavigationBarType.fixed,
+            selectedItemColor: Theme.of(context).colorScheme.primary,
+            unselectedItemColor: Theme.of(context).hintColor,
+            onTap: (index) => setState(() {
               // close chat overlay when go chat page
               if (_selectedIndex != index) {
                 _selectedIndex = index;
