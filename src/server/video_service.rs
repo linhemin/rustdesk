@@ -1481,6 +1481,7 @@ fn check_qos(
 ) -> ResultType<bool> {
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let fixed_pacing = video_qos.fixed_target().is_some();
+    #[cfg(feature = "vram")]
     video_qos.set_gpu_texture_encode(name, encoder.input_texture());
     *spf = video_qos.spf();
     if *ratio != video_qos.ratio() {
