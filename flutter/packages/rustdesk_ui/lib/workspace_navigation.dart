@@ -33,7 +33,7 @@ class WorkspaceNavigation extends StatelessWidget {
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, bounds) {
         final wide = bounds.maxWidth >= 740;
-        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 156.0 : 188.0;
+        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 174.0 : 188.0;
         Widget item(
             String label, IconData icon, bool selected, VoidCallback action) {
           final ink = selected ? Colors.white : const Color(0xffbbcbdf);
