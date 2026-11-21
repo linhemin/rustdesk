@@ -179,7 +179,7 @@ class _PeerTabPageState extends State<PeerTabPage>
                             : (selected ? decoBorder : null)),
                         child: Icon(model.tabIcon(t), color: isMobile && selected
                             ? Theme.of(context).colorScheme.primary : color)
-                            .paddingSymmetric(horizontal: isMobile ? 10 : 4,
+                            .paddingSymmetric(horizontal: 4,
                                 vertical: isMobile ? 10 : 0),
                       ).paddingSymmetric(horizontal: 4),
                       onTap: isOptionFixed(kOptionPeerTabIndex)
