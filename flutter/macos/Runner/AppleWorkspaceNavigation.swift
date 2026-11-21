@@ -129,6 +129,10 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
 
     func numberOfRows(in tableView: NSTableView) -> Int { labels.count }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        AppleWorkspaceRowView()
+    }
+
     func tableView(
         _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
     ) -> NSView? {
@@ -166,5 +170,66 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !applyingConfiguration, labels.indices.contains(table.selectedRow) else { return }
         channel.invokeMethod("select", arguments: table.selectedRow)
+    }
+}
+
+private final class AppleWorkspaceRowView: NSTableRowView {
+    override var isSelected: Bool {
+        didSet { updateForeground() }
+    }
+
+    override var isEmphasized: Bool {
+        didSet { updateForeground() }
+    }
+
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        updateForeground()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateForeground()
+    }
+
+    private func updateForeground() {
+        guard let cell = subviews.first(where: { $0 is NSTableCellView }) as? NSTableCellView else {
+            return
+        }
+        guard isSelected else {
+            cell.textField?.textColor = .labelColor
+            cell.imageView?.contentTintColor = nil
+            return
+        }
+        let foreground = selectionForeground()
+        cell.textField?.textColor = foreground
+        cell.imageView?.contentTintColor = foreground
+    }
+
+    private func selectionForeground() -> NSColor {
+        let background = isEmphasized
+            ? NSColor.selectedContentBackgroundColor : NSColor.unemphasizedSelectedContentBackgroundColor
+        var rgb: NSColor?
+        if #available(macOS 11.0, *) {
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                rgb = background.usingColorSpace(.sRGB)
+            }
+        } else {
+            let previous = NSAppearance.current
+            NSAppearance.current = effectiveAppearance
+            rgb = background.usingColorSpace(.sRGB)
+            NSAppearance.current = previous
+        }
+        guard let rgb = rgb else {
+            return isEmphasized ? .alternateSelectedControlTextColor : .unemphasizedSelectedTextColor
+        }
+        func linear(_ value: CGFloat) -> CGFloat {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear(rgb.redComponent)
+            + 0.7152 * linear(rgb.greenComponent) + 0.0722 * linear(rgb.blueComponent)
+        let contrastWithBlack = (luminance + 0.05) / 0.05
+        let contrastWithWhite = 1.05 / (luminance + 0.05)
+        return contrastWithBlack >= contrastWithWhite ? .black : .white
     }
 }
