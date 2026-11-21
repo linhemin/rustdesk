@@ -1288,6 +1288,7 @@ impl RendezvousMediator {
             version: crate::VERSION.to_owned(),
             socket_addr_v6,
             webrtc_sdp_answer,
+            udp_reply_token: ph.udp_reply_token,
             ..Default::default()
         };
         if ph.udp_port > 0 {
@@ -1478,6 +1479,7 @@ impl RendezvousMediator {
             id,
             serial,
             lan_probe: Self::lan_probe_interface().is_some(),
+            udp_punch_reply: true,
             ..Default::default()
         });
         socket.send(&msg_out).await?;
