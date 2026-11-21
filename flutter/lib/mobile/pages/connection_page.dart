@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:auto_size_text_field/auto_size_text_field.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
-import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -63,12 +63,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
-    _allPeersLoader.init(setState);
+    if (!isIOS) _allPeersLoader.init(setState);
     _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final lastRemoteId = await bind.mainGetLastRemoteId();
-        if (lastRemoteId != _idController.id) {
+        if (mounted &&
+            _idController.text.isEmpty &&
+            lastRemoteId != _idController.id) {
           setState(() {
             _idController.id = lastRemoteId;
           });
@@ -81,32 +83,41 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
+    if (isIOS) {
+      return IPhoneDeviceWorkspace(
+        devices: PeerTabPage(),
+        onEnterId: _openConnectionSheet,
+      );
+    }
     return CustomScrollView(
       slivers: [
         SliverList(
             delegate: SliverChildListDelegate([
           if (!bind.isCustomClient() && !isIOS)
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 24, 8, 20),
-            child: WorkspaceHeading(
-              title: translate('Connection'),
-              subtitle: translate('Control Remote Desktop'),
-              trailing: const WorkspaceIcon(icon: Icons.devices_rounded),
-            ),
-          ),
-          WorkspacePanel(
-            padding: const EdgeInsets.all(12),
-            child: _buildRemoteIDTextField(),
-          ),
-          const SizedBox(height: 20),
+          _buildRemoteIDTextField(),
         ])),
         SliverFillRemaining(
           hasScrollBody: true,
           child: PeerTabPage(),
         )
       ],
-    ).marginOnly(left: 16, right: 16);
+    ).marginOnly(top: 2, left: 10, right: 10);
+  }
+
+  Future<void> _openConnectionSheet() async {
+    FocusScope.of(context).unfocus();
+    final id = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (context) =>
+          _IPhoneConnectionSheet(initialId: _idController.text),
+    );
+    if (id != null && mounted) {
+      _idController.id = id;
+      connect(context, id);
+    }
   }
 
   /// Callback for the connect button.
@@ -377,7 +388,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _uniLinksSubscription?.cancel();
     _idController.dispose();
     _idFocusNode.removeListener(onFocusChanged);
-    _allPeersLoader.clear();
+    if (!isIOS) _allPeersLoader.clear();
     _idFocusNode.dispose();
     _idEditingController.dispose();
     if (Get.isRegistered<IDTextEditingController>()) {
@@ -387,5 +398,256 @@ class _ConnectionPageState extends State<ConnectionPage> {
       Get.delete<TextEditingController>();
     }
     super.dispose();
+  }
+}
+
+/// The command opens the keyboard only when someone wants to enter a new ID.
+class IPhoneDeviceWorkspace extends StatelessWidget {
+  const IPhoneDeviceWorkspace(
+      {super.key, required this.devices, required this.onEnterId});
+
+  final Widget devices;
+  final VoidCallback onEnterId;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final compactKeyboard =
+        MediaQuery.orientationOf(context) == Orientation.landscape &&
+            MediaQuery.viewInsetsOf(context).bottom > 0;
+    return SafeArea(
+        top: false,
+        bottom: false,
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (!compactKeyboard)
+            Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(18, 4, 18, 8),
+                child: Text(translate('Accessible devices'),
+                    style: theme.textTheme.headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.w700))),
+          if (!compactKeyboard)
+            Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 12),
+                child: Material(
+                    color: theme.colorScheme.surface,
+                    shape: RoundedRectangleBorder(
+                        side: BorderSide(color: theme.dividerColor),
+                        borderRadius: BorderRadius.circular(16)),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                        onTap: onEnterId,
+                        child: Padding(
+                            padding: const EdgeInsetsDirectional.fromSTEB(
+                                16, 6, 6, 6),
+                            child: Row(children: [
+                              Expanded(
+                                  child: Text(translate('Enter Remote ID'),
+                                      style: theme.textTheme.titleMedium
+                                          ?.copyWith(color: theme.hintColor))),
+                              const SizedBox(width: 8),
+                              Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                      color: WorkspaceStyle.blue,
+                                      borderRadius: BorderRadius.circular(11)),
+                                  child: const Icon(Icons.north_east_rounded,
+                                      color: Colors.white, size: 21)),
+                            ]))))),
+          Expanded(
+              child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: devices)),
+        ]));
+  }
+}
+
+class _IPhoneConnectionSheet extends StatefulWidget {
+  const _IPhoneConnectionSheet({required this.initialId});
+  final String initialId;
+
+  @override
+  State<_IPhoneConnectionSheet> createState() => _IPhoneConnectionSheetState();
+}
+
+class _IPhoneConnectionSheetState extends State<_IPhoneConnectionSheet> {
+  final loader = AllPeersLoader();
+
+  @override
+  void initState() {
+    super.initState();
+    loader.init(setState);
+    loader.getAllPeers();
+  }
+
+  @override
+  void dispose() {
+    loader.clear();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => IPhoneConnectionForm(
+        initialId: widget.initialId,
+        peers: loader.peers,
+        onMatches: loader.queryOnlines,
+        onSubmit: (id) => Navigator.pop(context, id),
+        onCancel: () => Navigator.pop(context),
+      );
+}
+
+class IPhoneConnectionForm extends StatefulWidget {
+  const IPhoneConnectionForm(
+      {super.key,
+      required this.initialId,
+      required this.peers,
+      required this.onMatches,
+      required this.onSubmit,
+      required this.onCancel});
+  final String initialId;
+  final List<Peer> peers;
+  final ValueChanged<List<Peer>> onMatches;
+  final ValueChanged<String> onSubmit;
+  final VoidCallback onCancel;
+
+  @override
+  State<IPhoneConnectionForm> createState() => _IPhoneConnectionFormState();
+}
+
+class _IPhoneConnectionFormState extends State<IPhoneConnectionForm> {
+  late final controller = IDTextEditingController(text: widget.initialId);
+  final focus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    controller.selection =
+        TextSelection(baseOffset: 0, extentOffset: controller.text.length);
+  }
+
+  @override
+  void dispose() {
+    focus.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final id = controller.id;
+    final query = controller.text.trim().toLowerCase();
+    final matches = query.isEmpty
+        ? const <Peer>[]
+        : widget.peers
+            .where((peer) =>
+                peer.id.toLowerCase().contains(id.toLowerCase()) ||
+                peer.alias.toLowerCase().contains(query) ||
+                peer.hostname.toLowerCase().contains(query) ||
+                peer.username.toLowerCase().contains(query))
+            .toList(growable: false);
+    widget.onMatches(matches);
+    void submit() {
+      if (controller.id.isNotEmpty) {
+        focus.unfocus();
+        widget.onSubmit(controller.id);
+      }
+    }
+
+    return Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: SafeArea(
+            top: false,
+            child: CustomScrollView(shrinkWrap: true, slivers: [
+              SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 10, 12, 0),
+                  sliver: SliverToBoxAdapter(
+                      child: Row(children: [
+                    Expanded(
+                        child: Text(translate('New Connection'),
+                            style: theme.textTheme.titleLarge)),
+                    IconButton(
+                        onPressed: widget.onCancel,
+                        tooltip: translate('Close'),
+                        icon: const Icon(Icons.close_rounded)),
+                  ]))),
+              SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                  sliver: SliverToBoxAdapter(
+                      child: Row(children: [
+                    Expanded(
+                        child: TextField(
+                            controller: controller,
+                            focusNode: focus,
+                            autofocus: true,
+                            keyboardType: TextInputType.visiblePassword,
+                            textInputAction: TextInputAction.go,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            inputFormatters: [IDTextInputFormatter()],
+                            onChanged: (_) => setState(() {}),
+                            onSubmitted: (_) => submit(),
+                            style: theme.textTheme.titleMedium,
+                            decoration: InputDecoration(
+                                labelText: translate('Remote ID'),
+                                suffixIcon: id.isEmpty
+                                    ? null
+                                    : IconButton(
+                                        tooltip: translate('Clear'),
+                                        icon:
+                                            const Icon(Icons.cancel, size: 18),
+                                        onPressed: () {
+                                          setState(controller.clear);
+                                          focus.requestFocus();
+                                        })))),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                        tooltip: translate('Connect'),
+                        onPressed: id.isEmpty ? null : submit,
+                        style: IconButton.styleFrom(
+                            minimumSize: const Size.square(48),
+                            backgroundColor:
+                                id.isEmpty ? null : WorkspaceStyle.blue,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(13))),
+                        icon: const Icon(Icons.arrow_forward_rounded)),
+                  ]))),
+              if (matches.isNotEmpty)
+                SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    sliver: SliverList.builder(
+                        itemCount: matches.length,
+                        itemBuilder: (context, i) {
+                          final peer = matches[i];
+                          final name = peer.alias.isNotEmpty
+                              ? peer.alias
+                              : peer.hostname;
+                          return ListTile(
+                              leading: Icon(Icons.devices_rounded,
+                                  color: theme.colorScheme.primary),
+                              title: Text(
+                                  name.isEmpty ? formatID(peer.id) : name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                              subtitle: Text(
+                                  [
+                                    if (name.isNotEmpty) formatID(peer.id),
+                                    if (peer.platform.isNotEmpty) peer.platform,
+                                    translate(
+                                        peer.online ? 'Online' : 'Offline')
+                                  ].join(' · '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                              trailing: const Icon(Icons.north_west_rounded,
+                                  size: 18),
+                              onTap: () {
+                                setState(() => controller.id = peer.id);
+                                focus.unfocus();
+                              });
+                        })),
+            ])));
   }
 }

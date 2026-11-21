@@ -733,7 +733,15 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final disabledSettings = bind.isDisableSettings();
     final hideSecuritySettings =
         bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) == 'Y';
+    final palette = Theme.of(context);
+    final settingsTheme = isIOS ? SettingsThemeData(
+      settingsListBackground: palette.scaffoldBackgroundColor,
+      settingsSectionBackground: palette.cardColor,
+      leadingIconsColor: palette.colorScheme.primary, titleTextColor: palette.hintColor,
+      dividerColor: palette.dividerColor,
+    ) : null;
     final settings = SettingsList(
+      lightTheme: settingsTheme, darkTheme: settingsTheme,
       sections: [
         customClientSection,
         if (!bind.isDisableAccount())

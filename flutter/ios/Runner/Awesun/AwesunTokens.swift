@@ -18,7 +18,7 @@ enum AwesunPalette {
     static let padFillPressed = Color(awesun: 0xFF303E54)
     static let padStroke = Color(awesun: 0xFF465670)
     static let dpadFill = Color(awesun: 0xFF243149)
-    static let mint = Color(awesun: 0xFFC7D2FE)
+    static let mint = Color(awesun: 0xFFA8C6FF)
     static let hudFill = Color(awesun: 0xFF101725)
     static let hudLabel = Color(awesun: 0xFF9AA9BF)
     static let hudValue = Color(awesun: 0xFFFFFFFF)
@@ -27,13 +27,13 @@ enum AwesunPalette {
     static let pairStroke = Color(awesun: 0xFF465670)
     static let glyph = Color(awesun: 0xFFF4FAFF)
 
-    static let brandBlue = Color(awesun: 0xFF4263EB)
+    static let brandBlue = Color(awesun: 0xFF2454CC)
     static let brandRed = Color(awesun: 0xFFEF6685)
-    static let kbBackground = Color(awesun: 0xFFA9B8C1)
-    static let kbKey = Color.white
-    static let kbKeyOn = Color(awesun: 0xE6000000)
-    static let kbKeyText = Color(awesun: 0xFF4A4A4A)
-    static let kbSecondText = Color(awesun: 0xFF9A9A9A)
+    static let kbBackground = Color(awesun: 0xFF192638)
+    static let kbKey = Color(awesun: 0xFF324359)
+    static let kbKeyOn = Color(awesun: 0xFF2454CC)
+    static let kbKeyText = Color(awesun: 0xFFF0F5FC)
+    static let kbSecondText = Color(awesun: 0xFFC2CFE1)
     static let sheetFill = Color(awesun: 0xF5101725)
     static let textPrimary = Color.white
     static let textSecondary = Color(awesun: 0xFFD3DCEC)

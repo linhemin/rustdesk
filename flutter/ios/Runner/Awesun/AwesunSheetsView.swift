@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 底部面板壳（OD4.xml：85% 黑 + 上 16dp 圆角）
 struct AwesunSheetShell<Content: View>: View {
     let title: String
     var titleImage: String? = nil
@@ -9,31 +8,28 @@ struct AwesunSheetShell<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .bold))
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(AwesunPalette.textPrimary)
+                if let titleImage {
+                    Image(titleImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(height: 17)
+                }
+                Spacer(minLength: 8)
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(AwesunPalette.textPrimary)
-                    if let titleImage {
-                        Image(titleImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(height: 17)
-                    }
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(AwesunPalette.padFillPressed))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity)
-
-                HStack {
-                    Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(Color.white.opacity(0.72))
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("关闭"))
             }
             content()
         }
@@ -178,11 +174,11 @@ struct AwesunFunctionSheet: View {
         } label: {
             Text(mode.title)
                 .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .foregroundColor(selected ? AwesunPalette.brandRed : .white)
+                .foregroundColor(selected ? AwesunPalette.mint : .white)
                 .frame(maxWidth: .infinity, minHeight: 40)
                 .background(Color.white.opacity(selected ? 0.08 : 0.03))
                 .overlay(RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(selected ? AwesunPalette.brandRed : .white.opacity(0.20), lineWidth: 1))
+                    .strokeBorder(selected ? AwesunPalette.mint : .white.opacity(0.20), lineWidth: 1))
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -228,7 +224,8 @@ struct AwesunFunctionSheet: View {
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, minHeight: 58)
-        .background(selected ? AwesunPalette.brandRed.opacity(0.30) : Color.white.opacity(0.035))
+        .foregroundColor(entry.id == "quit" ? AwesunPalette.brandRed : AwesunPalette.textPrimary)
+        .background(selected ? AwesunPalette.mint.opacity(0.20) : Color.white.opacity(0.035))
         .cornerRadius(7)
         .contentShape(Rectangle())
     }
@@ -303,7 +300,7 @@ struct AwesunModeSheet: View {
                 .frame(height: 44)
                 .background(
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(isOn ? AwesunPalette.brandRed : Color.clear)
+                        .fill(isOn ? AwesunPalette.brandBlue : Color.clear)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -371,7 +368,7 @@ struct AwesunLockSheet: View {
                 } label: {
                     Text("取消")
                         .font(.system(size: 15))
-                        .foregroundColor(AwesunPalette.brandRed)
+                        .foregroundColor(AwesunPalette.mint)
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
                         .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.1)))
@@ -387,7 +384,7 @@ struct AwesunLockSheet: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 44)
-                        .background(RoundedRectangle(cornerRadius: 4).fill(AwesunPalette.brandRed))
+                        .background(RoundedRectangle(cornerRadius: 4).fill(AwesunPalette.brandBlue))
                 }
                 .buttonStyle(.plain)
             }
@@ -524,11 +521,11 @@ struct AwesunDisplayPanel: View {
                 HStack(spacing: 8) {
                     Image(systemName: "bolt.fill")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(AwesunPalette.brandRed)
+                        .foregroundColor(AwesunPalette.mint)
                     Text("高性能模式").font(.system(size: 13, weight: .semibold))
                 }
             }
-            .tint(AwesunPalette.brandRed)
+            .tint(AwesunPalette.brandBlue)
             .disabled(!status.supported)
             if !status.supported {
                 Text("需要支持固定帧率的 Windows 主机")
@@ -557,7 +554,7 @@ struct AwesunDisplayPanel: View {
         }
         .padding(11)
         .background(Color(awesun: 0xFF211920))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AwesunPalette.brandRed.opacity(0.22)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AwesunPalette.mint.opacity(0.22)))
         .cornerRadius(10)
     }
 
@@ -584,7 +581,7 @@ struct AwesunDisplayPanel: View {
                             Toggle(item.title, isOn: Binding(
                                 get: { item.selected }, set: { _ in model.selectDisplayOption(item.id) }))
                                 .font(.system(size: 12))
-                                .tint(AwesunPalette.brandRed)
+                                .tint(AwesunPalette.brandBlue)
                                 .padding(.vertical, 3)
                         }
                     }
@@ -614,7 +611,7 @@ struct AwesunDisplayPanel: View {
             .frame(maxWidth: .infinity, minHeight: 33)
             .padding(.horizontal, 2)
             .foregroundColor(.white)
-            .background(selected ? AwesunPalette.brandRed.opacity(0.82) : Color.white.opacity(0.085))
+            .background(selected ? AwesunPalette.brandBlue.opacity(0.82) : Color.white.opacity(0.085))
             .cornerRadius(7)
     }
 }
@@ -751,7 +748,7 @@ struct AwesunShortcutPanel: View {
             Text(label)
                 .font(.system(size: 12))
                 .frame(minWidth: 42, minHeight: 30)
-                .background(selected ? AwesunPalette.brandRed.opacity(0.55) : AwesunPalette.keyboardCap)
+                .background(selected ? AwesunPalette.brandBlue.opacity(0.55) : AwesunPalette.keyboardCap)
                 .cornerRadius(7)
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -816,7 +813,7 @@ private struct AwesunGameButton: View {
             .font(.system(size: 14, weight: .semibold))
             .foregroundColor(.white)
             .frame(maxWidth: .infinity, minHeight: 44)
-            .background(pressed ? AwesunPalette.brandRed : Color.white.opacity(0.10))
+            .background(pressed ? AwesunPalette.brandBlue : Color.white.opacity(0.10))
             .cornerRadius(8)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)

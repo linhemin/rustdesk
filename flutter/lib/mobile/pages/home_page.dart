@@ -4,6 +4,7 @@ import 'package:flutter_hbb/mobile/pages/settings_page.dart';
 import 'package:flutter_hbb/web/settings_page.dart';
 import 'package:get/get.dart';
 import '../../common.dart';
+import '../../native/apple_workspace_navigation.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
@@ -57,6 +58,7 @@ class HomePageState extends State<HomePage> {
       _pages.addAll([ChatPage(type: ChatPageType.mobileMain), ServerPage()]);
     }
     _pages.add(SettingsPage());
+    if (_selectedIndex >= _pages.length) _selectedIndex = 0;
   }
 
   @override
@@ -75,34 +77,64 @@ class HomePageState extends State<HomePage> {
         child: Scaffold(
           // backgroundColor: MyTheme.grayBg,
           appBar: AppBar(
-            centerTitle: false,
-            title: appTitle(),
+            centerTitle: !isIOS,
+            title: isIOS
+                ? Row(children: [
+                    loadIcon(26),
+                    const SizedBox(width: 9),
+                    Flexible(
+                        child: Text(
+                            _pages[_selectedIndex] is SettingsPage
+                                ? _pages[_selectedIndex].title
+                                : bind.mainGetAppNameSync(),
+                            overflow: TextOverflow.ellipsis)),
+                  ])
+                : appTitle(),
             actions: _pages.elementAt(_selectedIndex).appBarActions,
           ),
-          bottomNavigationBar: BottomNavigationBar(
-            key: navigationBarKey,
-            backgroundColor: Theme.of(context).cardColor,
-            items: _pages
-                .map((page) =>
-                    BottomNavigationBarItem(icon: page.icon, label: page.title))
-                .toList(),
-            currentIndex: _selectedIndex,
-            type: BottomNavigationBarType.fixed,
-            selectedItemColor: Theme.of(context).colorScheme.primary,
-            unselectedItemColor: Theme.of(context).hintColor,
-            onTap: (index) => setState(() {
-              // close chat overlay when go chat page
-              if (_selectedIndex != index) {
-                _selectedIndex = index;
-                if (isChatPageCurrentTab) {
-                  gFFI.chatModel.hideChatIconOverlay();
-                  gFFI.chatModel.hideChatWindowOverlay();
-                  gFFI.chatModel.mobileClearClientUnread(
-                      gFFI.chatModel.currentKey.connId);
-                }
-              }
-            }),
-          ),
+          bottomNavigationBar: _pages.length < 2
+              ? null
+              : isIOS
+                  ? SafeArea(
+                      top: false,
+                      child: AppleWorkspaceNavigation(
+                        labels: _pages
+                            .map((page) => page.title)
+                            .toList(growable: false),
+                        symbols: [
+                          for (final page in _pages)
+                            page is SettingsPage ? 'gearshape' : 'display.2'
+                        ],
+                        selected: _selectedIndex,
+                        compact: MediaQuery.sizeOf(context).shortestSide < 600,
+                        onSelect: (index) =>
+                            setState(() => _selectedIndex = index),
+                      ),
+                    )
+                  : BottomNavigationBar(
+                      key: navigationBarKey,
+                      backgroundColor: Theme.of(context).cardColor,
+                      items: _pages
+                          .map((page) => BottomNavigationBarItem(
+                              icon: page.icon, label: page.title))
+                          .toList(),
+                      currentIndex: _selectedIndex,
+                      type: BottomNavigationBarType.fixed,
+                      selectedItemColor: Theme.of(context).colorScheme.primary,
+                      unselectedItemColor: Theme.of(context).hintColor,
+                      onTap: (index) => setState(() {
+                        // close chat overlay when go chat page
+                        if (_selectedIndex != index) {
+                          _selectedIndex = index;
+                          if (isChatPageCurrentTab) {
+                            gFFI.chatModel.hideChatIconOverlay();
+                            gFFI.chatModel.hideChatWindowOverlay();
+                            gFFI.chatModel.mobileClearClientUnread(
+                                gFFI.chatModel.currentKey.connId);
+                          }
+                        }
+                      }),
+                    ),
           body: _pages.elementAt(_selectedIndex),
         ));
   }
@@ -250,12 +282,12 @@ class WebHomePage extends StatelessWidget {
       }
     }
     if (id != null) {
-      connect(context, id, 
-        isFileTransfer: isFileTransfer, 
-        isViewCamera: isViewCamera, 
-        isTerminal: isTerminal,
-        loginMethod: loginMethod,
-        password: password);
+      connect(context, id,
+          isFileTransfer: isFileTransfer,
+          isViewCamera: isViewCamera,
+          isTerminal: isTerminal,
+          loginMethod: loginMethod,
+          password: password);
     }
   }
 }

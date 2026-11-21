@@ -139,6 +139,9 @@ class _PeerCardState extends State<_PeerCard>
     final name = hideUsernameOnCard == true
         ? peer.hostname
         : '${peer.username}${peer.username.isNotEmpty && peer.hostname.isNotEmpty ? '@' : ''}${peer.hostname}';
+    if (isPortrait && !isWeb && Theme.of(context).platform == TargetPlatform.iOS) {
+      return _iPhonePeerRow(peer, name);
+    }
     final greyStyle = TextStyle(
         fontSize: 11,
         color: Theme.of(context).textTheme.titleLarge?.color?.withOpacity(0.6));
@@ -246,6 +249,86 @@ class _PeerCardState extends State<_PeerCard>
         )
       ],
     );
+  }
+
+  Widget _iPhonePeerRow(Peer peer, String host) {
+    final theme = Theme.of(context);
+    final name = peer.alias.isNotEmpty ? peer.alias : host;
+    final status = translate(peer.online ? 'Online' : 'Offline');
+    final details = [
+      if (name.isNotEmpty) formatID(peer.id),
+      if (host.isNotEmpty && host != name) host,
+    ];
+    final icon = switch (peer.platform) {
+      kPeerPlatformMacOS => Icons.desktop_mac_outlined,
+      kPeerPlatformWindows => Icons.laptop_windows_outlined,
+      kPeerPlatformAndroid => Icons.phone_android_rounded,
+      kPeerPlatformLinux => Icons.dns_outlined,
+      _ => Icons.devices_outlined,
+    };
+    return Row(children: [
+      Container(
+        width: 44,
+        height: 44,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(13)),
+        child: Icon(icon,
+            color: theme.colorScheme.primary,
+            size: 24,
+            semanticLabel: peer.platform),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+          child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Flexible(
+                child: Text(name.isEmpty ? formatID(peer.id) : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium)),
+            if (_shouldBuildPasswordIcon(peer)) ...[
+              const SizedBox(width: 4),
+              const Icon(Icons.key_rounded, size: 14),
+            ],
+          ]),
+          if (details.isNotEmpty)
+            Text(details.join(' · '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.hintColor)),
+          if (_showNote(peer))
+            Text(peer.note,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall),
+          const SizedBox(height: 3),
+          Row(children: [
+            DecoratedBox(
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: peer.online
+                        ? (theme.brightness == Brightness.dark
+                            ? const Color(0xff73d8ad)
+                            : const Color(0xff177856))
+                        : theme.hintColor),
+                child: const SizedBox.square(dimension: 6)),
+            const SizedBox(width: 5),
+            Flexible(
+                child: Text(status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: theme.hintColor))),
+          ]),
+        ],
+      )),
+      checkBoxOrActionMorePortrait(peer),
+    ]);
   }
 
   Widget _buildPeerTile(
