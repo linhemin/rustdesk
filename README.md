@@ -180,3 +180,7 @@ Please ensure that you run these commands from the root of the RustDesk reposito
 
 ![TCP Tunneling](https://github.com/rustdesk/rustdesk/assets/28412477/78e8708f-e87e-4570-8373-1360033ea6c5)
 
+
+## AweSun iOS icon assets
+
+The 19 PNG icons in `flutter/ios/Runner/Assets.xcassets/awesun_*.imageset` are used under separate permission for non-commercial use in this open-source project. The repository's source-code license does not grant additional rights to these icons.
