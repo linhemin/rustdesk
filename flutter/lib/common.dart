@@ -1669,6 +1669,9 @@ bool mainGetLocalBoolOptionSync(String key) {
   return option2bool(key, bind.mainGetLocalOption(key: key));
 }
 
+bool recordIosP2pDiagnostics =
+    isIOS && bind.mainGetLocalOption(key: kOptionRecordP2pDiagnostics) == 'Y';
+
 bool mainGetPeerBoolOptionSync(String id, String key) {
   return option2bool(key, bind.mainGetPeerOptionSync(id: id, key: key));
 }

@@ -897,6 +897,24 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                       });
                     },
             ),
+          if (isIOS)
+            SettingsTile.switchTile(
+              title: Text(translate('Record P2P diagnostics')),
+              initialValue: recordIosP2pDiagnostics,
+              onToggle: (value) async {
+                await bind.mainSetLocalOption(
+                    key: kOptionRecordP2pDiagnostics, value: value ? 'Y' : 'N');
+                recordIosP2pDiagnostics = bind.mainGetLocalOption(
+                        key: kOptionRecordP2pDiagnostics) ==
+                    'Y';
+                if (!recordIosP2pDiagnostics) {
+                  gFFI.imageModel.imageReady.reset();
+                  gFFI.qualityMonitorModel.lastVideoSample = null;
+                  gFFI.qualityMonitorModel.lastDelaySample = null;
+                }
+                if (mounted) setState(() {});
+              },
+            ),
           SettingsTile(
               title: Text(translate('Language')),
               leading: Icon(Icons.translate),

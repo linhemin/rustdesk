@@ -182,6 +182,7 @@ const String kOptionEnableIpv6Punch = "enable-ipv6-punch";
 const String kOptionAllowSyncClipboardBetweenSessions =
     "allow-sync-clipboard-between-sessions";
 const String kOptionEnableWebrtc = "enable-webrtc";
+const String kOptionRecordP2pDiagnostics = "record-p2p-diagnostics";
 const String kOptionRelayFallbackDelay = "relay-fallback-delay";
 const String kOptionEnableTrustedDevices = "enable-trusted-devices";
 const String kOptionTrustedDeviceExpiration = "trusted-device-expiration-days";

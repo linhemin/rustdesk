@@ -831,5 +831,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Forever", "永久"),
         ("Copy P2P diagnostics", "复制 P2P 诊断"),
         ("Connect to a peer first, then try again in a minute.", "请先连接远端设备，一分钟后再试。"),
+        ("Record P2P diagnostics", "记录 P2P 诊断"),
     ].iter().cloned().collect();
 }

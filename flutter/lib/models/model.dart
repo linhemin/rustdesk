@@ -249,11 +249,15 @@ class FfiModel with ChangeNotifier {
   bool get keyboard => _permissions['keyboard'] != false;
 
   clear() {
+    final hadConnection = _direct != null;
     _pi = PeerInfo();
     lastUserDisplay = null;
     _cancelPendingMonitorRestore();
     _secure = null;
     _direct = null;
+    if (isMobile && hadConnection) {
+      parent.target?.qualityMonitorModel.connectionTypeChanged();
+    }
     _inputBlocked = false;
     _timer?.cancel();
     _timer = null;
@@ -267,11 +271,17 @@ class FfiModel with ChangeNotifier {
 
   setConnectionType(
       String peerId, bool secure, bool direct, String streamType) {
+    final changed = _secure != secure ||
+        _direct != direct ||
+        cachedPeerData.streamType != streamType;
     cachedPeerData.secure = secure;
     cachedPeerData.direct = direct;
     cachedPeerData.streamType = streamType;
     _secure = secure;
     _direct = direct;
+    if (isMobile && changed) {
+      parent.target?.qualityMonitorModel.connectionTypeChanged();
+    }
     try {
       var connectionType = ConnectionTypeState.find(peerId);
       connectionType.setSecure(secure);
@@ -1994,7 +2004,7 @@ class ImageModel with ChangeNotifier {
 
   decodeAndUpdate(int display, Uint8List rgba) async {
     final pid = parent.target?.id;
-    final upload = isIOS ? (Stopwatch()..start()) : null;
+    final upload = recordIosP2pDiagnostics ? (Stopwatch()..start()) : null;
     final rect = parent.target?.ffiModel.pi.getDisplayRect(display);
     final image = await img.decodeImageFromPixels(
       rgba,
@@ -2010,7 +2020,10 @@ class ImageModel with ChangeNotifier {
     }
     final uploadUs = upload?.elapsedMicroseconds;
     await update(image);
-    if (uploadUs != null && image != null && parent.target?.id == pid) {
+    if (recordIosP2pDiagnostics &&
+        uploadUs != null &&
+        image != null &&
+        parent.target?.id == pid) {
       imageReady.add(DateTime.now(), uploadUs);
     }
   }
@@ -3944,6 +3957,28 @@ class QualityMonitorModel with ChangeNotifier {
     return ffiModel.direct == false ? '$streamType (TURN)' : streamType;
   }
 
+  String? get mobileConnection {
+    if (!isMobile) return null;
+    final model = parent.target?.ffiModel;
+    final direct = model?.direct;
+    if (model == null || direct == null) return null;
+    final connection =
+        translate(direct ? 'Direct Connection' : 'Relay Connection');
+    final transport = switch (model.cachedPeerData.streamType) {
+      'WebRTC' => direct ? 'WebRTC' : 'WebRTC / TURN',
+      'UDP' => 'KCP / UDP',
+      'IPv6' => 'KCP / IPv6',
+      'Relay' => 'TCP',
+      '' => null,
+      final transport => transport,
+    };
+    return transport == null ? connection : '$connection · $transport';
+  }
+
+  void connectionTypeChanged() {
+    if (_show) notifyListeners();
+  }
+
   checkShowQualityMonitor(SessionID sessionId) async {
     final show = await bind.sessionGetToggleOption(
             sessionId: sessionId, arg: 'show-quality-monitor') ==
@@ -3960,7 +3995,7 @@ class QualityMonitorModel with ChangeNotifier {
         _data.speed = evt['speed'];
       }
       if (evt.containsKey('fps') && (evt['fps'] as String).isNotEmpty) {
-        lastVideoSample = DateTime.now();
+        if (recordIosP2pDiagnostics) lastVideoSample = DateTime.now();
         final fps = jsonDecode(evt['fps']) as Map<String, dynamic>;
         final pi = parent.target?.ffiModel.pi;
         if (pi != null) {
@@ -3982,7 +4017,7 @@ class QualityMonitorModel with ChangeNotifier {
         }
       }
       if (evt.containsKey('delay') && (evt['delay'] as String).isNotEmpty) {
-        lastDelaySample = DateTime.now();
+        if (recordIosP2pDiagnostics) lastDelaySample = DateTime.now();
         _data.delay = evt['delay'];
       }
       if (evt.containsKey('target_bitrate') &&

@@ -825,10 +825,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   }
 
   Future<void> _copyP2pDiagnostics() async {
+    if (!recordIosP2pDiagnostics) return;
     try {
       final documents = await getApplicationDocumentsDirectory();
       final report = await readIosP2pDiagnostics(documents, _sessionOpened);
-      if (!mounted) return;
+      if (!mounted || !recordIosP2pDiagnostics) return;
       if (report == null) {
         showToast(translate('Waiting'));
         return;
@@ -854,7 +855,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final x = 120.0;
     final y = size.height;
     final mobileActionMenus = [
-      if (isIOS)
+      if (isIOS && recordIosP2pDiagnostics)
         TTextMenu(
           child: Text(translate('Copy P2P diagnostics')),
           trailingIcon: const Icon(Icons.content_copy),
