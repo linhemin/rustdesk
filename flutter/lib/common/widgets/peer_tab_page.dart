@@ -42,6 +42,9 @@ EdgeInsets? _menuPadding() {
   return (isDesktop || isWebDesktop) ? kDesktopMenuPadding : null;
 }
 
+bool _usesIPhoneToolbar(BuildContext context) =>
+    !isWeb && Theme.of(context).platform == TargetPlatform.iOS;
+
 class _PeerTabPageState extends State<PeerTabPage>
     with SingleTickerProviderStateMixin {
   final List<_TabEntry> entries = [
@@ -102,7 +105,7 @@ class _PeerTabPageState extends State<PeerTabPage>
   @override
   Widget build(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
-    final iPhone = !isWeb && Theme.of(context).platform == TargetPlatform.iOS;
+    final iPhone = _usesIPhoneToolbar(context);
     Widget selectionWrap(Widget widget) {
       return model.multiSelectionMode ? createMultiSelectionBar(model) : widget;
     }
@@ -339,6 +342,7 @@ class _PeerTabPageState extends State<PeerTabPage>
     return _hoverAction(
       toolTip: translate('Select'),
       context: context,
+      touchTarget: _usesIPhoneToolbar(context),
       onTap: () {
         model.setMultiSelectionMode(true);
         if (isMobile && Navigator.canPop(context)) {
@@ -698,11 +702,13 @@ class _PeerTabPageState extends State<PeerTabPage>
     final model = Provider.of<PeerTabModel>(context);
     final screenWidth = MediaQuery.of(context).size.width;
     final leftIconSize = Theme.of(context).iconTheme.size ?? 24;
-    final leftActionsSize =
-        (leftIconSize + (4 + 4) * 2) * model.visibleEnabledOrderedIndexs.length;
+    final iPhone = _usesIPhoneToolbar(context);
+    final leftActionsSize = iPhone
+        ? 100.0
+        : (leftIconSize + (4 + 4) * 2) * model.visibleEnabledOrderedIndexs.length;
     final availableWidth = screenWidth - 10 * 2 - leftActionsSize - 2 * 2;
     final searchWidth = 120;
-    final otherActionWidth = 18 + 10;
+    final otherActionWidth = iPhone ? 44 + 2 : 18 + 10;
 
     dropDown(List<Widget> menus) {
       final padding = 6.0;
@@ -795,6 +801,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
         : _hoverAction(
             context: context,
             toolTip: translate('Search'),
+            touchTarget: _usesIPhoneToolbar(context),
             padding: const EdgeInsets.only(right: 2),
             onTap: () {
               setState(() {
@@ -1127,6 +1134,7 @@ Widget _hoverAction(
     required String toolTip,
     GestureTapDownCallback? onTapDown,
     RxBool? hoverableWhenfalse,
+    bool touchTarget = false,
     EdgeInsetsGeometry padding = const EdgeInsets.all(4.0)}) {
   final hover = false.obs;
   final deco = BoxDecoration(
@@ -1144,7 +1152,9 @@ Widget _hoverAction(
               onHover: (value) => hover.value = value,
               onTap: onTap,
               onTapDown: onTapDown,
-              child: Container(padding: padding, child: child))),
+              child: touchTarget
+                  ? SizedBox.square(dimension: 44, child: Center(child: child))
+                  : Container(padding: padding, child: child))),
     ),
   );
 }

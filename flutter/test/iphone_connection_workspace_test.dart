@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/peer_tab_page.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/mobile/pages/connection_page.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -17,6 +18,20 @@ void main() {
   setUpAll(() {
     isTest = true;
     platformFFI.setBindingForTesting(_Binding());
+  });
+
+  testWidgets('iPhone device search opens when tapped near the target edge',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 568);
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.iOS),
+        home: const Scaffold(body: Center(child: PeerSearchBar()))));
+    final icon = find.byIcon(Icons.search_rounded);
+    await tester.tapAt(tester.getCenter(icon) - const Offset(20, 20));
+    await tester.pump();
+    expect(find.byType(TextField), findsOneWidget);
   });
 
   testWidgets(

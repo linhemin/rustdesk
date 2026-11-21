@@ -121,6 +121,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         WidgetsBindingObserver {
   late PageController controller;
   late Rx<SettingsTabKey> selectedTab;
+  TabController? _workspaceTabs;
 
   @override
   bool get wantKeepAlive => true;
@@ -143,6 +144,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         int page = controller.page!.toInt();
         if (page < DesktopSettingPage.tabKeys.length) {
           selectedTab.value = DesktopSettingPage.tabKeys[page];
+          _workspaceTabs?.animateTo(page);
         }
       }
     });
@@ -159,6 +161,12 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   @override
   void initState() {
     super.initState();
+    if (usesWorkspaceStyle) {
+      _workspaceTabs = TabController(
+          vsync: this,
+          length: DesktopSettingPage.tabKeys.length,
+          initialIndex: controller.initialPage);
+    }
     WidgetsBinding.instance.addObserver(this);
     _videoConnTimer =
         periodic_immediate(Duration(milliseconds: 1000), () async {
@@ -181,6 +189,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     Get.delete<Rx<SettingsTabKey>>(tag: _kSettingPageTabKeyTag);
     // Get.delete does not dispose a plain ChangeNotifier.
     controller.dispose();
+    _workspaceTabs?.dispose();
     super.dispose();
   }
 
@@ -291,28 +300,33 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                   child: Text(translate('Settings'),
                       style: theme.textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w700))),
-              SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 14),
-                  child: Obx(() => Row(children: [
-                        for (final tab in tabs)
-                          Padding(
-                              padding: const EdgeInsets.only(right: 6),
-                              child: ChoiceChip(
-                                  label: Text(translate(tab.label)),
-                                  avatar: Icon(tab.selected, size: 17),
-                                  selected: selectedTab.value == tab.key,
-                                  selectedColor: theme.colorScheme.primary
-                                      .withOpacity(.14),
-                                  backgroundColor: theme.cardColor,
-                                  onSelected: (_) {
-                                    controller.jumpToPage(DesktopSettingPage
-                                        .tabKeys
-                                        .indexOf(tab.key));
-                                    selectedTab.value = tab.key;
-                                  })),
-                      ]))),
-              const Divider(height: 12),
+              TabBar(
+                  controller: _workspaceTabs,
+                  isScrollable: true,
+                  tabAlignment: TabAlignment.start,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                  labelColor: theme.colorScheme.primary,
+                  unselectedLabelColor: theme.hintColor,
+                  labelStyle: theme.textTheme.labelLarge
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                  unselectedLabelStyle: theme.textTheme.labelLarge
+                      ?.copyWith(fontWeight: FontWeight.w500),
+                  indicatorSize: TabBarIndicatorSize.tab,
+                  indicator: UnderlineTabIndicator(
+                      borderSide:
+                          BorderSide(color: theme.colorScheme.primary, width: 3)),
+                  dividerColor: theme.dividerColor,
+                  onTap: controller.jumpToPage,
+                  tabs: [
+                    for (final tab in tabs)
+                      Tab(
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(tab.unselected, size: 17),
+                        const SizedBox(width: 6),
+                        Text(translate(tab.label)),
+                      ])),
+                  ]),
               Expanded(
                   child: PageView(
                       controller: controller,
@@ -551,17 +565,35 @@ class _GeneralState extends State<_General> {
         return const Offstage();
       }
 
+      Future<void> toggleService() async {
+        serviceBtnEnabled.value = false;
+        await start_service(serviceStop.value);
+        Future.delayed(const Duration(seconds: 1), () {
+          serviceBtnEnabled.value = true;
+        });
+      }
+
+      final label = serviceStop.value ? 'Start' : 'Stop';
+      if (usesWorkspaceStyle) {
+        final theme = Theme.of(context);
+        return _Card(title: 'Service', children: [
+          Padding(
+              padding: const EdgeInsetsDirectional.only(start: _kContentHMargin),
+              child: Row(children: [
+                Icon(Icons.power_settings_new_rounded,
+                    size: 18, color: theme.hintColor),
+                const SizedBox(width: 8),
+                Expanded(
+                    child: Text(translate(serviceStop.value ? 'Off' : 'On'),
+                        style: theme.textTheme.bodyMedium)),
+                OutlinedButton(
+                    onPressed: serviceBtnEnabled.value ? toggleService : null,
+                    child: Text(translate(label))),
+              ]))
+        ]);
+      }
       return _Card(title: 'Service', children: [
-        _Button(serviceStop.value ? 'Start' : 'Stop', () {
-          () async {
-            serviceBtnEnabled.value = false;
-            await start_service(serviceStop.value);
-            // enable the button after 1 second
-            Future.delayed(const Duration(seconds: 1), () {
-              serviceBtnEnabled.value = true;
-            });
-          }();
-        }, enabled: serviceBtnEnabled.value)
+        _Button(label, toggleService, enabled: serviceBtnEnabled.value)
       ]);
     });
   }
