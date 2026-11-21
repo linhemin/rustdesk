@@ -21,7 +21,9 @@ fn safe_snapshot(text: &str) -> bool {
         integrityMissing integrityInvalid candidateFailed accepted udpResponse unknownRemote \
         unknownTransaction wrongEndpoint noPair udpGather matchedResponse udpNat64 sourceDrop bindingRequestDrop \
         bindingRequestHeader knownSource unlistedSource udpMapping sockets stable portChanged \
-        addressChanged insufficient alternateTested alternateChanged orderedMappings constantStep irregular";
+        addressChanged insufficient alternateTested alternateChanged orderedMappings constantStep irregular \
+        udpFullSeed nativeIpv4 nat64 bindFailed sent sendFailed invalidReply mappingRejected verified \
+        udpPunchMagic requests";
     if text.is_empty()
         || text.len() > MAX_SNAPSHOT
         || !text
@@ -66,6 +68,15 @@ struct History(VecDeque<(u64, String)>);
 // READY carries only bounded anonymous counts for this attempt. Keep a missing peer READY
 // distinguishable from a READY that actually reported zero measured sockets.
 fn append_punch_status(out: &mut String, status: &crate::live_direct::PunchStatus) {
+    if let Some((nats, limits, window_ms)) = status.plan {
+        let labels = ["EIM", "linear", "random", "unknown"];
+        let _ = writeln!(
+            out,
+            "fullPlan nat=[{},{}] limits={limits:?} windowMs={window_ms}",
+            labels[usize::from(nats[0])],
+            labels[usize::from(nats[1])],
+        );
+    }
     use std::fmt::Write;
     if let Some(full) = status.full {
         let _ = writeln!(out, "expandedPorts local {full}");
@@ -516,6 +527,7 @@ mod tests {
         let valid = "ice=checking dtls=new sctp=connecting pc=connecting\nselected=none\npublic4 local=[0, 1, 0, 0, 0] remote=[0, 1, 0, 0, 0]\nlocal=public4->remote=public4 pairs=12 traffic=[753, 0, 0, 0, 0, 0]\n";
         assert!(safe_snapshot(valid));
         assert!(safe_snapshot("orderedMappings [stable,constantStep,irregular,insufficient]=[0,2,1,4]\n"));
+        assert!(safe_snapshot("udpFullSeed [nativeIpv4,nat64,bindFailed,sent,sendFailed,timeout,invalidReply,mappingRejected,verified]=[1,1,0,3,0,1,0,0,1]\n"));
         assert!(safe_snapshot(
             "udpCandidate [readers,reads,bindingRequest,bindingRequestHeader]=[2,4,3,4]\nudpRequest [usernameInvalid,knownSource,unlistedSource]=[1,2,1]\n"
         ));

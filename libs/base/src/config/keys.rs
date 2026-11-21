@@ -135,6 +135,7 @@ pub const OPTION_ENABLE_IPV6_PUNCH: &str = "enable-ipv6-punch";
 pub const OPTION_ENABLE_PORT_FORWARD_MUX: &str = "enable-port-forward-mux";
 pub const OPTION_ENABLE_WEBRTC: &str = "enable-webrtc";
 pub const OPTION_RECORD_P2P_DIAGNOSTICS: &str = "record-p2p-diagnostics";
+pub const OPTION_P2P_TCP53_TARGET: &str = "p2p-tcp53-target";
 pub const OPTION_RELAY_FALLBACK_DELAY: &str = "relay-fallback-delay";
 pub const OPTION_ALLOW_KCP_CC: &str = "allow-kcp-congestion-control";
 pub const OPTION_HIDE_USERNAME_ON_CARD: &str = "hide-username-on-card";

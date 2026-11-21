@@ -18,6 +18,11 @@ pub(crate) struct FullSample {
 }
 
 impl FullSample {
+    #[cfg(target_os = "ios")]
+    pub(in crate::live_direct) fn feedback_counts(self) -> [u32; 3] {
+        [self.local, self.peer, self.written].map(u32::from)
+    }
+
     fn bytes(self) -> [u8; 9] {
         let mut data = [0; 9];
         for (slot, value) in data.chunks_exact_mut(2).zip([

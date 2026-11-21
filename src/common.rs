@@ -2311,23 +2311,29 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
     false
 }
 
+#[derive(Default)]
+struct SignedRendezvousPolicy {
+    session_direct: bool,
+    p2p_feedback: bool,
+}
+
 async fn secure_tcp_impl(
     conn: &mut Stream,
     key: &str,
     required: bool,
     log_on_success: bool,
-) -> ResultType<bool> {
+) -> ResultType<SignedRendezvousPolicy> {
     // Skip additional encryption when using WebSocket connections (wss://)
     // as WebSocket Secure (wss://) already provides transport layer encryption.
     // This doesn't affect the end-to-end encryption between clients,
     // it only avoids redundant encryption between client and server.
     if use_ws() {
-        return Ok(false);
+        return Ok(SignedRendezvousPolicy::default());
     }
     match key_exchange(conn, key, log_on_success).await? {
         Some(permission) => Ok(permission),
         None if required => bail!("the rendezvous server did not complete the key exchange"),
-        None => Ok(false),
+        None => Ok(SignedRendezvousPolicy::default()),
     }
 }
 
@@ -2336,7 +2342,7 @@ async fn key_exchange(
     conn: &mut Stream,
     key: &str,
     log_on_success: bool,
-) -> ResultType<Option<bool>> {
+) -> ResultType<Option<SignedRendezvousPolicy>> {
     let rs_pk = get_rs_pk(key);
     let Some(rs_pk) = rs_pk else {
         bail!("Handshake failed: invalid public key from rendezvous server");
@@ -2357,7 +2363,8 @@ async fn key_exchange(
                         // X25519 ignores that bit, so old clients use the key unchanged; keep
                         // the bytes as signed, since the transcript and KxParams carry them so.
                         let mut signed_observers = Vec::new();
-                        let signed_direct_permission = if their_pk_b[31] & 0x80 != 0
+                        let mut policy = SignedRendezvousPolicy::default();
+                        if their_pk_b[31] & 0x80 != 0
                             || !ex.signed_params.is_empty()
                         {
                             let params = sign::verify(&ex.signed_params, &rs_pk)
@@ -2374,10 +2381,9 @@ async fn key_exchange(
                                 bail!("Key exchange version or public key does not match its signature");
                             }
                             signed_observers = params.udp_mapping_observers;
-                            params.allow_session_direct
-                        } else {
-                            false
-                        };
+                            policy.session_direct = params.allow_session_direct;
+                            policy.p2p_feedback = params.allow_p2p_feedback;
+                        }
                         let (asymmetric_value, symmetric_value, session_key) =
                             create_symmetric_key_msg(their_pk_b);
                         let picked = hbb_common::tcp::kx_version_for(ex.version);
@@ -2398,8 +2404,11 @@ async fn key_exchange(
                                 picked,
                             },
                         )?;
+                        if picked < 1 || !conn.is_secured() {
+                            policy = SignedRendezvousPolicy::default();
+                        }
                         #[cfg(any(target_os = "windows", target_os = "ios"))]
-                        if signed_direct_permission && picked >= 1 && conn.is_secured() {
+                        if policy.session_direct {
                             if let Stream::Tcp(socket) = conn {
                                 socket.stage_signed_observers(key, signed_observers);
                             }
@@ -2407,9 +2416,7 @@ async fn key_exchange(
                         if log_on_success {
                             log::info!("Connection secured");
                         }
-                        return Ok(Some(
-                            signed_direct_permission && picked >= 1 && conn.is_secured(),
-                        ));
+                        return Ok(Some(policy));
                     }
                     _ => {}
                 }
@@ -2428,7 +2435,12 @@ pub(crate) async fn secure_tcp_with_direct_permission(
     key: &str,
     required: bool,
 ) -> ResultType<bool> {
-    secure_tcp_impl(conn, key, required, true).await
+    secure_tcp_impl(conn, key, required, true).await.map(|policy| policy.session_direct)
+}
+
+#[cfg(target_os = "ios")]
+pub(crate) async fn secure_tcp_with_feedback_permission(conn: &mut Stream, key: &str) -> ResultType<bool> {
+    secure_tcp_impl(conn, key, true, false).await.map(|policy| policy.p2p_feedback)
 }
 
 pub(crate) use crate::p2p::observer_policy::{

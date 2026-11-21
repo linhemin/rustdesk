@@ -74,6 +74,7 @@ const LITE_TIMEOUT: u64 = 12_000;
 const LITE_IDLE_WINDOW: Duration = Duration::from_secs(5);
 const CHECK_STAGE: &str = "ICE/DTLS/data-channel checks";
 const EMPTY_POOL_STAGE: &str = "full UDP port pool exhausted";
+const TCP53_STAGE: &str = "configured TCP 53 gate refused full punching";
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
 static FULL_PORT_POOLS: Semaphore = Semaphore::const_new(2);
 #[cfg(test)]
@@ -183,12 +184,12 @@ impl RetrySchedule {
             self.next_profile = Some(OfferMode::Full);
             return Duration::from_millis(250);
         }
-        let empty_pool = mode == OfferMode::Full && stage == EMPTY_POOL_STAGE;
-        self.next_profile = (mode == OfferMode::Full && !empty_pool).then_some(OfferMode::Timed);
+        let skip_legacy = matches!(stage, EMPTY_POOL_STAGE | TCP53_STAGE);
+        self.next_profile = (mode == OfferMode::Full && !skip_legacy).then_some(OfferMode::Timed);
         let delay = self.delay_seconds;
         self.delay_seconds = (delay * 2).min(30);
         // Answerers rate-limit replacement offers for three seconds after accepting one.
-        Duration::from_secs(if empty_pool { delay.max(3) } else { delay })
+        Duration::from_secs(if skip_legacy { delay.max(3) } else { delay })
     }
 }
 
@@ -611,6 +612,7 @@ impl PunchIo {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PunchStatus {
+    pub(crate) plan: Option<([u8; 2], [u16; 2], u32)>,
     pub(crate) full: Option<timed::FullSample>,
     pub(crate) full_peer: Option<timed::FullSample>,
     pub(crate) group_local: Option<timed::GroupSample>,
@@ -898,6 +900,17 @@ fn make_attempt(
     let events = events.clone();
     let timed_job = timed_rx.zip(punch.as_ref().map(|p| p.status.clone()));
     let full_status = punch.as_ref().filter(|_| plan.is_some()).map(|p| p.status.subscribe());
+    if let (Some(plan), Some(punch)) = (plan, &punch) {
+        punch.status.send_modify(|s| {
+            s.plan = Some((
+                plan.header(),
+                [plan.capacity(true), plan.capacity(false)],
+                plan.window().as_millis() as u32,
+            ));
+        });
+    }
+    #[cfg(target_os = "ios")]
+    let feedback = full_status.clone();
     let io_requested = punch
         .as_ref()
         .filter(|_| !offerer)
@@ -913,8 +926,33 @@ fn make_attempt(
         observation.set_punch_status(control.status.subscribe());
     }
     let task = tokio::spawn(async move {
+        #[cfg(target_os = "ios")]
+        let started = Instant::now();
+        #[cfg(target_os = "ios")]
+        let mut observer_counts = Vec::new();
         let mut stage = "capacity";
         let outcome: ResultType<Rtc> = async {
+            if offerer && plan.is_some() {
+                let target = Config::get_option(base::config::keys::OPTION_P2P_TCP53_TARGET);
+                if !target.is_empty() {
+                    stage = TCP53_STAGE;
+                    #[cfg(target_os = "ios")]
+                    if let Some(observation) = observation.as_mut() {
+                        observation.set_stage(stage);
+                    }
+                    let ip = target.parse::<IpAddr>().context("TCP 53 check requires a public DNS IP")?;
+                    let public = match ip {
+                        IpAddr::V4(ip) => WebRTCStream::valid_expanded_endpoint(std::net::SocketAddrV4::new(ip, 53)),
+                        IpAddr::V6(ip) => ip.segments()[0] & 0xe000 == 0x2000,
+                    };
+                    if !public {
+                        bail!("TCP 53 check requires a public DNS IP");
+                    }
+                    timeout(Duration::from_millis(800), tokio::net::TcpStream::connect((ip, 53)))
+                        .await.context("TCP 53 probe timed out")??;
+                    stage = "capacity";
+                }
+            }
             let _slot = NEGOTIATIONS.try_acquire()?;
             let _pool = plan.map(|_| FULL_PORT_POOLS.try_acquire()).transpose()?;
             if let Some(plan) = plan.filter(|_| id <= 3 || id.is_power_of_two()) {
@@ -1094,6 +1132,14 @@ fn make_attempt(
             if let Some(observation) = observation.as_mut() {
                 observation.sample_now(&rtc.0);
             }
+            #[cfg(target_os = "ios")]
+            if plan.is_some() && offerer
+                && crate::get_local_option(base::config::keys::OPTION_RECORD_P2P_DIAGNOSTICS) == "Y"
+            {
+                if let Some(counts) = rtc.0.expanded_seed_counters().await {
+                    observer_counts = counts.to_vec();
+                }
+            }
             connected?;
             stage = "verify direct selected pair";
             if rtc.0.is_relayed().await != Some(false) {
@@ -1113,6 +1159,28 @@ fn make_attempt(
         #[cfg(target_os = "ios")]
         if let Some(observation) = observation.as_mut() {
             observation.finish(stage, outcome.as_ref().err());
+        }
+        #[cfg(target_os = "ios")]
+        if let Some(status) = feedback.filter(|_| offerer && (id <= 3 || id.is_power_of_two() || outcome.is_ok())) {
+            let [local_candidates, peer_candidates, probes_written] =
+                status.borrow().full.unwrap_or_default().feedback_counts();
+            let outcome = match (outcome.is_ok(), stage) {
+                (true, _) => 1,
+                (_, EMPTY_POOL_STAGE) => 2,
+                (_, TCP53_STAGE) => 4,
+                _ => 3,
+            };
+            crate::p2p::feedback::submit(hbb_common::rendezvous_proto::P2pFeedback {
+                revision: 1,
+                phase: 1,
+                outcome,
+                elapsed_ms: started.elapsed().as_millis().min(90_000) as u32,
+                local_candidates,
+                peer_candidates,
+                probes_written,
+                observer_counts,
+                ..Default::default()
+            });
         }
         let _ = events
             .send(SetupEvent::Finished(id, outcome.ok(), stage))
@@ -1265,6 +1333,13 @@ mod tests {
         assert!(!ice_needs_confirmed_path(Some([28, 24, 24, 24, 0, 1]), false));
         assert!(!ice_needs_confirmed_path(Some([28, 24, 24, 24, 0, 0]), true));
         assert!(!ice_needs_confirmed_path(None, false));
+    }
+
+    #[test]
+    fn tcp53_refusal_does_not_fall_through_to_legacy_full_attempt() {
+        let mut retries = RetrySchedule::default();
+        assert!(retries.failed(OfferMode::Full, TCP53_STAGE) >= Duration::from_secs(3));
+        assert!(retries.next(OfferMode::Full, 3) == OfferMode::Lite);
     }
 
     #[test]

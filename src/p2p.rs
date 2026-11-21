@@ -9,6 +9,8 @@ pub(crate) mod udp_mapping;
 
 #[cfg(target_os = "ios")]
 pub(crate) mod ios_path;
+#[cfg(target_os = "ios")]
+pub(crate) mod feedback;
 
 #[cfg(target_os = "windows")]
 #[path = "p2p/stun.rs"]
