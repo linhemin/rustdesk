@@ -63,8 +63,9 @@ class _DesktopSettingsCatalogState extends State<DesktopSettingsCatalog> {
 
   @override
   Widget build(BuildContext context) => Theme(
-        data: WorkspaceDesktopStyle.apply(
-            WorkspaceStyle.apply(dark ? ThemeData.dark() : ThemeData())),
+        data: WorkspaceDesktopStyle.apply(WorkspaceStyle.apply(dark
+            ? ThemeData.dark(useMaterial3: false)
+            : ThemeData(useMaterial3: false))),
         child: Builder(
             builder: (context) => Scaffold(
                   appBar: AppBar(
@@ -362,8 +363,9 @@ class _DesktopSettingsCatalogState extends State<DesktopSettingsCatalog> {
 
   void openDialog(int index) {
     // The route is above the local Theme, so explicitly carry its appearance.
-    final theme = WorkspaceDesktopStyle.apply(
-        WorkspaceStyle.apply(dark ? ThemeData.dark() : ThemeData()));
+    final theme = WorkspaceDesktopStyle.apply(WorkspaceStyle.apply(dark
+        ? ThemeData.dark(useMaterial3: false)
+        : ThemeData(useMaterial3: false)));
     showDialog<void>(
         context: context,
         builder: (context) =>
