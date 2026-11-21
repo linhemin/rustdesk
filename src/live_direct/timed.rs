@@ -26,9 +26,12 @@ pub(super) const GROUP_ALIASES: u8 = 26;
 #[path = "groups.rs"]
 mod groups;
 pub(crate) use groups::GroupSample;
+#[path = "full_plan.rs"]
+mod full_plan;
+pub(super) use full_plan::{Nat, Plan};
 #[path = "full.rs"]
 mod full;
-pub(super) use full::{run_full, FULL_RESULT, FULL_SELECT, MAX_FULL_ENDPOINTS};
+pub(super) use full::{run_full, FULL_HINT, FULL_RESULT, FULL_SELECT, MAX_FULL_ENDPOINTS};
 pub(crate) use full::FullSample;
 const BUDGET: Duration = Duration::from_secs(7);
 
@@ -219,6 +222,7 @@ pub(super) async fn run(
     remote: &mut mpsc::Receiver<String>,
     status: watch::Sender<PunchStatus>,
     grouped: bool,
+    lite: bool,
 ) {
     let mut exchange = Exchange {
         events,
@@ -239,7 +243,7 @@ pub(super) async fn run(
         status.send_modify(|s| s.group_local = Some(report));
         let result = timeout(
             Duration::from_secs(10),
-            exchange.group_checks(pc, controller, remote, &mut held, &mut exact, &mut report),
+            exchange.group_checks(pc, controller, remote, &mut held, &mut exact, &mut report, &status, lite),
         )
         .await;
         status.send_modify(|s| s.group_local = Some(report));

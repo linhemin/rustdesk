@@ -22,7 +22,7 @@ use std::{collections::VecDeque, future::pending, net::IpAddr};
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const PUNCH_CAPABILITY: &str = "rustdesk_live_direct_punch_v1";
-pub(crate) const FULL_CAPABILITY: &str = "rustdesk_lite_full_punch_v1";
+pub(crate) const FULL_CAPABILITY: &str = "rustdesk_lite_full_punch_v2";
 pub(crate) const GROUP_CAPABILITY: &str = "rustdesk_mapped_pair_groups_v1";
 pub(crate) const TIMED_CAPABILITY: &str = "rustdesk_timed_first_pair_v1";
 #[path = "live_direct/timed.rs"]
@@ -70,9 +70,10 @@ const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_FRAMES: usize = 128;
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
 const RTC_TIMEOUT: u64 = 18_000;
-const FULL_TIMEOUT: u64 = 60_000;
+const LITE_TIMEOUT: u64 = 12_000;
 const CHECK_STAGE: &str = "ICE/DTLS/data-channel checks";
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
+static FULL_PORT_POOLS: Semaphore = Semaphore::const_new(2);
 #[cfg(test)]
 static DROP_TEST_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -283,6 +284,9 @@ struct Direct {
     rtc: Rtc,
     since: Instant,
     active: bool,
+    first_sent: Option<Instant>,
+    first_received: Option<Instant>,
+    reported: bool,
 }
 
 struct PendingFrame {
@@ -592,6 +596,10 @@ pub(crate) struct PunchStatus {
     pub(crate) full_peer: Option<timed::FullSample>,
     pub(crate) group_local: Option<timed::GroupSample>,
     pub(crate) group_peer: Option<timed::GroupSample>,
+    pub(crate) local_profiles: Option<[u8; 4]>,
+    local_linear_step: Option<u16>,
+    local_primary_profile: Option<timed::Nat>,
+    peer_primary_profile: Option<timed::Nat>,
     pub(crate) peer_profiles: Option<[u8; 4]>,
     pub(crate) peer_group_aliases: Option<u8>,
     pub(crate) timed_local: Option<timed::Sample>,
@@ -801,9 +809,12 @@ fn make_attempt(
     id: u64,
     offer: Option<String>,
     mode: OfferMode,
+    plan: Option<timed::Plan>,
+    linear_step: Option<u16>,
 ) -> Attempt {
     let offerer = offer.is_none();
-    let rtc_timeout = if mode == OfferMode::Full { FULL_TIMEOUT } else { RTC_TIMEOUT };
+    let base_timeout = if mode == OfferMode::Lite { LITE_TIMEOUT } else { RTC_TIMEOUT };
+    let rtc_timeout = plan.map_or(base_timeout, |plan| plan.window().as_millis() as u64 + 8_000);
     let trickle = mode != OfferMode::Complete;
     let (timed, timed_rx) = mode.timed().then(|| mpsc::channel(12)).unzip();
     let (punch, coordination) = if mode == OfferMode::Coordinated || mode.timed() {
@@ -835,12 +846,17 @@ fn make_attempt(
         let mut stage = "capacity";
         let outcome: ResultType<Rtc> = async {
             let _slot = NEGOTIATIONS.try_acquire()?;
+            let _pool = plan.map(|_| FULL_PORT_POOLS.try_acquire()).transpose()?;
+            if let Some(plan) = plan.filter(|_| id <= 3 || id.is_power_of_two()) {
+                log::info!("RustDesk full ports attempt {id} {:?}; localBudget={} peerBudget={} windowMs={}",
+                    plan.nats, plan.capacity(offerer), plan.capacity(!offerer), plan.window().as_millis());
+            }
             stage = "create peer connection";
             if mode.timed() && offer.as_ref().is_some_and(|s| !WebRTCStream::endpoint_has_no_candidates(s)) {
                 bail!("Timed ICE requires a candidate-free trickle offer");
             }
             let mut rtc =
-                Rtc(WebRTCStream::new_with_punch_profile(offer.as_deref().unwrap_or(""), false, rtc_timeout, mode.grouped(), mode == OfferMode::Full).await?);
+                Rtc(WebRTCStream::new_with_punch_profile(offer.as_deref().unwrap_or(""), false, rtc_timeout, mode.grouped(), plan.map_or(0, |plan| plan.capacity(offerer))).await?);
             let outbound_first = cfg!(target_os = "windows") && !offerer
                 && mode == OfferMode::Coordinated && id % 2 == 1;
             let (events, _advertisements) = if outbound_first {
@@ -864,8 +880,15 @@ fn make_attempt(
                 bail!("The ICE description exceeded the live signaling limit");
             }
             let kind = if offerer { mode.frame_kind() } else { ANSWER };
+            let full_offer;
+            let offer_bytes = if let Some(plan) = plan.filter(|_| offerer) {
+                full_offer = [plan.header().as_slice(), sdp.as_bytes()].concat();
+                full_offer.as_slice()
+            } else {
+                sdp.as_bytes()
+            };
             events
-                .send(SetupEvent::Send(frame(kind, id, sdp.as_bytes())))
+                .send(SetupEvent::Send(frame(kind, id, offer_bytes)))
                 .await
                 .map_err(|_| hbb_common::anyhow::anyhow!("The session closed"))?;
 
@@ -920,6 +943,18 @@ fn make_attempt(
                 }
                 rtc.0.set_remote_endpoint(&sdp).await?;
             }
+            let (full_job, timed_job) = if plan.is_some() {
+                (timed_job, None)
+            } else {
+                (None, timed_job)
+            };
+            let _full_task = full_job.zip(plan).map(|((control, status), plan)| {
+                let pc = rtc.0.clone();
+                let events = events.clone();
+                SetupTask(tokio::spawn(async move {
+                    timed::run_full(&pc, &events, id, offerer, control, status, plan, linear_step).await;
+                }))
+            });
             // Remote candidates that arrived early remain queued until the peer's SDP is set.
             let (first_candidate, peer_candidate) = oneshot::channel();
             let _receive_ice = if trickle {
@@ -928,11 +963,7 @@ fn make_attempt(
                 Some(SetupTask(tokio::spawn(async move {
                     let mut first_candidate = Some(first_candidate);
                     if let Some((control, status)) = timed_job {
-                        if mode == OfferMode::Full {
-                            timed::run_full(&pc, &events, id, offerer, control, &mut remote_candidates, status).await;
-                        } else {
-                            timed::run(&pc, &events, id, offerer, control, &mut remote_candidates, status, mode.grouped()).await;
-                        }
+                        timed::run(&pc, &events, id, offerer, control, &mut remote_candidates, status, mode.grouped(), mode == OfferMode::Lite).await;
                     }
                     while let Some(candidate) = remote_candidates.recv().await {
                         if pc.add_remote_ice_candidate(&candidate).await.is_err() {
@@ -982,6 +1013,9 @@ fn make_attempt(
             }
             // The authenticated relay carried both DTLS fingerprints. DTLS has verified that
             // each received certificate matches the fingerprint we got on that session.
+            if plan.is_some() {
+                rtc.0.release_unused_expanded_ports().await;
+            }
             rtc.0.set_key(secretbox::gen_key());
             rtc.0.set_send_timeout(1_500);
             stage = "direct channel ready";
@@ -1469,8 +1503,11 @@ async fn run(
     let offerer = offer_mode.is_some();
     let mut retries = RetrySchedule::default();
     let mut accepted_lite = None;
+    let mut full_plan = None;
+    let mut last_lite_step = None;
     let mut next_attempt = Instant::now() + Duration::from_secs(1);
     let mut direct: Option<Direct> = None;
+    let mut first_relay_data = None;
     let mut seq = Sequence::default();
     let mut message: Option<BytesMut> = None;
     let mut tick = interval(Duration::from_millis(500));
@@ -1483,19 +1520,34 @@ async fn run(
                 let Some(packet) = from_relay else { break };
                 match decode(&packet) {
                     Some((kind @ (DATA | DATA_MORE), number, payload)) => {
+                        first_relay_data.get_or_insert_with(Instant::now);
                         receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
                     }
                     Some((ACK, number, [])) => seq.acknowledge(number),
                     Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER | LITE_OFFER | FULL_OFFER), number, data))
                         if !offerer && direct.is_none() && number > attempt
-                            && data.len() <= MAX_SDP
+                            && data.len() <= MAX_SDP + usize::from(kind == FULL_OFFER) * 2
                             && if kind == FULL_OFFER {
                                 accepted_lite == number.checked_sub(1) && WebRTCStream::has_expanded_udp_observer()
                             } else {
                                 Instant::now() >= next_attempt
                             } =>
                     {
+                        let (plan, data) = if kind == FULL_OFFER {
+                            let Some((plan, data)) = timed::Plan::decode(data) else { continue };
+                            (Some(plan), data)
+                        } else {
+                            (None, data)
+                        };
                         if let Ok(sdp) = std::str::from_utf8(data) {
+                            let step = if kind == FULL_OFFER {
+                                setup.as_ref().and_then(|a| a.punch.as_ref())
+                                    .and_then(|p| p.status.borrow().local_linear_step)
+                                    .or(last_lite_step)
+                            } else {
+                                last_lite_step = None;
+                                None
+                            };
                             accepted_lite = (kind == LITE_OFFER).then_some(number);
                             attempt = number;
                             next_attempt = Instant::now() + Duration::from_secs(3);
@@ -1508,7 +1560,7 @@ async fn run(
                                 TRICKLE_OFFER => OfferMode::Trickle,
                                 _ => OfferMode::Complete,
                             };
-                            setup = Some(make_attempt(&event_tx, number, Some(sdp.to_owned()), mode));
+                            setup = Some(make_attempt(&event_tx, number, Some(sdp.to_owned()), mode, plan, step));
                         }
                     }
                     Some((ANSWER, number, data))
@@ -1530,10 +1582,15 @@ async fn run(
                             p.status.send_modify(|s| s.peer_group_aliases = Some(*mask));
                         }
                     }
-                    Some((timed::PROFILE, number, data)) if number == attempt && data.len() == 4 => {
-                        if let Some(p) = setup.as_ref().filter(|a| a.mode.grouped()).and_then(|a| a.punch.as_ref()) {
-                            if let Ok(counts) = <[u8; 4]>::try_from(data) {
-                                p.status.send_modify(|s| s.peer_profiles = Some(counts));
+                    Some((timed::PROFILE, number, data)) if number == attempt && matches!(data.len(), 4 | 5) => {
+                        if let Some(a) = setup.as_ref().filter(|a| a.mode.grouped()) {
+                            if let (Some(p), Ok(counts)) = (a.punch.as_ref(), <[u8; 4]>::try_from(&data[..4])) {
+                                let primary = data.get(4).copied().filter(|_| a.mode == OfferMode::Lite)
+                                    .and_then(timed::Nat::decode);
+                                p.status.send_modify(|s| {
+                                    s.peer_profiles = Some(counts);
+                                    s.peer_primary_profile = primary;
+                                });
                             }
                         }
                     }
@@ -1547,9 +1604,11 @@ async fn run(
                             p.status.send_modify(|s| s.full_peer = Some(sample));
                         }
                     }
-                    Some((timed::FULL_SELECT, number, data)) if number == attempt && data.len() <= timed::MAX_FULL_ENDPOINTS * 6 => {
+                    Some((kind @ (timed::FULL_SELECT | timed::FULL_HINT), number, data))
+                        if number == attempt && (kind == timed::FULL_HINT && data.len() == 2
+                            || kind == timed::FULL_SELECT && data.len() <= timed::MAX_FULL_ENDPOINTS * 6) => {
                         if let Some(tx) = setup.as_ref().filter(|a| a.mode == OfferMode::Full).and_then(|a| a.timed.as_ref()) {
-                            let _ = tx.try_send((timed::FULL_SELECT, data.to_vec()));
+                            let _ = tx.try_send((kind, data.to_vec()));
                         }
                     }
                     Some((timed::GROUP_SELECT, number, data)) if number == attempt && data.len() <= 21 => {
@@ -1595,7 +1654,13 @@ async fn run(
             } => {
                 if let Some(Ok(packet)) = from_direct {
                     if let Some((kind @ (DATA | DATA_MORE), number, payload)) = decode(&packet) {
+                        let previous = seq.received;
                         receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
+                        if kind == DATA && seq.received > previous {
+                            if let Some(path) = direct.as_mut() {
+                                path.first_received.get_or_insert_with(Instant::now);
+                            }
+                        }
                     }
                 } else {
                     relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
@@ -1623,8 +1688,11 @@ async fn run(
                     seq.track(bytes.clone());
                     if route.rtc.0.send_raw(bytes.to_vec()).await.is_err() {
                         relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
+                    } else if last {
+                        route.first_sent.get_or_insert_with(Instant::now);
                     }
                 } else {
+                    first_relay_data.get_or_insert_with(Instant::now);
                     relay.send(bytes).await?;
                 }
             }
@@ -1659,6 +1727,9 @@ async fn run(
                 }
                 SetupEvent::Finished(id, rtc, stage) if id == attempt && setup.is_some() => {
                     let current = setup.take().unwrap();
+                    if current.mode == OfferMode::Lite {
+                        last_lite_step = current.punch.as_ref().and_then(|p| p.status.borrow().local_linear_step);
+                    }
                     if id <= 3 || id.is_power_of_two() || rtc.is_some() {
                         let side = if offerer { "controller" } else { "controlled" };
                         if current.candidates.is_some() {
@@ -1668,8 +1739,25 @@ async fn run(
                         }
                     }
                     if let Some(rtc) = rtc {
-                        direct = Some(Direct { id, rtc, since: Instant::now(), active: false });
+                        direct = Some(Direct {
+                            id, rtc, since: Instant::now(), active: false,
+                            first_sent: None, first_received: None, reported: false,
+                        });
                     } else if offerer {
+                        if current.mode == OfferMode::Lite && stage == CHECK_STAGE {
+                            let reported = current.punch.as_ref().map(|p| *p.status.borrow());
+                            let measured = |primary, counts| match primary {
+                                Some(nat) if nat != timed::Nat::Unknown => nat,
+                                _ => timed::Nat::measured(counts),
+                            };
+                            full_plan = Some(timed::Plan::new(reported.map_or(
+                                [timed::Nat::Unknown; 2],
+                                |s| [
+                                    measured(s.local_primary_profile, s.local_profiles),
+                                    measured(s.peer_primary_profile, s.peer_profiles),
+                                ],
+                            )));
+                        }
                         next_attempt = Instant::now() + retries.failed(current.mode, stage);
                     }
                 }
@@ -1690,7 +1778,8 @@ async fn run(
                         attempt += 1;
                         // Only an authenticated peer advertising the new capability can enter full mode.
                         let mode = retries.next(mode, attempt);
-                        setup = Some(make_attempt(&event_tx, attempt, None, mode));
+                        let plan = if mode == OfferMode::Full { full_plan.take() } else { None };
+                        setup = Some(make_attempt(&event_tx, attempt, None, mode, plan, last_lite_step));
                     }
                 }
             }
@@ -1700,7 +1789,15 @@ async fn run(
                 direct.active = true;
                 path.send_replace(true);
                 retries = RetrySchedule::default();
-                log::info!("Active RustDesk session switched to direct WebRTC");
+                let relay_ms = first_relay_data.map(|start| start.elapsed().as_millis());
+                log::info!("Active RustDesk session switched to direct WebRTC; relayDataToSwitchMs={relay_ms:?} drainMs={}", direct.since.elapsed().as_millis());
+            }
+            if direct.active && !direct.reported {
+                if let (Some(start), Some(tx), Some(rx)) = (first_relay_data, direct.first_sent, direct.first_received) {
+                    direct.reported = true;
+                    log::info!("RustDesk direct application data observed; relayDataToSendMs={} relayDataToReceiveMs={}",
+                        tx.saturating_duration_since(start).as_millis(), rx.saturating_duration_since(start).as_millis());
+                }
             }
         }
     }

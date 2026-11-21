@@ -138,6 +138,8 @@ impl Exchange<'_> {
         held: &mut Vec<String>,
         exact: &mut Vec<(String, SocketAddrV4)>,
         report: &mut GroupSample,
+        status: &watch::Sender<PunchStatus>,
+        lite: bool,
     ) -> ResultType<Sample> {
         let local = loop {
             let local = pc.grouped_public_candidates().await;
@@ -161,7 +163,18 @@ impl Exchange<'_> {
             }
         }
         if let Some(counts) = pc.ordered_mapping_profiles().await {
-            self.send(PROFILE, &counts).await?;
+            if lite {
+                let (kind, step) = pc.selected_mapping_profile(&local[0].0).await.unwrap_or((3, None));
+                status.send_modify(|s| {
+                    s.local_profiles = Some(counts);
+                    s.local_linear_step = step;
+                    s.local_primary_profile = Nat::decode(kind);
+                });
+                let [stable, linear, random, unknown] = counts;
+                self.send(PROFILE, &[stable, linear, random, unknown, kind]).await?;
+            } else {
+                self.send(PROFILE, &counts).await?;
+            }
         }
         let mut wire = Vec::new();
         for (_, addr, rank) in &local {

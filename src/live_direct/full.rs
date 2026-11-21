@@ -1,39 +1,46 @@
-//! One paced pass over fresh sockets observed by the session's signed observer.
+//! Paced, directional checks from fresh ports while ordinary ICE remains active.
 use super::*;
 use std::collections::HashSet;
 
 pub(in crate::live_direct) const FULL_SELECT: u8 = 29;
 pub(in crate::live_direct) const FULL_RESULT: u8 = 30;
-pub(in crate::live_direct) const MAX_FULL_ENDPOINTS: usize = 32;
+pub(in crate::live_direct) const FULL_HINT: u8 = 31;
+pub(in crate::live_direct) const MAX_FULL_ENDPOINTS: usize = 500;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct FullSample {
-    local: u8,
-    peer: u8,
-    written: u8,
-    ingress: Option<u8>,
-    released: bool,
+    local: u16,
+    peer: u16,
+    written: u16,
+    ingress: Option<u16>,
+    finished: bool,
 }
 
 impl FullSample {
-    fn bytes(self) -> [u8; 5] {
-        [
+    fn bytes(self) -> [u8; 9] {
+        let mut data = [0; 9];
+        for (slot, value) in data.chunks_exact_mut(2).zip([
             self.local,
             self.peer,
             self.written,
-            self.ingress.unwrap_or(255),
-            u8::from(self.released),
-        ]
+            self.ingress.unwrap_or(u16::MAX),
+        ]) {
+            slot.copy_from_slice(&value.to_be_bytes());
+        }
+        data[8] = u8::from(self.finished);
+        data
     }
 
     pub(in crate::live_direct) fn decode(data: &[u8]) -> Option<Self> {
-        let &[local, peer, written, ingress, released] = <&[u8; 5]>::try_from(data).ok()?;
-        let limit = local.max(peer);
-        if limit as usize > MAX_FULL_ENDPOINTS
-            || written > limit
+        let [a, b, c, d, e, f, g, h, finished] = *<&[u8; 9]>::try_from(data).ok()?;
+        let local = u16::from_be_bytes([a, b]);
+        let peer = u16::from_be_bytes([c, d]);
+        let written = u16::from_be_bytes([e, f]);
+        let ingress = u16::from_be_bytes([g, h]);
+        if usize::from(local.max(peer)) > MAX_FULL_ENDPOINTS
             || ((local == 0 || peer == 0) && written > 0)
-            || (ingress != 255 && ingress > written)
-            || released > 1
+            || (ingress != u16::MAX && ingress > written)
+            || finished > 1
         {
             return None;
         }
@@ -41,8 +48,8 @@ impl FullSample {
             local,
             peer,
             written,
-            ingress: (ingress != 255).then_some(ingress),
-            released: released != 0,
+            ingress: (ingress != u16::MAX).then_some(ingress),
+            finished: finished == 1,
         })
     }
 }
@@ -51,8 +58,8 @@ impl fmt::Display for FullSample {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "freshLocal={} freshPeer={} firstWrites={} released={} exactIngress=",
-            self.local, self.peer, self.written, self.released
+            "freshLocal={} freshPeer={} writes={} finished={} exactIngress=",
+            self.local, self.peer, self.written, self.finished,
         )?;
         match self.ingress {
             Some(n) => write!(f, "{n}"),
@@ -61,11 +68,12 @@ impl fmt::Display for FullSample {
     }
 }
 
-fn endpoints(data: &[u8]) -> ResultType<Vec<SocketAddrV4>> {
+fn endpoints(data: &[u8], limit: u16) -> ResultType<Vec<SocketAddrV4>> {
     ensure!(
-        data.len() <= MAX_FULL_ENDPOINTS * 6 && data.len() % 6 == 0,
+        data.len() <= usize::from(limit) * 6 && data.len() % 6 == 0,
         "invalid full selection size"
     );
+    let mut seen = HashSet::new();
     let mut result = Vec::new();
     for ep in data.chunks_exact(6) {
         let addr = SocketAddrV4::new(
@@ -73,7 +81,7 @@ fn endpoints(data: &[u8]) -> ResultType<Vec<SocketAddrV4>> {
             u16::from_be_bytes([ep[4], ep[5]]),
         );
         ensure!(
-            addr.port() != 0 && !result.contains(&addr),
+            WebRTCStream::valid_expanded_endpoint(addr) && seen.insert(addr),
             "invalid full selection member"
         );
         result.push(addr);
@@ -81,75 +89,94 @@ fn endpoints(data: &[u8]) -> ResultType<Vec<SocketAddrV4>> {
     Ok(result)
 }
 
-async fn first_checks(
+async fn check_rounds(
     exchange: &mut Exchange<'_>,
     pc: &WebRTCStream,
+    plan: Plan,
     controller: bool,
-    remote: &mut mpsc::Receiver<String>,
-    held: &mut Vec<String>,
-    exact: &mut Vec<(String, SocketAddrV4)>,
+    linear_step: Option<u16>,
     status: &watch::Sender<PunchStatus>,
     report: &mut FullSample,
+    checked: &mut HashSet<(String, SocketAddrV4)>,
 ) -> ResultType<()> {
-    let gather_until = Instant::now() + Duration::from_secs(11);
-    let mut local = loop {
-        // Check completion first: a completed epoch's snapshot includes its final socket.
-        let complete = pc.expanded_udp_pool_complete().await;
-        let batch = pc.expanded_udp_candidates().await;
-        if complete || batch.len() >= MAX_FULL_ENDPOINTS || Instant::now() >= gather_until {
-            break batch;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    };
-    let mut unique = HashSet::new();
-    local.retain(|(_, ep)| unique.insert(*ep));
-    local.truncate(MAX_FULL_ENDPOINTS);
-    report.local = local.len() as u8;
-    status.send_modify(|s| s.full = Some(*report));
-    let mut wire = Vec::with_capacity(6 * local.len());
-    for (_, ep) in &local {
-        wire.extend_from_slice(&ep.ip().octets());
-        wire.extend_from_slice(&ep.port().to_be_bytes());
-    }
-    exchange.send(FULL_SELECT, &wire).await?;
-    let (kind, bytes) = exchange
-        .incoming
-        .recv()
-        .await
-        .context("full selection missing")?;
-    ensure!(kind == FULL_SELECT, "unexpected full selection");
-    let peers = endpoints(&bytes)?;
-    report.peer = peers.len() as u8;
-    status.send_modify(|s| s.full = Some(*report));
-    if local.is_empty() || peers.is_empty() {
-        return Ok(());
-    }
-
-    // A SELECT cannot introduce destinations. Every member must also be a public
-    // server-reflexive candidate trickled on this authenticated ICE generation.
-    let mut indices = vec![None; peers.len()];
-    while indices.iter().any(Option::is_none) {
-        let candidate = remote.recv().await.context("full trickle ended")?;
-        if let Some(ep) = WebRTCStream::public_srflx_endpoint(candidate.as_bytes()) {
-            if let Some(pos) = peers.iter().position(|v| *v == ep) {
-                indices[pos] = Some(held.len());
+    exchange
+        .send(FULL_HINT, &linear_step.unwrap_or(0).to_be_bytes())
+        .await?;
+    let peer_step = u16::from_be_bytes(exchange.read::<2>(FULL_HINT).await?);
+    let mut at = exchange.deadline(controller).await?.0;
+    let end = at + plan.window();
+    let send_end = at + plan.send_window(controller) + plan.lead_delay(controller, 0);
+    let mut round = 0;
+    let mut local = Vec::new();
+    let mut peers = Vec::new();
+    let mut seen = HashSet::new();
+    let mut advertised = HashSet::new();
+    while Instant::now() < end && pc.is_relayed().await.is_none() {
+        let gathered = pc.expanded_udp_candidates().await;
+        let mut wire = Vec::new();
+        for (id, addr) in gathered {
+            if local.len() == usize::from(plan.capacity(controller)) {
+                break;
+            }
+            if seen.insert(addr) {
+                local.push((id, addr));
+                wire.extend_from_slice(&addr.ip().octets());
+                wire.extend_from_slice(&addr.port().to_be_bytes());
             }
         }
-        held.push(candidate);
-    }
-    let (at, _) = exchange.deadline(controller).await?;
-    // Both sides apply the same schedule even if their observer coverage differs.
-    // A single linear pass tries every advertised socket without an N*M burst.
-    for i in 0..local.len().max(peers.len()) {
-        tokio::time::sleep_until(at + Duration::from_millis(10 * i as u64)).await;
-        let id = &local[i % local.len()].0;
-        let n = i % peers.len();
-        let index = indices[n].context("full candidate unavailable")?;
-        if pc.timed_first_check(id, &held[index]).await {
-            report.written += 1;
-            exact.push((id.clone(), peers[n]));
-            status.send_modify(|s| s.full = Some(*report));
+        report.local = local.len() as u16;
+        status.send_modify(|s| s.full = Some(*report));
+        exchange.send(FULL_SELECT, &wire).await?;
+        let (kind, data) = exchange
+            .incoming
+            .recv()
+            .await
+            .context("full selection missing")?;
+        ensure!(kind == FULL_SELECT, "unexpected full selection");
+        let remaining = plan.capacity(!controller) - peers.len() as u16;
+        for ep in endpoints(&data, remaining)? {
+            ensure!(advertised.insert(ep), "duplicate full selection");
+            peers.push(ep);
         }
+        report.peer = peers.len() as u16;
+        status.send_modify(|s| s.full = Some(*report));
+        if !local.is_empty() && !peers.is_empty() {
+            let phase = at.max(Instant::now() + Duration::from_millis(40))
+                + plan.lead_delay(controller, round);
+            let mut next = phase;
+            for i in 0..local.len().max(peers.len()) {
+                if next >= send_end {
+                    break;
+                }
+                tokio::time::sleep_until(next).await;
+                if i % 8 == 0 && pc.is_relayed().await.is_some() {
+                    return Ok(());
+                }
+                let (own, peer) = Plan::pair(controller, local.len(), peers.len(), i, round);
+                let (id, _) = &local[own];
+                let advertised = peers[peer];
+                let latest = peers
+                    .last()
+                    .filter(|last| last.ip() == advertised.ip())
+                    .map_or(advertised.port(), SocketAddrV4::port);
+                let target = SocketAddrV4::new(
+                    *advertised.ip(),
+                    plan.target_port(controller, advertised.port(), latest, peer_step, i, round),
+                );
+                if pc.expanded_first_check(id, target).await {
+                    report.written = report.written.saturating_add(1);
+                    checked.insert((id.clone(), target));
+                }
+                // A stalled scheduler must not catch up with a burst.
+                next = Instant::now() + plan.spacing();
+            }
+            round += 1;
+        } else if local.is_empty() && pc.expanded_udp_pool_complete().await {
+            break;
+        }
+        status.send_modify(|s| s.full = Some(*report));
+        at = Instant::now() + Duration::from_millis(240);
+        tokio::time::sleep_until(at).await;
     }
     Ok(())
 }
@@ -160,8 +187,9 @@ pub(in crate::live_direct) async fn run_full(
     id: u64,
     controller: bool,
     control: mpsc::Receiver<(u8, Vec<u8>)>,
-    remote: &mut mpsc::Receiver<String>,
     status: watch::Sender<PunchStatus>,
+    plan: Plan,
+    linear_step: Option<u16>,
 ) {
     let mut exchange = Exchange {
         events,
@@ -170,21 +198,20 @@ pub(in crate::live_direct) async fn run_full(
         origin: Instant::now(),
     };
     let mut report = FullSample::default();
-    let mut held = Vec::new();
-    let mut exact = Vec::new();
+    let mut checked = HashSet::new();
     status.send_modify(|s| s.full = Some(report));
-    // A silent observer/peer must not starve IPv6, LAN or ordinary ICE for this attempt.
+    let budget = plan.window() + Duration::from_secs(5);
     let checks = timeout(
-        Duration::from_secs(17),
-        first_checks(
+        budget,
+        check_rounds(
             &mut exchange,
             pc,
+            plan,
             controller,
-            remote,
-            &mut held,
-            &mut exact,
+            linear_step,
             &status,
             &mut report,
+            &mut checked,
         ),
     )
     .await;
@@ -193,26 +220,15 @@ pub(in crate::live_direct) async fn run_full(
         Ok(Err(err)) => hbb_common::log::trace!("Full candidate exchange failed: {err}"),
         Err(_) => hbb_common::log::trace!("Full candidate exchange timed out"),
     }
-    for candidate in held {
-        if pc.add_remote_ice_candidate(&candidate).await.is_err() {
-            hbb_common::log::trace!("Full attempt rejected a queued candidate");
-        }
-    }
-    report.released = true;
+    report.finished = true;
+    report.ingress = pc.expanded_pair_ingress(&checked).await.map(|n| n as u16);
     status.send_modify(|s| s.full = Some(report));
-    if exchange.send(FULL_RESULT, &report.bytes()).await.is_err() {
-        return;
-    }
-    if !exact.is_empty() {
-        tokio::time::sleep(Duration::from_millis(900)).await;
-        report.ingress = pc.expanded_pair_ingress(&exact).await.map(|n| n as u8);
-        status.send_modify(|s| s.full = Some(report));
-        if exchange.send(FULL_RESULT, &report.bytes()).await.is_err() {
-            return;
-        }
-    }
+    let _ = exchange.send(FULL_RESULT, &report.bytes()).await;
     if id <= 3 || id.is_power_of_two() {
-        hbb_common::log::info!("RustDesk expanded ports attempt {id}: {report}");
+        hbb_common::log::info!(
+            "RustDesk expanded ports attempt {id} {:?}: {report}",
+            plan.nats
+        );
     }
 }
 
@@ -221,14 +237,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn expanded_selection_and_reports_are_bounded() {
-        let valid = [8, 8, 8, 8, 0, 80];
-        assert!(endpoints(&[]).unwrap().is_empty());
-        assert_eq!(endpoints(&valid).unwrap().len(), 1);
-        assert!(endpoints(&[valid, valid].concat()).is_err());
-        assert!(endpoints(&[0; 193]).is_err());
-        assert!(FullSample::decode(&[32, 8, 32, 255, 1]).is_some());
-        assert!(FullSample::decode(&[0, 8, 1, 1, 1]).is_none());
-        assert!(FullSample::decode(&[32, 32, 4, 5, 1]).is_none());
+    fn rejects_malformed_or_private_candidate_batches() {
+        let valid = [8, 8, 8, 8, 0xea, 0x61];
+        assert_eq!(endpoints(&valid, 1).unwrap().len(), 1);
+        assert!(endpoints(&[valid, valid].concat(), 2).is_err());
+        assert!(endpoints(&valid, 0).is_err());
+        assert!(endpoints(&[10, 0, 0, 1, 0xea, 0x61], 1).is_err());
+        let sample = FullSample {
+            local: 500,
+            peer: 150,
+            written: 900,
+            ingress: Some(2),
+            finished: true,
+        };
+        assert_eq!(FullSample::decode(&sample.bytes()).unwrap().written, 900);
     }
 }
