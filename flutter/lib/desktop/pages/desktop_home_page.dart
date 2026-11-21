@@ -24,6 +24,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
+import '../../native/apple_workspace_navigation.dart';
 import '../widgets/button.dart';
 
 class DesktopHomePage extends StatefulWidget {
@@ -55,11 +56,112 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   final RxBool _block = false.obs;
 
   final GlobalKey _childKey = GlobalKey();
+  int _destination = 0;
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
     final isIncomingOnly = bind.isIncomingOnly();
+    if (usesWorkspaceStyle && !isIncomingOnly) {
+      final incoming = !bind.isOutgoingOnly();
+      final destinations = [
+        WorkspaceDestination(translate('Connection'), Icons.north_east_rounded),
+        WorkspaceDestination(
+            translate('Accessible devices'), Icons.devices_rounded),
+        if (incoming)
+          WorkspaceDestination(
+              translate('Your Desktop'), Icons.laptop_mac_rounded),
+      ];
+      final current = _destination < destinations.length ? _destination : 0;
+      void select(int index) {
+        FocusManager.instance.primaryFocus?.unfocus();
+        setState(() => _destination = index);
+      }
+
+      final content = Column(children: [
+        if (bind.isCustomClient())
+          Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [loadLogo(), loadPowered(context)]),
+        if (incoming) buildPresetPasswordWarning(),
+        Expanded(
+            child: IndexedStack(index: current == 2 ? 1 : 0, children: [
+          ConnectionPage(
+              devicesOnly: current == 1,
+              onOpenDevices: () => select(1),
+              notices: current == 0
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                          if (!incoming)
+                            Text(translate('outgoing_only_desk_tip'),
+                                style: Theme.of(context).textTheme.bodySmall),
+                          Obx(() =>
+                              buildHelpCards(stateGlobal.updateUrl.value)),
+                        ])
+                  : null),
+          if (incoming) _identityWorkspace(context, current == 2),
+        ])),
+        if (incoming) ...[const Divider(height: 1), OnlineStatusWidget()],
+      ]);
+      if (isMacOS) {
+        return _buildBlock(child: LayoutBuilder(builder: (context, bounds) {
+          final compact = bounds.maxWidth < 760;
+          return Row(children: [
+            SizedBox(
+                width: compact ? 148 : 192,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 16, 8, 12),
+                          child: Row(children: [
+                            loadIcon(24),
+                            const SizedBox(width: 8),
+                            Expanded(
+                                child: Text(bind.mainGetAppNameSync(),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium))
+                          ])),
+                      Expanded(
+                          child: AppleWorkspaceNavigation(
+                              labels: [
+                            for (final item in destinations) item.label
+                          ],
+                              symbols: [
+                            'arrow.up.right',
+                            'desktopcomputer',
+                            if (incoming) 'laptopcomputer'
+                          ],
+                              selected: current,
+                              onSelect: select,
+                              compact: compact)),
+                      if (!bind.isDisableSettings())
+                        TextButton.icon(
+                            onPressed: DesktopTabPage.onAddSetting,
+                            icon: const Icon(Icons.tune_rounded, size: 18),
+                            label: Text(translate('Settings'))),
+                    ])),
+            Expanded(child: content),
+          ]);
+        }));
+      }
+      return _buildBlock(
+          child: WorkspaceNavigation(
+        brand: bind.mainGetAppNameSync(),
+        mark: loadIcon(32),
+        destinations: destinations,
+        current: current,
+        onSelect: select,
+        settings: translate('Settings'),
+        onSettings:
+            bind.isDisableSettings() ? null : DesktopTabPage.onAddSetting,
+        child: content,
+      ));
+    }
     return _buildBlock(
         child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -73,6 +175,56 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget _buildBlock({required Widget child}) {
     return buildRemoteBlock(
         block: _block, mask: true, use: canBeBlocked, child: child);
+  }
+
+  Widget _identityWorkspace(BuildContext context, bool visible) {
+    final model = gFFI.serverModel;
+    final theme = Theme.of(context);
+    return ListView(padding: const EdgeInsets.all(20), children: [
+      Text(translate('Your Desktop'),
+          style: theme.textTheme.headlineSmall
+              ?.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 6),
+      Text(translate('desk_tip'), style: TextStyle(color: theme.hintColor)),
+      const SizedBox(height: 18),
+      Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 580),
+              child: WorkspacePanel(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(translate('ID'),
+                            style: theme.textTheme.labelLarge),
+                        ValueListenableBuilder<TextEditingValue>(
+                            valueListenable: model.serverId,
+                            builder: (_, value, __) => Row(children: [
+                                  Expanded(
+                                      child: SelectableText(value.text,
+                                          style: theme.textTheme.headlineMedium
+                                              ?.copyWith(
+                                                  fontWeight: FontWeight.w600,
+                                                  letterSpacing: .5))),
+                                  IconButton(
+                                      tooltip: MaterialLocalizations.of(context)
+                                          .copyButtonLabel,
+                                      icon: const Icon(Icons.copy_rounded),
+                                      onPressed: value.text.isEmpty
+                                          ? null
+                                          : () async {
+                                              await Clipboard.setData(
+                                                  ClipboardData(
+                                                      text: value.text));
+                                              showToast(translate('Copied'));
+                                            }),
+                                ])),
+                        const Divider(height: 24),
+                        buildPasswordBoard(context),
+                      ])))),
+      if (visible) Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
+    ]);
   }
 
   Widget buildLeftPane(BuildContext context) {
@@ -89,6 +241,18 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         alignment: Alignment.center,
         child: loadLogo(),
       ),
+      if (usesWorkspaceStyle && !bind.isCustomClient())
+        Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 16, 4),
+            child: Row(children: [
+              loadIcon(28),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(bind.mainGetAppNameSync(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium)),
+            ])),
       buildTip(context),
       if (!isOutgoingOnly)
         Padding(
@@ -98,7 +262,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             child: Column(children: [
               buildIDBoard(context),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                 child: Divider(height: 1),
               ),
               buildPasswordBoard(context),
@@ -142,7 +307,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: WorkspaceSidebar(
-        width: isIncomingOnly ? 280.0 : 248.0,
+        width: isIncomingOnly ? 280 : 248,
         child: Stack(
           children: [
             Column(
@@ -249,6 +414,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                         readOnly: true,
                         decoration: InputDecoration(
                           border: InputBorder.none,
+                          filled: false,
                           contentPadding: EdgeInsets.only(top: 10, bottom: 10),
                         ),
                         style: TextStyle(
@@ -346,6 +512,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                             readOnly: true,
                             decoration: InputDecoration(
                               border: InputBorder.none,
+                              filled: false,
                               contentPadding:
                                   EdgeInsets.only(top: 14, bottom: 10),
                             ),
@@ -583,7 +750,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               exit(0);
             }
           },
-          child: Text(quitButtonText.isEmpty ? translate('Quit') : quitButtonText),
+          child:
+              Text(quitButtonText.isEmpty ? translate('Quit') : quitButtonText),
         ),
       ).marginAll(14);
     }
@@ -616,6 +784,58 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       }
     }
 
+    if (usesWorkspaceStyle) {
+      final theme = Theme.of(context);
+      return Padding(
+          padding: EdgeInsets.fromLTRB(8, marginTop, 8, 4),
+          child: Material(
+              color: theme.cardColor,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: theme.dividerColor)),
+              child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                            title == 'Permissions'
+                                ? Icons.verified_user_outlined
+                                : Icons.info_outline_rounded,
+                            size: 20,
+                            color: theme.colorScheme.primary),
+                        const SizedBox(width: 10),
+                        Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              if (title.isNotEmpty)
+                                Text(translate(title),
+                                    style: theme.textTheme.titleMedium),
+                              if (content.isNotEmpty)
+                                Text(translate(content),
+                                    style: theme.textTheme.bodyMedium),
+                              if (btnText.isNotEmpty || help != null)
+                                Wrap(children: [
+                                  if (btnText.isNotEmpty)
+                                    TextButton(
+                                        onPressed: onPressed,
+                                        child: Text(translate(btnText))),
+                                  if (help != null && link != null)
+                                    TextButton(
+                                        onPressed: () =>
+                                            launchUrl(Uri.parse(link)),
+                                        child: Text(translate(help))),
+                                ]),
+                            ])),
+                        if (closeButton == true)
+                          IconButton(
+                              tooltip: MaterialLocalizations.of(context)
+                                  .closeButtonTooltip,
+                              icon: const Icon(Icons.close_rounded, size: 17),
+                              onPressed: closeCard),
+                      ]))));
+    }
     return Stack(
       children: [
         Container(
@@ -784,7 +1004,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
     bool isChattyMethod(String methodName) {
       switch (methodName) {
-        case kWindowBumpMouse: return true;
+        case kWindowBumpMouse:
+          return true;
       }
 
       return false;
@@ -793,7 +1014,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
       if (!isChattyMethod(call.method)) {
         debugPrint(
-          "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
+            "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
       }
       if (call.method == kWindowMainWindowOnTop) {
         windowOnTop(null);
@@ -822,9 +1043,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           loginMethod: call.arguments['loginMethod'] ?? '',
         );
       } else if (call.method == kWindowBumpMouse) {
-        return RdPlatformChannel.instance.bumpMouse(
-          dx: call.arguments['dx'],
-          dy: call.arguments['dy']);
+        return RdPlatformChannel.instance
+            .bumpMouse(dx: call.arguments['dx'], dy: call.arguments['dy']);
       } else if (call.method == kWindowEventMoveTabToNewWindow) {
         final args = call.arguments.split(',');
         int? windowId;

@@ -3,6 +3,7 @@ import 'dart:collection';
 
 import 'package:dynamic_layouts/dynamic_layouts.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/ab_model.dart';
@@ -192,8 +193,8 @@ class _PeersViewState extends State<_PeersView>
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.sentiment_very_dissatisfied_rounded,
-                  color: Theme.of(context).tabBarTheme.labelColor,
+                  usesWorkspaceStyle ? Icons.devices_rounded : Icons.sentiment_very_dissatisfied_rounded,
+                  color: usesWorkspaceStyle ? Theme.of(context).colorScheme.primary : Theme.of(context).tabBarTheme.labelColor,
                   size: 40,
                 ).paddingOnly(bottom: 10),
                 Text(

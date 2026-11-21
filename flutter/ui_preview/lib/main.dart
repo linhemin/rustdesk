@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:rustdesk_ui/rustdesk_ui.dart';
+import 'package:rustdesk_ui/workspace_navigation.dart';
 
 void main() => runApp(const RustDeskPreview());
 
@@ -26,9 +27,9 @@ class _RustDeskPreviewState extends State<RustDeskPreview> {
         home: Builder(builder: (context) {
           return Scaffold(
             appBar: AppBar(
-              toolbarHeight: 56,
+              toolbarHeight: 44,
               title: const Text('RustDesk / UI preview',
-                  style: TextStyle(fontSize: 15)),
+                  style: TextStyle(fontSize: 14)),
               actions: [
                 IconButton(
                   tooltip: mobile ? 'Desktop layout' : 'Phone layout',
@@ -76,6 +77,7 @@ class PreviewWorkspace extends StatefulWidget {
 
 class _PreviewWorkspaceState extends State<PreviewWorkspace> {
   int selected = 0;
+  int mode = 0;
   bool notifications = true;
   bool clipboard = true;
   String query = '';
@@ -108,99 +110,72 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, constraints) {
         final compact = constraints.maxWidth < 720;
+        final screen = selected == 3
+            ? settings()
+            : selected == 2 && !compact
+                ? identity()
+                : compact || selected == 1
+                    ? directory()
+                    : composer();
+        final body = ListView(
+            padding: EdgeInsets.symmetric(
+                horizontal: compact ? 16 : 24, vertical: compact ? 12 : 18),
+            children: [screen]);
+        if (!compact) {
+          return WorkspaceNavigation(
+              brand: 'RustDesk',
+              mark: Image.asset('assets/rustdesk-mark.webp',
+                  package: 'rustdesk_ui', filterQuality: FilterQuality.medium),
+              destinations: const [
+                WorkspaceDestination('Connection', Icons.north_east_rounded),
+                WorkspaceDestination(
+                    'Accessible devices', Icons.devices_rounded),
+                WorkspaceDestination('Your Desktop', Icons.laptop_mac_rounded),
+              ],
+              current: selected,
+              onSelect: (i) => setState(() => selected = i),
+              settings: 'Settings',
+              onSettings: () => setState(() => selected = 3),
+              child: body);
+        }
         return Column(children: [
-          Expanded(
-              child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                if (!compact) sidebar(),
-                Expanded(
-                    child: SingleChildScrollView(
-                  padding: EdgeInsets.all(compact ? 20 : 36),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1080),
-                    child: selected == 2 ? settings() : connections(compact),
-                  ),
-                )),
-              ])),
-          if (compact)
-            BottomNavigationBar(
-              currentIndex: selected,
-              backgroundColor: Theme.of(context).cardColor,
-              type: BottomNavigationBarType.fixed,
-              onTap: (value) => setState(() => selected = value),
+          Expanded(child: body),
+          if (selected != 3)
+            Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(46)),
+                    onPressed: () => showModalBottomSheet<void>(
+                        context: context,
+                        isScrollControlled: true,
+                        builder: (context) => SafeArea(
+                            child: SingleChildScrollView(
+                                padding: EdgeInsets.fromLTRB(
+                                    16,
+                                    16,
+                                    16,
+                                    16 +
+                                        MediaQuery.viewInsetsOf(context)
+                                            .bottom),
+                                child: formPanel(onSubmit: () {
+                                  Navigator.of(context).pop();
+                                  previewAction();
+                                })))),
+                    icon: const Icon(Icons.north_east_rounded),
+                    label: const Text('Connect'))),
+          BottomNavigationBar(
+              currentIndex: selected == 3 ? 1 : 0,
+              onTap: (i) => setState(() => selected = i == 1 ? 3 : 1),
               items: const [
                 BottomNavigationBarItem(
                     icon: Icon(Icons.devices_outlined), label: 'Connection'),
                 BottomNavigationBarItem(
-                    icon: Icon(Icons.star_outline_rounded), label: 'Favorites'),
-                BottomNavigationBarItem(
-                    icon: Icon(Icons.tune_rounded), label: 'Settings'),
-              ],
-            ),
+                    icon: Icon(Icons.tune_rounded), label: 'Settings')
+              ]),
         ]);
       });
-
-  Widget sidebar() => WorkspaceSidebar(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const SizedBox(height: 8),
-            const Row(children: [
-              WorkspaceIcon(icon: Icons.swap_horiz_rounded, size: 40),
-              SizedBox(width: 12),
-              Flexible(
-                  child: Text('RustDesk',
-                      style: TextStyle(
-                          fontSize: 23,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -.6))),
-            ]),
-            const SizedBox(height: 40),
-            muted('WORKSPACE', size: 10),
-            const SizedBox(height: 12),
-            navItem(0, 'Connection', Icons.devices_outlined),
-            navItem(1, 'Favorites', Icons.star_outline_rounded),
-            navItem(2, 'Settings', Icons.tune_rounded),
-            const SizedBox(height: 32),
-            identity(),
-            const Spacer(),
-            const Divider(),
-            const SizedBox(height: 12),
-            Row(children: [
-              const Icon(Icons.science_outlined,
-                  size: 16, color: WorkspaceStyle.muted),
-              const SizedBox(width: 8),
-              Flexible(child: muted('UI preview · Sample data', size: 11)),
-            ]),
-            const SizedBox(height: 12),
-          ]),
-        ),
-      );
-
-  Widget navItem(int index, String label, IconData icon) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Material(
-          color: selected == index
-              ? WorkspaceStyle.accent.withOpacity(.10)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          child: ListTile(
-            dense: true,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 12),
-            leading: Icon(icon,
-                size: 21,
-                color: selected == index ? WorkspaceStyle.accent : null),
-            title: Text(label,
-                style: TextStyle(
-                    fontWeight:
-                        selected == index ? FontWeight.w600 : FontWeight.w400,
-                    color: selected == index ? WorkspaceStyle.accent : null)),
-            onTap: () => setState(() => selected = index),
-          ),
-        ),
-      );
 
   Widget identity() => WorkspacePanel(
         padding: const EdgeInsets.all(16),
@@ -228,62 +203,90 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
         ]),
       );
 
-  Widget connections(bool compact) =>
-      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        WorkspaceHeading(
-          title: selected == 1 ? 'Favorites' : 'Your workspace',
-          subtitle: 'A little closer. Wherever you are.',
-          trailing: const WorkspaceIcon(icon: Icons.devices_rounded),
-        ),
-        const SizedBox(height: 30),
-        WorkspacePanel(
-          child: Form(
+  Widget composer() =>
+      Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text('Connection',
+            style: Theme.of(context)
+                .textTheme
+                .headlineSmall
+                ?.copyWith(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 16),
+        SessionModePicker(choices: const [
+          WorkspaceDestination(
+              'Control Remote Desktop', Icons.desktop_windows_outlined),
+          WorkspaceDestination('Transfer file', Icons.folder_open_rounded),
+          WorkspaceDestination('Terminal', Icons.terminal_rounded),
+          WorkspaceDestination('View camera', Icons.videocam_outlined),
+        ], selected: mode, onSelect: (value) => setState(() => mode = value)),
+        const SizedBox(height: 16),
+        formPanel(),
+        const SizedBox(height: 24),
+        Text('Recent sessions', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 4),
+        for (final device in devices) deviceRow(device),
+      ]);
+
+  Widget formPanel({VoidCallback? onSubmit}) {
+    void submit() {
+      if (form.currentState!.validate()) (onSubmit ?? previewAction)();
+    }
+
+    return ConnectionPanel(
+        title: 'Remote ID',
+        controls: Form(
             key: form,
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Row(children: [
-                Icon(Icons.north_east_rounded,
-                    color: WorkspaceStyle.accent, size: 20),
-                SizedBox(width: 10),
-                Expanded(
-                    child: Text('Connect to a device',
-                        style: TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.w600))),
-              ]),
-              const SizedBox(height: 8),
-              muted('Enter a remote ID to start a session.'),
-              const SizedBox(height: 22),
-              TextFormField(
-                controller: remoteId,
-                decoration: const InputDecoration(
-                    labelText: 'Remote ID',
-                    hintText: '000 000 000',
-                    prefixIcon: Icon(Icons.tag_rounded)),
-                validator: (value) => value == null || value.trim().isEmpty
-                    ? 'Enter a remote ID'
-                    : null,
-                onFieldSubmitted: (_) {
-                  if (form.currentState!.validate()) previewAction();
-                },
-              ),
-              const SizedBox(height: 16),
-              Align(
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      if (form.currentState!.validate()) previewAction();
-                    },
-                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                    label: const Text('Connect'),
-                  )),
-            ]),
-          ),
-        ),
-        const SizedBox(height: 32),
-        Text(selected == 1 ? 'Starred devices' : 'Recent sessions',
-            style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 6),
-        muted('Your familiar devices, one click away.'),
+            child: LayoutBuilder(builder: (context, bounds) {
+              final input = TextFormField(
+                  controller: remoteId,
+                  decoration: const InputDecoration(
+                      hintText: 'Enter remote ID',
+                      border: InputBorder.none,
+                      prefixIcon: Icon(Icons.tag_rounded),
+                      contentPadding: EdgeInsets.symmetric(vertical: 14)),
+                  validator: (value) => value == null || value.trim().isEmpty
+                      ? 'Enter a remote ID'
+                      : null,
+                  onFieldSubmitted: (_) => submit());
+              final action = ElevatedButton.icon(
+                  style:
+                      ElevatedButton.styleFrom(minimumSize: const Size(0, 44)),
+                  onPressed: submit,
+                  icon: const Icon(Icons.north_east_rounded, size: 18),
+                  label: const Text('Connect'));
+              if (bounds.maxWidth >= 330) {
+                return Row(children: [
+                  Expanded(child: input),
+                  const SizedBox(width: 6),
+                  action
+                ]);
+              }
+              return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [input, action]);
+            })));
+  }
+
+  Widget deviceRow((String, String, IconData, bool) device) {
+    final theme = Theme.of(context);
+    return Column(children: [
+      ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          minVerticalPadding: 10,
+          leading: WorkspaceIcon(icon: device.$3, size: 38),
+          title: Text(device.$1, style: theme.textTheme.titleMedium),
+          subtitle: Text(device.$2,
+              style:
+                  theme.textTheme.bodySmall?.copyWith(color: theme.hintColor)),
+          trailing: Icon(Icons.arrow_outward_rounded,
+              size: 18, color: theme.hintColor),
+          onTap: previewAction),
+      const Divider(height: 1),
+    ]);
+  }
+
+  Widget directory() =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const WorkspaceHeading(title: 'Accessible devices'),
         const SizedBox(height: 20),
         TextField(
           decoration: const InputDecoration(
@@ -292,38 +295,9 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
           onChanged: (value) => setState(() => query = value),
         ),
         const SizedBox(height: 16),
-        for (final device in devices.where((device) =>
-            device.$1.toLowerCase().contains(query.toLowerCase()) &&
-            (selected != 1 || device.$4)))
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: WorkspacePanel(
-              padding: const EdgeInsets.all(16),
-              child: Row(children: [
-                WorkspaceIcon(icon: device.$3),
-                const SizedBox(width: 16),
-                Expanded(
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                      Text(device.$1,
-                          style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 5),
-                      muted(device.$2, size: 12),
-                    ])),
-                Icon(device.$4 ? Icons.circle : Icons.circle_outlined,
-                    size: 8,
-                    color: device.$4
-                        ? const Color(0xFF16815E)
-                        : Theme.of(context).hintColor),
-                const SizedBox(width: 8),
-                IconButton(
-                    tooltip: 'Open ${device.$1}',
-                    onPressed: previewAction,
-                    icon: const Icon(Icons.arrow_outward_rounded, size: 18)),
-              ]),
-            ),
-          ),
+        for (final device in devices.where(
+            (device) => device.$1.toLowerCase().contains(query.toLowerCase())))
+          deviceRow(device),
         if (devices.every(
             (device) => !device.$1.toLowerCase().contains(query.toLowerCase())))
           Padding(
@@ -339,14 +313,12 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
                   'Sample data · This preview does not connect to devices.',
                   size: 11)),
         ]),
-        if (compact) ...[const SizedBox(height: 24), identity()],
       ]);
 
   Widget settings() =>
       Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const WorkspaceHeading(
             title: 'Settings',
-            subtitle: 'Make yourself at home.',
             trailing: WorkspaceIcon(icon: Icons.tune_rounded)),
         const SizedBox(height: 32),
         Text('Preferences', style: Theme.of(context).textTheme.titleLarge),
@@ -379,7 +351,7 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                Text('A space to explore',
+                Text('UI preview',
                     style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 muted(

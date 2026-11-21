@@ -29,6 +29,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const RustDeskPreview());
+    await tester.tap(find.text('Accessible devices'));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).last, 'Office');
     await tester.pumpAndSettle();
     expect(find.text('Office workstation'), findsOneWidget);
@@ -59,6 +61,17 @@ void main() {
     await tester.tap(find.byTooltip('Dark appearance'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    await tester.tap(find.text('Connect'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), '123 456 789');
+    await tester.tap(find.descendant(
+        of: find.byType(BottomSheet), matching: find.text('Connect')));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextFormField), findsNothing);
+    expect(find.text('UI preview only — no remote connection is made.'),
+        findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Preferences'), findsOneWidget);
