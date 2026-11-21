@@ -13,7 +13,7 @@ enum AwesunMode {
 }
 
 enum AwesunSheetKind {
-    case mode, lock, guide, actions, displays, shortcuts, displaySettings, keyboardMore, keyboardLayout, gamepad
+    case mode, lock, guide, actions, displays, shortcuts, displaySettings, keyboardMore, keyboardLayout, keyboardFull, gamepad
 }
 
 struct AwesunToastItem: Equatable {
@@ -34,21 +34,27 @@ final class AwesunSessionModel: ObservableObject {
     @Published var mode: AwesunMode = .pointer
     @Published var soundOn = true
     @Published var displayLocked = false
-    @Published var mouseVisible = false
-    @Published var mouseCollapsed = false
+    private static let mouseVisibleKey = "awesun.mouse.enabled"
+    private static let mousePlacementKey = "awesun.mouse.placement"
+    @Published private(set) var mouseVisible = UserDefaults.standard.bool(forKey: AwesunSessionModel.mouseVisibleKey)
+    @Published private(set) var mouseCollapsed = true
     @Published var mouseAnchor: CGPoint?
     @Published var mouseViewport: CGRect?
     @Published var pressedMouseRegion: AwesunMouseRegion?
     @Published var wheelIndicator: Double?
     @Published var lockPlacement = AwesunDockPlacement(fraction: 0.10)
-    @Published var mousePlacement = AwesunDockPlacement(fraction: 0.47)
+    @Published var mousePlacement = AwesunSessionModel.loadMousePlacement() {
+        didSet {
+            if let data = try? JSONEncoder().encode(mousePlacement) {
+                UserDefaults.standard.set(data, forKey: Self.mousePlacementKey)
+            }
+        }
+    }
     @Published var wheelOpen = false
     @Published private(set) var dragging = false
-    @Published var keyboardOpen = false
     private var restoreSystemKeyboard = false
     @Published var modifiers: Set<String> = []
     @Published var pressedKeycap = ""
-    @Published var inputEcho = ""
     @Published var functionsOpen = false
     @Published var sheet: AwesunSheetKind?
     @Published var actions: [String] = []
@@ -72,13 +78,14 @@ final class AwesunSessionModel: ObservableObject {
 
     @Published private var functionOrder = [
         "mouse", "kbd", "mode", "lock", "guide", "shot", "sound", "screen",
-        "display", "quality", "chat", "layout", "keys", "game", "actions", "quit"
+        "display", "quality", "chat", "fullKeyboard", "layout", "keys", "game", "actions", "quit"
     ]
 
     var functions: [AwesunFunctionItem] {
         let items = [
             AwesunFunctionItem(id: "mouse", title: "虚拟鼠标", icon: AwesunIcons.mouse),
-            AwesunFunctionItem(id: "kbd", title: "键盘", icon: AwesunIcons.keyboard),
+            AwesunFunctionItem(id: "kbd", title: "系统键盘", icon: AwesunIcons.keyboard),
+            AwesunFunctionItem(id: "fullKeyboard", title: "虚拟键盘", icon: "keyboard", symbol: true),
             AwesunFunctionItem(id: "mode", title: "手机模式", icon: AwesunIcons.touch),
             AwesunFunctionItem(id: "lock", title: "锁定显示", icon: AwesunIcons.lock),
             AwesunFunctionItem(id: "guide", title: "手势指南", icon: AwesunIcons.guide),
@@ -95,7 +102,7 @@ final class AwesunSessionModel: ObservableObject {
             AwesunFunctionItem(id: "quit", title: "断开", icon: AwesunIcons.quit)
         ]
         return functionOrder.compactMap { id in
-            if !canInput && ["mouse", "kbd", "keys", "layout", "game"].contains(id) { return nil }
+            if !canInput && ["mouse", "kbd", "fullKeyboard", "keys", "layout", "game"].contains(id) { return nil }
             switch id {
             case "mode" where !canSwitchMode: return nil
             case "sound" where !canSound: return nil
@@ -155,6 +162,7 @@ final class AwesunSessionModel: ObservableObject {
     func closeSheet() {
         let reopen = restoreSystemKeyboard
         restoreSystemKeyboard = false
+        if isKeyboardPanel { releaseModifiers() }
         sheet = nil
         if reopen { systemKeyboard() }
     }
@@ -165,7 +173,7 @@ final class AwesunSessionModel: ObservableObject {
     }
 
     var isKeyboardPanel: Bool {
-        sheet == .keyboardMore || sheet == .keyboardLayout || sheet == .shortcuts
+        sheet == .keyboardMore || sheet == .keyboardLayout || sheet == .keyboardFull || sheet == .shortcuts
     }
 
     func openKeyboardPanel(_ panel: AwesunSheetKind) {
@@ -201,6 +209,8 @@ final class AwesunSessionModel: ObservableObject {
             systemKeyboard()
         case "keys":
             openKeyboardPanel(.keyboardMore)
+        case "fullKeyboard":
+            openKeyboardPanel(.keyboardFull)
         case "layout":
             openKeyboardPanel(.keyboardLayout)
         case "game": sheet = .gamepad
@@ -323,13 +333,20 @@ final class AwesunSessionModel: ObservableObject {
         UIImpactFeedbackGenerator(style: style).impactOccurred()
     }
 
+    private static func loadMousePlacement() -> AwesunDockPlacement {
+        if let data = UserDefaults.standard.data(forKey: mousePlacementKey),
+           let placement = try? JSONDecoder().decode(AwesunDockPlacement.self, from: data),
+           (0...1).contains(placement.fraction) {
+            return placement
+        }
+        return AwesunDockPlacement(fraction: 0.47)
+    }
+
     func setMouseVisible(_ shown: Bool) {
-        endDrag()
+        guard mouseVisible != shown else { return }
+        UserDefaults.standard.set(shown, forKey: Self.mouseVisibleKey)
         mouseVisible = shown
-        mouseCollapsed = false
-        wheelOpen = false
-        AwesunBridge.shared.pointerVisible(shown)
-        refreshMouseIdleTimer()
+        collapseMouse()
     }
 
     func collapseMouse() {
@@ -340,8 +357,7 @@ final class AwesunSessionModel: ObservableObject {
         AwesunBridge.shared.pointerVisible(false)
     }
 
-    func expandMouse(at point: CGPoint) {
-        mouseAnchor = point
+    func expandMouse() {
         mouseCollapsed = false
         wheelOpen = false
         AwesunBridge.shared.pointerVisible(true)
@@ -382,8 +398,8 @@ final class AwesunSessionModel: ObservableObject {
         }
     }
 
-    func moveVirtualPointer(to point: CGPoint) {
-        mouseAnchor = point
+    func moveVirtualPointer(anchor: CGPoint, point: CGPoint) {
+        mouseAnchor = anchor
         AwesunBridge.shared.virtualMove(to: point)
     }
 
@@ -410,18 +426,9 @@ final class AwesunSessionModel: ObservableObject {
     }
 
     func systemKeyboard(_ visible: Bool = true) {
-        if visible {
-            endDrag()
-            closeKeyboard()
-        } else {
-            releaseModifiers()
-        }
-        AwesunBridge.shared.command("keyboard", ["visible": visible])
-    }
-
-    func closeKeyboard() {
-        keyboardOpen = false
+        if visible { endDrag() }
         releaseModifiers()
+        AwesunBridge.shared.command("keyboard", ["visible": visible])
     }
 
     func toggleModifier(_ name: String) {
@@ -513,15 +520,6 @@ final class AwesunSessionModel: ObservableObject {
         case "MOUSE_MIDDLE": click("middle")
         case "MOUSE_RIGHT": click("right")
         default:
-            if spec.label == "BackSpace" && !inputEcho.isEmpty {
-                inputEcho.removeLast()
-            } else if spec.label == "Enter" {
-                inputEcho = ""
-            } else if spec.label == "Space" {
-                inputEcho += " "
-            } else if spec.label.count == 1 {
-                inputEcho += spec.label
-            }
             AwesunBridge.shared.key(spec.vk, down: true)
             AwesunBridge.shared.key(spec.vk, down: false)
         }

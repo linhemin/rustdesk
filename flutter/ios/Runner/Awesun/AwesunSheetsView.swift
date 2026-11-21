@@ -76,7 +76,7 @@ struct AwesunFunctionSheet: View {
     @State private var picked: Int?
 
     private let quickIDs = ["quit", "shot", "sound", "screen", "chat", "actions"]
-    private let keyboardIDs = ["kbd", "layout", "keys", "game"]
+    private let keyboardIDs = ["kbd", "fullKeyboard", "layout", "keys", "game"]
     private let displayIDs = ["display", "quality"]
 
     var body: some View {
@@ -683,15 +683,21 @@ struct AwesunActionRow: View {
 
 struct AwesunShortcutPanel: View {
     @ObservedObject var model: AwesunSessionModel
-    let height: CGFloat
+    let width: CGFloat
+    let maxHeight: CGFloat
     @State private var custom = false
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
+    private var columnCount: Int { width < 360 ? 3 : 4 }
+    private var inset: CGFloat { width > 700 ? 36 : 8 }
+    private let spacing: CGFloat = 5
+    private let tileHeight: CGFloat = 46
 
     var body: some View {
-        HStack(spacing: 4) {
+        VStack(spacing: 7) {
+            header
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 4) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: spacing),
+                                        count: columnCount), spacing: spacing) {
                     if custom {
                         ForEach(model.accessoryShortcuts) { shortcut in
                             tile(shortcut, action: "自定义")
@@ -704,39 +710,75 @@ struct AwesunShortcutPanel: View {
                     }
                 }
             }
-            VStack(spacing: 4) {
-                Button(action: model.closeSheet) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(AwesunPalette.keyboardCap)
-                        .cornerRadius(7)
-                }
-                .accessibilityLabel("关闭快捷键")
-                Button {
-                    custom.toggle()
-                } label: {
-                    AwesunKeyTile(title: custom ? "自定义" : "默认", selected: custom, expanded: true)
-                }
-                .disabled(model.accessoryShortcuts.isEmpty)
-                .accessibilityLabel(custom ? "显示默认快捷键" : "显示自定义快捷键")
-            }
-            .frame(width: 37)
+            .frame(height: gridHeight)
         }
-        .frame(height: min(height, 193))
-        .padding(5)
-        .padding(.bottom, 6)
+        .padding(.horizontal, inset)
+        .padding(.top, 8)
+        .padding(.bottom, 18)
+        .frame(width: width)
         .background(AwesunPalette.keyboardDeck)
         .foregroundColor(.white)
         .buttonStyle(.plain)
+    }
+
+    private var gridHeight: CGFloat {
+        let count = custom ? model.accessoryShortcuts.count : AwesunKeyboardShortcut.common.count
+        let rows = CGFloat((count + columnCount - 1) / columnCount)
+        let preferred = rows * tileHeight + max(0, rows - 1) * spacing
+        return min(preferred, max(tileHeight, maxHeight - 64))
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("快捷键")
+                .font(.system(size: 14, weight: .semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if !model.accessoryShortcuts.isEmpty {
+                tab("常用", selected: !custom) { custom = false }
+                tab("我的", selected: custom) { custom = true }
+            }
+            Button(action: model.closeSheet) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 17))
+                    .frame(width: 34, height: 34)
+            }
+            .accessibilityLabel("关闭快捷键")
+        }
+    }
+
+    private func tab(_ label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 12))
+                .frame(minWidth: 42, minHeight: 30)
+                .background(selected ? AwesunPalette.brandRed.opacity(0.55) : AwesunPalette.keyboardCap)
+                .cornerRadius(7)
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func tile(_ shortcut: AwesunKeyboardShortcut, action: String) -> some View {
         Button {
             model.sendShortcut(shortcut)
         } label: {
-            AwesunKeyTile(title: shortcut.title, second: action, expanded: true)
-                .frame(height: 45)
+            VStack(spacing: 4) {
+                Text(shortcut.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.60)
+                    .allowsTightening(true)
+                Text(action)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.75))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .padding(.horizontal, 5)
+            .frame(maxWidth: .infinity)
+            .frame(height: tileHeight)
+            .background(AwesunPalette.keyboardCap)
+            .cornerRadius(7)
+            .contentShape(Rectangle())
         }
         .accessibilityLabel(Text(shortcut.title + "，" + action))
     }

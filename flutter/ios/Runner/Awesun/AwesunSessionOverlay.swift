@@ -115,7 +115,7 @@ final class AwesunSessionOverlay {
             model.endDrag()
             model.pauseMouseIdleTimer()
             model.closeObscuredPanels()
-            model.closeKeyboard()
+            model.releaseModifiers()
         }
         if model.keyboardInset != 0 && inset == 0 {
             model.releaseModifiers()
@@ -169,7 +169,7 @@ private final class AwesunTouchSurface: UIView {
 
     private var mouseAvailable: Bool {
         model.active && !model.functionsOpen && model.sheet == nil &&
-            model.keyboardInset <= 0 && !model.keyboardOpen
+            model.keyboardInset <= 0
     }
 
     private func floatingControl(at point: CGPoint) -> Bool {
@@ -200,9 +200,6 @@ private final class AwesunTouchSurface: UIView {
         if model.keyboardInset > 0 {
             return (size.height - model.keyboardInset - 38 ... size.height - model.keyboardInset).contains(point.y)
         }
-        if model.keyboardOpen {
-            return point.y >= size.height - AwesunControlLayout.keyboardHeight(in: size)
-        }
         if model.mouseVisible && model.mouseCollapsed &&
             AwesunControlLayout.circle(point, at: AwesunControlLayout.dockCenter(model.mousePlacement, in: size),
                                        radius: AwesunControlLayout.controlRadius) {
@@ -219,7 +216,7 @@ private final class AwesunMouseInput: UIView {
     private var start: CGPoint = .zero
     private var previous: CGPoint = .zero
     private var moved = false
-    private var wheelHold: Task<Void, Never>?
+    private let dragThreshold: CGFloat = 5
     private var hubTap: Task<Void, Never>?
     private var wheelAngle: Double?
     private var wheelRemainder = 0.0
@@ -263,15 +260,6 @@ private final class AwesunMouseInput: UIView {
         case .left:
             model.haptic()
             model.beginDrag(at: pointer(surface))
-        case .wheelTop:
-            wheelHold = Task { @MainActor [weak self, weak model] in
-                try? await Task.sleep(nanoseconds: 220_000_000)
-                guard !Task.isCancelled, let self = self, let model = model,
-                      self.region == .wheelTop, !self.moved else { return }
-                model.haptic()
-                model.openWheel()
-                self.updateWheel(at: self.previous)
-            }
         case .ring:
             updateWheel(at: point)
         default:
@@ -285,24 +273,27 @@ private final class AwesunMouseInput: UIView {
         let current = touch.location(in: self)
         let distance = hypot(current.x - start.x, current.y - start.y)
         let wasMoved = moved
-        moved = moved || distance >= 5
+        moved = moved || distance >= dragThreshold
         switch region {
         case .left, .hub:
             if moved {
                 hubTap?.cancel()
                 hubTap = nil
                 let origin = wasMoved ? previous : start
-                let old = pointer(surface)
+                let old = AwesunControlLayout.mouseAnchor(surface.model.mouseAnchor, in: bounds.size)
                 let next = CGPoint(x: old.x + current.x - origin.x, y: old.y + current.y - origin.y)
-                let target = AwesunControlLayout.pointer(next, in: bounds.size,
+                let anchor = AwesunControlLayout.mouseAnchor(next, in: bounds.size)
+                let target = AwesunControlLayout.pointer(anchor, in: bounds.size,
                                                          viewport: surface.model.mouseViewport)
-                surface.model.moveVirtualPointer(to: target)
+                surface.model.moveVirtualPointer(anchor: anchor, point: target)
             }
         case .wheelTop:
-            if surface.model.wheelOpen {
+            if moved {
+                if !surface.model.wheelOpen {
+                    surface.model.openWheel()
+                    updateWheel(at: start)
+                }
                 updateWheel(at: current)
-            } else if moved {
-                wheelHold?.cancel()
             }
         case .ring:
             updateWheel(at: current)
@@ -317,7 +308,8 @@ private final class AwesunMouseInput: UIView {
               let region = region, let surface = surface else { return }
         let model = surface.model
         let end = touch.location(in: self)
-        let tapped = !moved && hypot(end.x - start.x, end.y - start.y) < 8
+        let tapLimit: CGFloat = region == .wheelTop ? dragThreshold : 8
+        let tapped = !moved && hypot(end.x - start.x, end.y - start.y) < tapLimit
         let target = pointer(surface)
         finish()
         guard tapped else { return }
@@ -363,8 +355,7 @@ private final class AwesunMouseInput: UIView {
     }
 
     private func finish() {
-        wheelHold?.cancel()
-        wheelHold = nil
+        let temporaryWheel = region == .wheelTop
         contact = nil
         region = nil
         wheelAngle = nil
@@ -373,13 +364,15 @@ private final class AwesunMouseInput: UIView {
             model.endDrag()
             model.pressedMouseRegion = nil
             model.wheelIndicator = nil
+            if temporaryWheel && model.wheelOpen { model.closeWheelOrMouse() }
             model.mouseGesture(false)
         }
     }
 
     private func updateWheel(at point: CGPoint) {
         guard let surface = surface else { return }
-        let center = AwesunControlLayout.mouseCenter(for: pointer(surface), in: bounds.size)
+        let center = AwesunControlLayout.mouseCenter(
+            surface.model.mouseAnchor, in: bounds.size, viewport: surface.model.mouseViewport)
         let dx = point.x - center.x
         let dy = point.y - center.y
         guard hypot(dx, dy) >= AwesunControlLayout.ringRadius / 2 else {

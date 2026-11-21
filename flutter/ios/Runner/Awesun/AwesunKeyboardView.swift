@@ -79,56 +79,51 @@ enum AwesunKeyboardLayout {
 
 struct AwesunKeyboardView: View {
     @ObservedObject var model: AwesunSessionModel
+    let maxHeight: CGFloat
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 6) {
             header
-            VStack(spacing: AwesunMetrics.kbRowGap) {
-                ForEach(Array(AwesunKeyboardLayout.rows.enumerated()), id: \.offset) { _, row in
-                    rowView(row)
+            ScrollView {
+                VStack(spacing: AwesunMetrics.kbRowGap) {
+                    ForEach(Array(AwesunKeyboardLayout.rows.enumerated()), id: \.offset) { _, row in
+                        rowView(row)
+                    }
                 }
+                .padding(.horizontal, AwesunMetrics.kbPadH)
+                .padding(.vertical, AwesunMetrics.kbPadV)
             }
-            .padding(.horizontal, AwesunMetrics.kbPadH)
-            .padding(.vertical, AwesunMetrics.kbPadV)
+            .frame(height: min(keyboardHeight, max(72, maxHeight - 54)))
         }
-        .background(AwesunPalette.kbBackground)
+        .padding(.top, 7)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity)
+        .background(AwesunPalette.keyboardDeck)
+    }
+
+    private var keyboardHeight: CGFloat {
+        let rows = CGFloat(AwesunKeyboardLayout.rows.count)
+        return rows * AwesunMetrics.kbRowHeight + (rows - 1) * AwesunMetrics.kbRowGap + 2 * AwesunMetrics.kbPadV
     }
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text(model.inputEcho.isEmpty ? "输入内容" : model.inputEcho)
-                .font(.system(size: 13))
-                .foregroundColor(model.inputEcho.isEmpty
-                                 ? Color(awesun: 0xFF5C6B73)
-                                 : Color(awesun: 0xFF1F2A30))
-                .lineLimit(1)
+            Text("虚拟键盘")
+                .font(.system(size: 14, weight: .semibold))
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            if !model.modifiers.isEmpty {
-                Text(model.modifiers.sorted().joined(separator: " + "))
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(awesun: 0xFF1F2A30))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.white.opacity(0.5)))
+            Button("快捷键") { model.openKeyboardPanel(.shortcuts) }
+            Button("系统键盘", action: model.showSystemKeyboardFromDeck)
+            Button(action: model.closeSheet) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 17))
+                    .frame(width: 34, height: 34)
             }
-
-            Button {
-                model.haptic(.light)
-                model.closeKeyboard()
-            } label: {
-                Text("收起")
-                    .font(.system(size: 12))
-                    .foregroundColor(Color(awesun: 0xFF1F2A30))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.55)))
-            }
-            .buttonStyle(.plain)
+            .accessibilityLabel("关闭虚拟键盘")
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
+        .font(.system(size: 12))
+        .foregroundColor(.white)
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
     }
 
     private func rowView(_ row: [AwesunKeySpec]) -> some View {
@@ -159,7 +154,7 @@ struct AwesunKeyboardView: View {
             model.pressKey(spec)
         } label: {
             ZStack(alignment: .topTrailing) {
-                Text(spec.label)
+                Text(AwesunKeyTile.label(spec))
                     .font(.system(size: 13))
                     .foregroundColor(isOn ? .white : AwesunPalette.kbKeyText)
                     .lineLimit(1)
@@ -186,6 +181,8 @@ struct AwesunKeyboardView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(Text(AwesunKeyTile.label(spec)))
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
 

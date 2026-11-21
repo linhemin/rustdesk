@@ -10,10 +10,6 @@ struct AwesunSessionView: View {
                 keyboardAccessory(inDeck: false).position(
                     x: size.width / 2, y: size.height - model.keyboardInset - 19
                 )
-            } else if model.keyboardOpen {
-                ScrollView { AwesunKeyboardView(model: model) }
-                    .frame(height: AwesunControlLayout.keyboardHeight(in: size))
-                    .frame(maxHeight: .infinity, alignment: .bottom)
             } else {
                 if model.mouseVisible {
                     AwesunVirtualMouseView(model: model, screenSize: size)
@@ -100,7 +96,8 @@ struct AwesunSessionView: View {
                     }
                 }
             }
-            accessoryButton("•••", selected: inDeck, width: 34) {
+            accessoryButton("全键盘", width: 43) { model.openKeyboardPanel(.keyboardFull) }
+            accessoryButton("•••", selected: inDeck, width: 31) {
                 if inDeck { model.showSystemKeyboardFromDeck() }
                 else { model.openKeyboardPanel(.keyboardMore) }
             }
@@ -148,6 +145,8 @@ struct AwesunSessionView: View {
                             }
                         case .keyboardLayout:
                             AwesunAccessoryEditor(model: model, height: size.height * 0.88)
+                        case .keyboardFull:
+                            AwesunKeyboardView(model: model, maxHeight: size.height * 0.72)
                         case .gamepad: AwesunGamePanel(model: model)
 
                         case .displays: actionSheet(
@@ -157,7 +156,8 @@ struct AwesunSessionView: View {
                         ) { index in
                             model.selectDisplay(index)
                         }
-                        case .shortcuts: AwesunShortcutPanel(model: model, height: panelHeight)
+                        case .shortcuts:
+                            AwesunShortcutPanel(model: model, width: size.width, maxHeight: panelHeight)
                         case .none: EmptyView()
                         }
                     }
@@ -207,10 +207,6 @@ enum AwesunControlLayout {
     static let ringThickness: CGFloat = 28
     static let mouseSize: CGFloat = 178
 
-    static func keyboardHeight(in size: CGSize) -> CGFloat {
-        min(391, size.height * 0.65)
-    }
-
     static let controlRadius: CGFloat = 20
     static let controlEdge: CGFloat = 14
     static let glyphSize: CGFloat = 24
@@ -229,24 +225,31 @@ enum AwesunControlLayout {
                        y: max(edge, min(bottom, placement.fraction * size.height)))
     }
 
-    static func pointer(_ anchor: CGPoint?, in size: CGSize, viewport: CGRect?) -> CGPoint {
-        let start = anchor ?? CGPoint(x: size.width * 0.64 - 94, y: size.height * 0.56 - 72)
+    static func mouseAnchor(_ position: CGPoint?, in size: CGSize) -> CGPoint {
+        let start = position ?? CGPoint(x: size.width * 0.64 - 94, y: size.height * 0.56 - 72)
+        return CGPoint(x: min(max(0, start.x), max(0, size.width - 1)),
+                       y: min(max(0, start.y), max(0, size.height - 1)))
+    }
+
+    static func pointer(_ position: CGPoint?, in size: CGSize, viewport: CGRect?) -> CGPoint {
+        let anchor = mouseAnchor(position, in: size)
         let screen = CGRect(origin: .zero, size: size)
         let visible = viewport.map { $0.intersection(screen) } ?? screen
         let bounds = visible.isNull || visible.isEmpty ? screen : visible
-        return CGPoint(x: min(max(start.x, bounds.minX), max(bounds.minX, bounds.maxX - 1)),
-                       y: min(max(start.y, bounds.minY), max(bounds.minY, bounds.maxY - 1)))
+        return CGPoint(x: min(max(anchor.x, bounds.minX), max(bounds.minX, bounds.maxX - 1)),
+                       y: min(max(anchor.y, bounds.minY), max(bounds.minY, bounds.maxY - 1)))
     }
 
-    static func mouseCenter(for pointer: CGPoint, in size: CGSize) -> CGPoint {
-        let horizontal: CGFloat = 94
-        let vertical: CGFloat = 72
-        let pad = arcRadius + arcWidth / 2
-        let x = pointer.x + horizontal <= size.width - pad
-            ? pointer.x + horizontal : pointer.x - horizontal
-        let y = pointer.y + vertical <= size.height - wheelOffset - 20
-            ? pointer.y + vertical : pointer.y - vertical
-        return CGPoint(x: x, y: y)
+    static func mouseCenter(_ position: CGPoint?, in size: CGSize, viewport: CGRect?) -> CGPoint {
+        let anchor = mouseAnchor(position, in: size)
+        let tip = pointer(anchor, in: size, viewport: viewport)
+        let horizontalGap: CGFloat = 94
+        let switchSide = max(size.width / 2, size.width - arcRadius - 12 - horizontalGap)
+        // Keep the upper wheel trigger and the hub reachable as the lower controls extend off-screen.
+        let upperLimit = min(wheelOffset + 20, size.height / 2)
+        let lowerLimit = max(upperLimit, size.height - 14)
+        return CGPoint(x: tip.x + (tip.x <= switchSide ? horizontalGap : -horizontalGap),
+                       y: min(max(anchor.y + 72, upperLimit), lowerLimit))
     }
 
     static func circle(_ point: CGPoint, at center: CGPoint, radius: CGFloat) -> Bool {
@@ -256,8 +259,7 @@ enum AwesunControlLayout {
     static func mouseRegion(_ point: CGPoint, model: AwesunSessionModel,
                             size: CGSize) -> AwesunMouseRegion? {
         guard model.mouseVisible && !model.mouseCollapsed else { return nil }
-        let pointer = pointer(model.mouseAnchor, in: size, viewport: model.mouseViewport)
-        let center = mouseCenter(for: pointer, in: size)
+        let center = mouseCenter(model.mouseAnchor, in: size, viewport: model.mouseViewport)
         let local = CGPoint(x: point.x - center.x, y: point.y - center.y)
         if circle(local, at: CGPoint(x: closeOffset.width, y: closeOffset.height), radius: 16) {
             return .close
@@ -295,11 +297,12 @@ struct AwesunVirtualMouseView: View {
     var body: some View {
         let pointer = AwesunControlLayout.pointer(
             model.mouseAnchor, in: screenSize, viewport: model.mouseViewport)
-        let center = AwesunControlLayout.mouseCenter(for: pointer, in: screenSize)
+        let center = AwesunControlLayout.mouseCenter(
+            model.mouseAnchor, in: screenSize, viewport: model.mouseViewport)
         if model.mouseCollapsed {
             AwesunDockButton(placement: $model.mousePlacement, size: screenSize,
                              label: "展开虚拟鼠标",
-                             tap: { model.expandMouse(at: pointer) }) {
+                             tap: model.expandMouse) {
                 Image(AwesunIcons.mouse).renderingMode(.template).resizable().scaledToFit()
             }
         } else {
@@ -318,8 +321,8 @@ struct AwesunVirtualMouseView: View {
                         .frame(width: AwesunControlLayout.hub * 2, height: AwesunControlLayout.hub * 2)
                         .accessibilityLabel("移动光标")
                     smallButton(.wheelTop).offset(y: -AwesunControlLayout.wheelOffset)
-                        .accessibilityLabel("长按打开圆形滚轮")
-                        .accessibilityAction { model.openWheel() }
+                        .accessibilityLabel("滑动滚轮")
+                        .accessibilityAction { model.scroll(1, at: pointer) }
                     smallButton(.wheelBottom).offset(y: AwesunControlLayout.wheelOffset)
                         .accessibilityLabel("打开圆形滚轮")
                         .accessibilityAction { model.openWheel() }
@@ -440,7 +443,7 @@ struct AwesunPressStyle: ButtonStyle {
     }
 }
 
-struct AwesunDockPlacement {
+struct AwesunDockPlacement: Codable {
     var right = true
     var fraction: CGFloat
 }
