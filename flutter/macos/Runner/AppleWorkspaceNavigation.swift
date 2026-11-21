@@ -140,13 +140,14 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let image = NSImageView()
+        let symbol: NSImage?
         if #available(macOS 11.0, *) {
-            image.image = NSImage(systemSymbolName: symbols[row], accessibilityDescription: nil)
+            symbol = NSImage(systemSymbolName: symbols[row], accessibilityDescription: nil)
                 ?? NSImage(systemSymbolName: "circle", accessibilityDescription: nil)
         } else {
-            image.image = NSImage(named: NSImage.actionTemplateName)
+            symbol = NSImage(named: NSImage.actionTemplateName)
         }
+        let image = AppleWorkspaceSymbolView(symbol: symbol)
         image.setAccessibilityElement(false)
         image.widthAnchor.constraint(equalToConstant: 20).isActive = true
 
@@ -198,12 +199,12 @@ private final class AppleWorkspaceRowView: NSTableRowView {
         }
         guard isSelected else {
             cell.textField?.textColor = .labelColor
-            cell.imageView?.contentTintColor = nil
+            (cell.imageView as? AppleWorkspaceSymbolView)?.selectionForeground = nil
             return
         }
         let foreground = selectionForeground()
         cell.textField?.textColor = foreground
-        cell.imageView?.contentTintColor = foreground
+        (cell.imageView as? AppleWorkspaceSymbolView)?.selectionForeground = foreground
     }
 
     private func selectionForeground() -> NSColor {
@@ -232,4 +233,36 @@ private final class AppleWorkspaceRowView: NSTableRowView {
         let contrastWithWhite = 1.05 / (luminance + 0.05)
         return contrastWithBlack >= contrastWithWhite ? .black : .white
     }
+}
+
+private final class AppleWorkspaceSymbolView: NSImageView {
+    private let symbol: NSImage?
+
+    var selectionForeground: NSColor? {
+        didSet {
+            guard selectionForeground != oldValue else { return }
+            guard let symbol, let foreground = selectionForeground else {
+                image = symbol
+                return
+            }
+            // AppKit applies its own emphasized tint to template images in a source list.
+            image = NSImage(size: symbol.size, flipped: false) { bounds in
+                guard let context = NSGraphicsContext.current?.cgContext else { return false }
+                context.beginTransparencyLayer(auxiliaryInfo: nil)
+                symbol.draw(in: bounds)
+                foreground.setFill()
+                bounds.fill(using: .sourceIn)
+                context.endTransparencyLayer()
+                return true
+            }
+        }
+    }
+
+    init(symbol: NSImage?) {
+        self.symbol = symbol
+        super.init(frame: .zero)
+        image = symbol
+    }
+
+    required init?(coder: NSCoder) { nil }
 }
