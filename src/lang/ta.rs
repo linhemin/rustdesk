@@ -844,5 +844,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Middle mouse button", ""),
         ("Drag", ""),
         ("Center cursor", ""),
+        ("Online", "ஆன்லைன்"),
+        ("Offline", "ஆஃப்லைன்"),
     ].iter().cloned().collect();
 }

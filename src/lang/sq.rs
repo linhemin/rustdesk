@@ -844,5 +844,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Middle mouse button", ""),
         ("Drag", ""),
         ("Center cursor", ""),
+        ("Online", "Në linjë"),
+        ("Offline", "Jashtë linje"),
     ].iter().cloned().collect();
 }
