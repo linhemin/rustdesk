@@ -37,6 +37,24 @@ flutter analyze lib
 flutter build web
 ```
 
+## Desktop settings and dialogs
+
+Open **Desktop settings and dialogs catalog** in the preview toolbar. The catalog
+includes all seven desktop settings categories, the keyboard-shortcuts page,
+and seventeen dialog fixtures, with
+the same production `WorkspaceSettingsSection`, `WorkspaceSettingsNavItem`,
+`WorkspaceSettingsHeader`, `WorkspaceDesktopDialog`, and desktop overlay theme.
+Use the dialog icon to open login, verification, passwords, incoming connection,
+connection failure, insecure connection, server, proxy, IP allowlist, unlock,
+confirmation, quality, change-ID, temporary-password, and about fixtures.
+
+Direct review routes: `/?catalog=settings&page=general&theme=dark` (page names:
+general, security, network, display, account, printer, about). Add `&dialog=0`
+through `&dialog=16` to open a specific dialog. All fields and switches are sample
+data. These are surface/layout fixtures, **not exact native page content**;
+native controllers, option availability, OS-specific controls, authentication,
+and permission dialogs are intentionally not loaded.
+
 ## Verification boundary
 
 This is a design/component preview, **not** an end-to-end RustDesk session or a

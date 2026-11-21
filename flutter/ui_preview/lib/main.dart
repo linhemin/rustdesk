@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:rustdesk_ui/rustdesk_ui.dart';
+import 'desktop_settings_catalog.dart';
 
 void main() => runApp(const RustDeskPreview());
 
@@ -23,13 +24,21 @@ class _RustDeskPreviewState extends State<RustDeskPreview> {
         theme: WorkspaceStyle.apply(ThemeData(useMaterial3: false)),
         darkTheme: WorkspaceStyle.apply(ThemeData.dark(useMaterial3: false)),
         themeMode: dark ? ThemeMode.dark : ThemeMode.light,
-        home: Builder(builder: (context) {
+        home: Uri.base.queryParameters['catalog'] == 'settings'
+          ? const DesktopSettingsCatalog()
+          : Builder(builder: (context) {
           return Scaffold(
             appBar: AppBar(
               toolbarHeight: 56,
               title: const Text('RustDesk / UI preview',
                   style: TextStyle(fontSize: 15)),
               actions: [
+                IconButton(
+                  tooltip: 'Desktop settings and dialogs catalog',
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => const DesktopSettingsCatalog())),
+                  icon: const Icon(Icons.settings_applications_outlined),
+                ),
                 IconButton(
                   tooltip: mobile ? 'Desktop layout' : 'Phone layout',
                   onPressed: () => setState(() => mobile = !mobile),

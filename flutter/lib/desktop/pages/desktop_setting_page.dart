@@ -27,11 +27,12 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
+import '../../common/widgets/workspace.dart';
+import 'package:rustdesk_ui/desktop_settings.dart';
 
 const double _kTabWidth = 232;
-const double _kTabHeight = 42;
-const double _kCardFixedWidth = 540;
-const double _kCardLeftMargin = 15;
+const double _kCardFixedWidth = 720;
+const double _kCardLeftMargin = 24;
 const double _kContentHMargin = 15;
 const double _kContentHSubMargin = _kContentHMargin + 33;
 const double _kCheckBoxLeftMargin = 10;
@@ -247,7 +248,15 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           break;
       }
     }
-    return children;
+    final tabs = _settingTabs();
+    return List.generate(children.length, (index) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        WorkspaceSettingsHeader(
+          title: translate(tabs[index].label), icon: tabs[index].unselected),
+        Expanded(child: children[index]),
+      ],
+    ));
   }
 
   Widget _buildBlock({required List<Widget> children}) {
@@ -280,7 +289,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
       backgroundColor: Theme.of(context).colorScheme.background,
       body: _buildBlock(
         children: <Widget>[
-          SizedBox(
+          WorkspaceSidebar(
             width: _kTabWidth,
             child: Column(
               children: [
@@ -289,7 +298,6 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
               ],
             ),
           ),
-          const VerticalDivider(width: 1),
           Expanded(
             child: Container(
               color: Theme.of(context).scaffoldBackgroundColor,
@@ -309,8 +317,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     final settingsText = Text(
       translate('Settings'),
       textAlign: TextAlign.left,
-      style: const TextStyle(
-        color: _accentColor,
+      style: TextStyle(
+        color: Theme.of(context).colorScheme.onSurface,
         fontSize: _kTitleFontSize,
         fontWeight: FontWeight.w700,
       ),
@@ -335,10 +343,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
             ),
           ).marginOnly(left: 20),
         if (!isWeb)
-          SizedBox(
-            height: 62,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 0, 28),
             child: settingsText,
-          ).marginOnly(left: 20, top: 10),
+          ),
         const Spacer(),
       ],
     );
@@ -355,10 +363,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   Widget _listItem({required _TabInfo tab}) {
     return Obx(() {
       bool selected = tab.key == selectedTab.value;
-      return SizedBox(
-        width: _kTabWidth,
-        height: _kTabHeight,
-        child: InkWell(
+      return WorkspaceSettingsNavItem(
+          label: translate(tab.label),
+          icon: selected ? tab.selected : tab.unselected,
+          selected: selected,
           onTap: () {
             if (selectedTab.value != tab.key) {
               int index = DesktopSettingPage.tabKeys.indexOf(tab.key);
@@ -369,26 +377,6 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
             }
             selectedTab.value = tab.key;
           },
-          child: Row(children: [
-            Container(
-              width: 4,
-              height: _kTabHeight * 0.7,
-              color: selected ? _accentColor : null,
-            ),
-            Icon(
-              selected ? tab.selected : tab.unselected,
-              color: selected ? _accentColor : null,
-              size: 20,
-            ).marginOnly(left: 13, right: 10),
-            Text(
-              translate(tab.label),
-              style: TextStyle(
-                  color: selected ? _accentColor : null,
-                  fontWeight: FontWeight.w400,
-                  fontSize: _kContentFontSize),
-            ),
-          ]),
-        ),
       );
     });
   }
@@ -2346,7 +2334,11 @@ class _AccountState extends State<_Account> {
     return ListView(
       controller: scrollController,
       children: [
-        _Card(title: 'Account', children: [accountAction(), useInfo()]),
+        _Card(title: 'Account', children: [
+          const Align(alignment: AlignmentDirectional.centerStart,
+            child: WorkspaceIcon(icon: Icons.person_outline_rounded, size: 56)),
+          const SizedBox(height: 12),
+          accountAction(), useInfo()]),
       ],
     ).marginOnly(bottom: _kListViewBottomMargin);
   }
@@ -2660,9 +2652,13 @@ class _AboutState extends State<_About> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(
-                height: 8.0,
-              ),
+              Row(children: [
+                const WorkspaceIcon(icon: Icons.swap_horiz_rounded, size: 56),
+                const SizedBox(width: 16),
+                Expanded(child: Text(appName,
+                  style: Theme.of(context).textTheme.headlineSmall)),
+              ]),
+              const SizedBox(height: 20),
               SelectionArea(
                   child: Text('${translate('Version')}: $version')
                       .marginSymmetric(vertical: 4.0)),
@@ -2693,7 +2689,9 @@ class _AboutState extends State<_About> {
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
               Container(
-                decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
+                decoration: BoxDecoration(
+                  color: WorkspaceStyle.accent.withOpacity(.10),
+                  borderRadius: BorderRadius.circular(12)),
                 padding:
                     const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
                 child: SelectionArea(
@@ -2705,13 +2703,13 @@ class _AboutState extends State<_About> {
                         children: [
                           Text(
                             'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license',
-                            style: const TextStyle(color: Colors.white),
+                            style: TextStyle(color: Theme.of(context).hintColor),
                           ),
                           Text(
                             translate('Slogan_tip'),
                             style: TextStyle(
                                 fontWeight: FontWeight.w800,
-                                color: Colors.white),
+                                color: Theme.of(context).colorScheme.primary),
                           )
                         ],
                       ),
@@ -2736,35 +2734,10 @@ Widget _Card(
     {required String title,
     required List<Widget> children,
     List<Widget>? title_suffix}) {
-  return Row(
-    children: [
-      Flexible(
-        child: SizedBox(
-          width: _kCardFixedWidth,
-          child: Card(
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                        child: Text(
-                      translate(title),
-                      textAlign: TextAlign.start,
-                      style: const TextStyle(
-                        fontSize: _kTitleFontSize,
-                      ),
-                    )),
-                    ...?title_suffix
-                  ],
-                ).marginOnly(left: _kContentHMargin, top: 10, bottom: 10),
-                ...children
-                    .map((e) => e.marginOnly(top: 4, right: _kContentHMargin)),
-              ],
-            ).marginOnly(bottom: 10),
-          ).marginOnly(left: _kCardLeftMargin, top: 15),
-        ),
-      ),
-    ],
+  return WorkspaceSettingsSection(
+    title: translate(title),
+    trailing: title_suffix,
+    children: children.map((e) => e.marginOnly(top: 4)).toList(),
   );
 }
 

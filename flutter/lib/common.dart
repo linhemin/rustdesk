@@ -31,6 +31,7 @@ import 'package:window_size/window_size.dart' as window_size;
 import '../consts.dart';
 import 'common/widgets/overlay.dart';
 import 'common/widgets/workspace.dart';
+import 'package:rustdesk_ui/desktop_settings.dart';
 import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
 import 'mobile/pages/view_camera_page.dart';
@@ -469,7 +470,9 @@ class MyTheme {
       TabbarTheme.light,
     ],
   );
-  static ThemeData lightTheme = WorkspaceStyle.apply(_lightTheme);
+  static ThemeData lightTheme = (isDesktop || isWebDesktop)
+      ? WorkspaceDesktopStyle.apply(WorkspaceStyle.apply(_lightTheme))
+      : WorkspaceStyle.apply(_lightTheme);
 
   static ThemeData _darkTheme = ThemeData(
     useMaterial3: false,
@@ -578,7 +581,9 @@ class MyTheme {
       TabbarTheme.dark,
     ],
   );
-  static ThemeData darkTheme = WorkspaceStyle.apply(_darkTheme);
+  static ThemeData darkTheme = (isDesktop || isWebDesktop)
+      ? WorkspaceDesktopStyle.apply(WorkspaceStyle.apply(_darkTheme))
+      : WorkspaceStyle.apply(_darkTheme);
 
   static ThemeMode getThemeModePreference() {
     return themeModeFromString(bind.mainGetLocalOption(key: kCommConfKeyTheme));
@@ -1123,7 +1128,17 @@ class CustomAlertDialog extends StatelessWidget {
         }
         return KeyEventResult.ignored;
       },
-      child: AlertDialog(
+      child: (isDesktop || isWebDesktop)
+        ? WorkspaceDesktopDialog(
+            title: title,
+            titlePadding: titlePadding,
+            content: ConstrainedBox(
+              constraints: contentBoxConstraints,
+              child: content,
+            ),
+            actions: actions,
+          )
+        : AlertDialog(
           scrollable: true,
           title: title,
           content: ConstrainedBox(
