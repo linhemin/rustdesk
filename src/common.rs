@@ -2431,38 +2431,9 @@ pub(crate) async fn secure_tcp_with_direct_permission(
     secure_tcp_impl(conn, key, required, true).await
 }
 
-/// Prove that this same connection has the key for the just-verified advertisement.
-/// hbbs keeps the connection open after this reserved TestNatRequest for the real request.
-pub(crate) async fn confirm_signed_direct_permission(conn: &mut Stream) -> ResultType<bool> {
-    #[cfg(any(target_os = "windows", target_os = "ios"))]
-    let pending = match conn {
-        Stream::Tcp(socket) => socket.take_signed_observers(),
-        _ => None,
-    };
-    if !conn.is_secured() {
-        return Ok(false);
-    }
-    let mut request = RendezvousMessage::new();
-    request.set_test_nat_request(TestNatRequest {
-        serial: -604180,
-        ..Default::default()
-    });
-    let result = timeout(1250, async {
-        conn.send(&request).await?;
-        let Some(Ok(bytes)) = conn.next().await else { return Ok(false) };
-        let Ok(response) = RendezvousMessage::parse_from_bytes(&bytes) else { return Ok(false) };
-        Ok(matches!(response.union, Some(rendezvous_message::Union::TestNatResponse(r)) if (1..=65535).contains(&r.port)))
-    }).await;
-    let confirmed: ResultType<bool> = result.unwrap_or(Ok(false));
-    let allowed = confirmed?;
-    #[cfg(any(target_os = "windows", target_os = "ios"))]
-    if allowed {
-        if let Some((key, observers)) = pending {
-            hbb_common::webrtc::WebRTCStream::remember_signed_observers(&key, &observers);
-        }
-    }
-    Ok(allowed)
-}
+pub(crate) use crate::p2p::observer_policy::{
+    confirm_signed_direct_permission, finish_signed_observer_exchange,
+};
 
 pub async fn secure_tcp(conn: &mut Stream, key: &str) -> ResultType<()> {
     secure_tcp_with_direct_permission(conn, key, false)
@@ -3008,15 +2979,14 @@ fn punch_tid(packet: &[u8], tag: &[u8; 4]) -> Option<u64> {
 /// Returning is therefore a fact rather than a guess, which is what lets the caller stop instead
 /// of handing a dead socket to a transport whose only way to discover the truth is to time out.
 ///
-/// A datagram that is neither probe nor acknowledgement is returned rather than dropped: it means
-/// the peer finished first and is already speaking KCP, whose SYN is never retransmitted.
+/// Preserve the peer's initial KCP SYN if it arrives while the punch is still running.
 ///
 /// Only the connector stops on its own acknowledgement, because only it has something to send
 /// next. An acknowledgement proves our probe came back, not that the peer's probe was answered -
 /// and after this returns nothing answers probes any more, since KCP's io loop drops anything
 /// shorter than its header. A listener that stopped here would go mute while a peer whose own
 /// probe or answer was lost - the normal state of a hole that is still opening - kept probing an
-/// endpoint that works, until it timed out. So the listener stops on the peer's first real packet.
+/// endpoint that works, until it timed out. The listener stops when it receives a KCP SYN.
 pub async fn punch_udp(
     socket: Arc<UdpSocket>,
     listen: bool,
@@ -3024,8 +2994,8 @@ pub async fn punch_udp(
     let tid = ((hbb_common::time_based_rand() as u64) << 32) | hbb_common::time_based_rand() as u64;
     let probe = punch_packet(&PUNCH_PROBE, tid);
     let mut data = [0u8; 1500];
-    // `connect` does not flush the receive queue, so the NAT test's extra replies are still in it.
-    while socket.try_recv(&mut data).is_ok() {}
+    // The queue can contain both old NAT test replies and the peer's first probe.
+    // Classify packets below so a probe that arrived before connect is not lost.
 
     let mut retry_interval = Duration::from_millis(20);
     const MAX_INTERVAL: Duration = Duration::from_millis(200);
@@ -3083,12 +3053,14 @@ pub async fn punch_udp(
                     } else if let Some(peer_tid) = punch_tid(&data[..n], &PUNCH_PROBE) {
                         probes_seen += 1;
                         socket.send(&punch_packet(&PUNCH_ACK, peer_tid)).await.ok();
-                    } else if ack.is_none() && n > 0 {
-                        log::debug!(
-                            "UDP punch confirmed by {n} bytes of peer data in {:?}, {probes_sent} probes sent",
-                            tm.elapsed()
-                        );
-                        return Ok(Some(bytes::BytesMut::from(&data[..n])));
+                    } else if listen && ack.is_none() {
+                        if let Some(syn) = crate::kcp_stream::KcpStream::incoming_syn(&data[..n]) {
+                            log::debug!(
+                                "UDP punch confirmed by KCP SYN in {:?}, {probes_sent} probes sent",
+                                tm.elapsed()
+                            );
+                            return Ok(Some(syn));
+                        }
                     }
                 }
             }
@@ -3294,6 +3266,27 @@ mod tests {
             elapsed < Duration::from_secs(6),
             "the punch ran for {elapsed:?}; its deadline did not hold"
         );
+    }
+
+    #[tokio::test]
+    async fn test_udp_punch_uses_the_queued_syn_after_ignoring_old_packets() {
+        use kcp_sys::packet_def::KcpPacket;
+
+        let local = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        local.connect(peer.local_addr().unwrap()).await.unwrap();
+        peer.connect(local.local_addr().unwrap()).await.unwrap();
+
+        let mut syn = KcpPacket::new(0);
+        syn.mut_header().set_syn(true).set_src_session_id(1);
+        let syn = syn.inner();
+        peer.send(b"old rendezvous reply").await.unwrap();
+        peer.send(&syn).await.unwrap();
+        let packet = timeout(500, punch_udp(Arc::new(local), true))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(packet, Some(syn));
     }
 
     #[test]

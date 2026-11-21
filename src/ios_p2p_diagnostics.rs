@@ -160,19 +160,21 @@ fn save(path: &Path, contents: &str, seq: u64) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "ios")]
-pub(crate) use recorder::Observation;
+pub(crate) use recorder::{disable, record_fallback, Observation};
 
 #[cfg(target_os = "ios")]
 mod recorder {
     use super::*;
+    use base::config::keys::OPTION_RECORD_P2P_DIAGNOSTICS;
     use hbb_common::{
-        anyhow, config::Config, futures_util::FutureExt, tokio, webrtc::WebRTCStream,
+        anyhow, config::Config, futures_util::FutureExt, log, tokio,
+        tokio::sync::watch, webrtc::WebRTCStream,
     };
     use std::{
         sync::{
             atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering},
             mpsc::{sync_channel, SyncSender},
-            Arc, Mutex, OnceLock,
+            Arc, Mutex,
         },
         time::{Duration, Instant},
     };
@@ -196,34 +198,72 @@ mod recorder {
         }
     }
 
-    // One bounded queue/writer per process. Dropping an ICE task never blocks on the filesystem
-    // and concurrent sessions cannot interleave file writes. History takes only typed local
-    // events; an existing user-edited file is never read back into a new diagnostic report.
-    fn writer() -> Option<&'static SyncSender<(u64, String)>> {
-        static WRITER: OnceLock<Option<SyncSender<(u64, String)>>> = OnceLock::new();
-        WRITER
-            .get_or_init(|| {
-                let (tx, rx) = sync_channel(16);
-                std::thread::Builder::new()
-                    .name("p2p-diagnostics".into())
-                    .spawn(move || {
-                        let mut history = History::default();
-                        for (seq, (id, entry)) in rx.into_iter().enumerate() {
-                            let path = Config::path(FILENAME);
-                            if path.is_absolute() {
-                                let _ = save(&path, &history.update(id, entry), seq as u64);
-                            }
+    struct Writer {
+        generation: u64,
+        entries: SyncSender<(u64, String)>,
+        stop: watch::Sender<()>,
+    }
+
+    static WRITER: Mutex<Option<Writer>> = Mutex::new(None);
+
+    pub(crate) fn disable() {
+        let mut writer = WRITER.lock().unwrap();
+        *writer = None;
+        let path = Config::path(FILENAME);
+        if path.is_absolute() {
+            if let Err(err) = fs::remove_file(path) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("Could not remove P2P diagnostics: {err}");
+                }
+            }
+        }
+    }
+
+    fn recording() -> Option<(u64, watch::Receiver<()>)> {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        let mut writer = WRITER.lock().unwrap();
+        if crate::get_local_option(OPTION_RECORD_P2P_DIAGNOSTICS) != "Y" {
+            return None;
+        }
+        if let Some(writer) = writer.as_ref() {
+            return Some((writer.generation, writer.stop.subscribe()));
+        }
+        let generation = NEXT.fetch_add(1, Ordering::Relaxed);
+        let (entries, rx) = sync_channel(16);
+        let (stop, stop_rx) = watch::channel(());
+        let started = std::thread::Builder::new()
+            .name("p2p-diagnostics".into())
+            .spawn(move || {
+                let mut history = History::default();
+                for (seq, (id, entry)) in rx.into_iter().enumerate() {
+                    // Serialize saving with disable so a queued report cannot reappear after
+                    // removal, including when the user quickly enables recording again.
+                    let writer = WRITER.lock().unwrap();
+                    if !writer.as_ref().is_some_and(|w| w.generation == generation) {
+                        return;
+                    }
+                    let path = Config::path(FILENAME);
+                    if path.is_absolute() {
+                        if let Err(err) = save(&path, &history.update(id, entry), seq as u64) {
+                            hbb_common::throttled_log!(
+                                Duration::from_secs(30), warn, "Could not save P2P diagnostics: {err}"
+                            );
                         }
-                    })
-                    .ok()?;
-                Some(tx)
-            })
-            .as_ref()
+                    }
+                }
+            });
+        if let Err(err) = started {
+            log::warn!("Could not start P2P diagnostics: {err}");
+            return None;
+        }
+        *writer = Some(Writer { generation, entries, stop });
+        Some((generation, stop_rx))
     }
 
     #[derive(Clone, Copy)]
     struct Attempt {
         id: u64,
+        generation: u64,
         started: Instant,
         start_path: &'static str,
         offerer: bool,
@@ -254,6 +294,12 @@ mod recorder {
 
     impl Attempt {
         fn publish(&self, progress: &Progress, result: &str) {
+            let Ok(writer) = WRITER.try_lock() else {
+                return;
+            };
+            let Some(writer) = writer.as_ref().filter(|w| w.generation == self.generation) else {
+                return;
+            };
             let side = if self.offerer {
                 "controller"
             } else {
@@ -276,9 +322,7 @@ mod recorder {
             if let Some(punch) = &progress.punch {
                 append_punch_status(&mut entry, &punch.borrow());
             }
-            if let Some(tx) = writer() {
-                let _ = tx.try_send((self.id, entry));
-            }
+            let _ = writer.entries.try_send((self.id, entry));
         }
     }
 
@@ -287,13 +331,16 @@ mod recorder {
         result: &'static str,
         progress: Arc<Mutex<Progress>>,
         sampler: Option<tokio::task::JoinHandle<()>>,
+        stop: watch::Receiver<()>,
     }
 
     impl Observation {
-        pub(crate) fn new(offerer: bool, phase: &'static str) -> Self {
+        pub(crate) fn new(offerer: bool, phase: &'static str) -> Option<Self> {
             static NEXT: AtomicU64 = AtomicU64::new(0);
+            let (generation, stop) = recording()?;
             let attempt = Attempt {
                 id: NEXT.fetch_add(1, Ordering::Relaxed),
+                generation,
                 started: Instant::now(),
                 start_path: path_label(),
                 offerer,
@@ -306,12 +353,13 @@ mod recorder {
                 ended: false,
             };
             attempt.publish(&progress, "in-progress");
-            Self {
+            Some(Self {
                 attempt,
                 result: "cancelled",
                 progress: Arc::new(Mutex::new(progress)),
                 sampler: None,
-            }
+                stop,
+            })
         }
 
         pub(crate) fn observe(&mut self, pc: &WebRTCStream) {
@@ -319,9 +367,19 @@ mod recorder {
             let pc = pc.clone();
             let progress = self.progress.clone();
             let attempt = self.attempt;
+            let mut stop = self.stop.clone();
             self.sampler = Some(tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(2));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
-                    let text = pc.ice_path_diagnostics().await;
+                    let text = tokio::select! {
+                        biased;
+                        _ = stop.changed() => break,
+                        text = async {
+                            ticker.tick().await;
+                            pc.ice_path_diagnostics().await
+                        } => text,
+                    };
                     if let Ok(mut state) = progress.lock() {
                         if state.ended {
                             return;
@@ -329,7 +387,10 @@ mod recorder {
                         state.update(text);
                         attempt.publish(&state, "in-progress");
                     }
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                if let Ok(mut state) = progress.lock() {
+                    state.latest = None;
+                    state.punch = None;
                 }
             }));
         }
@@ -355,6 +416,9 @@ mod recorder {
         pub(crate) fn sample_now(&mut self, pc: &WebRTCStream) {
             if let Some(sampler) = self.sampler.take() {
                 sampler.abort();
+            }
+            if self.stop.has_changed().is_err() {
+                return;
             }
             if let Some(text) = pc.ice_path_diagnostics().now_or_never() {
                 if let Ok(mut state) = self.progress.lock() {
@@ -385,6 +449,13 @@ mod recorder {
             } else {
                 "other-transport"
             };
+        }
+    }
+
+    pub(crate) fn record_fallback(reason: &'static str) {
+        if let Some(mut observation) = Observation::new(true, "relay-fallback") {
+            observation.set_stage(reason);
+            observation.result = "fallback";
         }
     }
 

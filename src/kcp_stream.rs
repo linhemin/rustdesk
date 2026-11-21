@@ -27,6 +27,16 @@ static KCP_RECV_ERR_LOG: hbb_common::log_throttle::LogThrottle =
     hbb_common::log_throttle::LogThrottle::new(KCP_IO_ERR_LOG_INTERVAL);
 
 impl KcpStream {
+    pub(crate) fn incoming_syn(data: &[u8]) -> Option<BytesMut> {
+        if data.len() < std::mem::size_of::<KcpPacketHeader>() {
+            return None;
+        }
+        let packet = KcpPacket::from(BytesMut::from(data));
+        let header = packet.header();
+        (header.is_syn() && !header.is_ack() && header.dst_session_id() == 0)
+            .then(|| packet.inner())
+    }
+
     // Opt in to KCP's built-in congestion window (nc=0) instead of the pure turbo profile
     // (nc=1) that has always shipped; see `get_kcp_cc_enabled` for why this is not the default.
     // Sender-side only, so no wire negotiation is needed and either peer may run either profile.

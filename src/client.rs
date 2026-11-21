@@ -56,7 +56,7 @@ use hbb_common::{
     rand,
     rendezvous_proto::*,
     sha2::{Digest, Sha256},
-    socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6, new_direct_udp_for_unverified},
+    socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6},
     sodiumoxide::{base64, crypto::sign},
     timeout,
     tokio::{
@@ -707,7 +707,9 @@ impl Client {
         // no need to care about multiple rendezvous servers case, since it is acutally not used any more.
         // Shared state for UDP NAT test result
         if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
-            if let Ok((socket, addr)) = new_direct_udp_for_unverified(&rendezvous_server).await {
+            if let Ok((socket, addr)) =
+                crate::p2p::rendezvous_punch_socket(&rendezvous_server, false).await
+            {
                 let udp_port = Arc::new(Mutex::new(0));
                 let up_cloned = udp_port.clone();
                 let socket_cloned = socket.clone();
@@ -748,10 +750,10 @@ impl Client {
         };
         let has_webrtc_offerer = webrtc_offerer.is_some();
         #[cfg(target_os = "ios")]
-        let initial_observation = webrtc_offerer.as_ref().map(|stream| {
-            let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "initial");
+        let initial_observation = webrtc_offerer.as_ref().and_then(|stream| {
+            let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "initial")?;
             observation.observe(stream);
-            observation
+            Some(observation)
         });
         let fut = Self::_start_inner(
             peer.to_owned(),
@@ -1282,6 +1284,7 @@ impl Client {
                 if authenticated_direct_offer
                     && (msg_in.has_punch_hole_response() || msg_in.has_relay_response())
                 {
+                    crate::finish_signed_observer_exchange(&mut socket, handshake_grant);
                     direct_permission.record_exchange(&rendezvous_server, handshake_grant);
                 }
                 if let Some(ipv4) =
@@ -1332,20 +1335,24 @@ impl Client {
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
                             feedback = ph.feedback;
                             webrtc_sdp_answer = ph.webrtc_sdp_answer;
-                            let s = udp.0.take();
-                            if udp_nat_port > 0 && ph.is_udp && s.is_some() {
-                                if let Some(s) = s {
-                                    allow_err!(s.connect(peer_addr).await);
-                                    udp.0 = Some(s);
+                            if let Some(socket) = udp.0.take() {
+                                if udp_nat_port > 0 && ph.is_udp {
+                                    match socket.connect(peer_addr).await {
+                                        Ok(()) => udp.0 = Some(socket),
+                                        Err(err) => log::debug!("UDP peer route unavailable: {err}"),
+                                    }
                                 }
                             }
-                            let s = ipv6.0.take();
-                            if !ph.socket_addr_v6.is_empty() && s.is_some() {
-                                let addr = AddrMangle::decode(&ph.socket_addr_v6);
-                                if addr.port() > 0 {
-                                    if let Some(s) = s {
-                                        allow_err!(s.connect(addr).await);
-                                        ipv6.0 = Some(s);
+                            if let Some(socket) = ipv6.0.take() {
+                                if !ph.socket_addr_v6.is_empty() {
+                                    let addr = AddrMangle::decode(&ph.socket_addr_v6);
+                                    if addr.port() > 0 {
+                                        match socket.connect(addr).await {
+                                            Ok(()) => ipv6.0 = Some(socket),
+                                            Err(err) => {
+                                                log::debug!("IPv6 UDP peer route unavailable: {err}")
+                                            }
+                                        }
                                     }
                                 }
                             }

@@ -2,6 +2,12 @@ use base::config::keys;
 use hbb_common::{config::Config, socket_client, Stream};
 use std::net::{Ipv4Addr, SocketAddr};
 
+#[path = "p2p/observer_policy.rs"]
+pub(crate) mod observer_policy;
+
+#[cfg(target_os = "ios")]
+pub(crate) mod ios_path;
+
 #[cfg(target_os = "windows")]
 #[path = "p2p/stun.rs"]
 mod stun;
@@ -284,6 +290,28 @@ pub(crate) async fn connect_punch(
         return iface.connect(peer, local.port(), timeout).await;
     }
     socket_client::connect_tcp_local(peer, Some(local), timeout).await
+}
+
+pub(crate) async fn rendezvous_punch_socket(
+    server: &str,
+    verify_rendezvous: bool,
+) -> hbb_common::ResultType<(std::sync::Arc<hbb_common::tokio::net::UdpSocket>, SocketAddr)> {
+    #[cfg(target_os = "windows")]
+    if let Some(iface) = Interface::configured() {
+        if let Some(endpoint) = configured_server_endpoint(server, iface, 400).await {
+            if let Some(socket) =
+                crate::platform::bind_p2p_stun_udp(iface.address, iface.index, 0, 0)
+            {
+                return Ok((std::sync::Arc::new(socket), endpoint));
+            }
+            hbb_common::log::debug!("Physical UDP punch interface unavailable");
+        }
+    }
+    if verify_rendezvous {
+        socket_client::new_direct_udp_for(server).await
+    } else {
+        socket_client::new_direct_udp_for_unverified(server).await
+    }
 }
 
 #[cfg(test)]

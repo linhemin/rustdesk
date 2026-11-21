@@ -71,6 +71,7 @@ const MAX_PENDING_FRAMES: usize = 128;
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
 const RTC_TIMEOUT: u64 = 18_000;
 const LITE_TIMEOUT: u64 = 12_000;
+const LITE_IDLE_WINDOW: Duration = Duration::from_secs(5);
 const CHECK_STAGE: &str = "ICE/DTLS/data-channel checks";
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
 static FULL_PORT_POOLS: Semaphore = Semaphore::const_new(2);
@@ -284,9 +285,24 @@ struct Direct {
     rtc: Rtc,
     since: Instant,
     active: bool,
+    ice_silent_since: Option<Instant>,
+    last_rx_progress: u64,
     first_sent: Option<Instant>,
     first_received: Option<Instant>,
     reported: bool,
+}
+
+fn ice_stalled(
+    since: &mut Option<Instant>,
+    now: Instant,
+    disconnected: bool,
+    progressed: bool,
+) -> bool {
+    if !disconnected || progressed {
+        *since = None;
+        return false;
+    }
+    now.duration_since(*since.get_or_insert(now)) >= PATH_TIMEOUT
 }
 
 struct PendingFrame {
@@ -804,6 +820,26 @@ impl Attempt {
     }
 }
 
+async fn wait_lite_connected(pc: &mut WebRTCStream) -> ResultType<()> {
+    let probe = pc.clone();
+    let idle = async {
+        tokio::time::sleep(LITE_IDLE_WINDOW).await;
+        let (io, pair) = tokio::join!(
+            probe.direct_punch_io(),
+            timeout(Duration::from_millis(250), probe.is_relayed()),
+        );
+        // Accepted ICE requests and matched responses can precede nomination and DTLS.
+        if !matches!(io, Some([_, _, 0, _, _, 0])) || !matches!(pair, Ok(None | Some(true))) {
+            pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        biased;
+        connected = pc.wait_connected(LITE_TIMEOUT) => connected,
+        _ = idle => bail!("No authenticated ICE traffic during the lightweight window"),
+    }
+}
+
 fn make_attempt(
     events: &mpsc::Sender<SetupEvent>,
     id: u64,
@@ -839,7 +875,7 @@ fn make_attempt(
         _ => "relay-upgrade",
     });
     #[cfg(target_os = "ios")]
-    if let Some(control) = &punch {
+    if let (Some(observation), Some(control)) = (observation.as_mut(), &punch) {
         observation.set_punch_status(control.status.subscribe());
     }
     let task = tokio::spawn(async move {
@@ -867,7 +903,9 @@ fn make_attempt(
                 (events.clone(), None)
             };
             #[cfg(target_os = "ios")]
-            observation.observe(&rtc.0);
+            if let Some(observation) = observation.as_mut() {
+                observation.observe(&rtc.0);
+            }
             stage = "prepare local description";
             let sdp = if trickle {
                 rtc.0.local_endpoint().to_owned()
@@ -1002,10 +1040,18 @@ fn make_attempt(
             });
             stage = CHECK_STAGE;
             #[cfg(target_os = "ios")]
-            observation.set_stage(stage);
-            let connected = rtc.0.wait_connected(rtc_timeout).await;
+            if let Some(observation) = observation.as_mut() {
+                observation.set_stage(stage);
+            }
+            let connected = if offerer && mode == OfferMode::Lite {
+                wait_lite_connected(&mut rtc.0).await
+            } else {
+                rtc.0.wait_connected(rtc_timeout).await
+            };
             #[cfg(target_os = "ios")]
-            observation.sample_now(&rtc.0);
+            if let Some(observation) = observation.as_mut() {
+                observation.sample_now(&rtc.0);
+            }
             connected?;
             stage = "verify direct selected pair";
             if rtc.0.is_relayed().await != Some(false) {
@@ -1023,7 +1069,9 @@ fn make_attempt(
         }
         .await;
         #[cfg(target_os = "ios")]
-        observation.finish(stage, outcome.as_ref().err());
+        if let Some(observation) = observation.as_mut() {
+            observation.finish(stage, outcome.as_ref().err());
+        }
         let _ = events
             .send(SetupEvent::Finished(id, outcome.ok(), stage))
             .await;
@@ -1046,11 +1094,19 @@ async fn relay_pending(
     direct: &mut Option<Direct>,
     seq: &mut Sequence,
     path: &watch::Sender<bool>,
-    notify: bool,
+    reason: Option<&'static str>,
 ) -> ResultType<()> {
     if let Some(direct) = direct.take() {
         path.send_replace(false);
-        if notify {
+        if direct.active {
+            let reason = reason.unwrap_or("peer requested fallback");
+            #[cfg(target_os = "ios")]
+            crate::ios_p2p_diagnostics::record_fallback(reason);
+            hbb_common::throttled_log!(
+                Duration::from_secs(2), info, "Live direct returned to relay: {reason}"
+            );
+        }
+        if reason.is_some() {
             relay.send(frame(RESET, direct.id, &[])).await?;
         }
     }
@@ -1090,6 +1146,17 @@ async fn receive_data(
 mod tests {
     use super::*;
     use tokio::net::{TcpListener, TcpStream};
+
+    #[test]
+    fn a_recovering_ice_path_survives_a_transient_disconnect() {
+        let now = Instant::now();
+        let mut loss = None;
+        assert!(!ice_stalled(&mut loss, now, true, false));
+        assert!(!ice_stalled(&mut loss, now + PATH_TIMEOUT, true, true));
+        assert!(!ice_stalled(&mut loss, now + PATH_TIMEOUT, true, false));
+        assert!(ice_stalled(&mut loss, now + PATH_TIMEOUT * 2, true, false));
+        assert!(!ice_stalled(&mut loss, now + PATH_TIMEOUT * 2, false, false));
+    }
 
     #[tokio::test]
     async fn outbound_first_keeps_private_candidates_moving_and_releases_unchecked_public_one() {
@@ -1138,6 +1205,16 @@ mod tests {
             assert_eq!(matches!(role, Role::FullOfferer), bits == 31);
         }
         assert!(matches!(Role::offerer(true, true, true, true, false), Role::GroupOfferer));
+    }
+
+    #[cfg(any(target_os = "ios", target_os = "windows"))]
+    #[tokio::test]
+    async fn quiet_lightweight_ice_ends_before_the_handshake_deadline() {
+        let mut rtc = Rtc(WebRTCStream::new("", false, LITE_TIMEOUT).await.unwrap());
+        let result = timeout(Duration::from_secs(8), wait_lite_connected(&mut rtc.0))
+            .await
+            .expect("quiet ICE did not release the lightweight attempt");
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1512,10 +1589,21 @@ async fn run(
     let mut message: Option<BytesMut> = None;
     let mut tick = interval(Duration::from_millis(500));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    #[cfg(target_os = "ios")]
+    let mut path_changes = crate::p2p::ios_path::subscribe();
     loop {
         // A direct frame must never overtake a relay frame at the switch.
         let switching = direct.as_ref().map_or(false, |d| !d.active);
         tokio::select! {
+            _ = async {
+                #[cfg(target_os = "ios")]
+                { let _ = path_changes.changed().await; }
+                #[cfg(not(target_os = "ios"))]
+                pending::<()>().await;
+            }, if offerer && direct.is_none() && setup.is_none() => {
+                // Keep the responder's existing pacing and any working path.
+                next_attempt = next_attempt.min(Instant::now() + Duration::from_secs(1));
+            }
             from_relay = relay.incoming.recv() => {
                 let Some(packet) = from_relay else { break };
                 match decode(&packet) {
@@ -1635,7 +1723,7 @@ async fn run(
                     }
                     Some((RESET, number, [])) if number == attempt => {
                         setup = None;
-                        relay_pending(&relay, &mut direct, &mut seq, &path, false).await?;
+                        relay_pending(&relay, &mut direct, &mut seq, &path, None).await?;
                     }
                     Some(_) => {}
                     None if !packet.starts_with(MAGIC) && seq.received == 0 => {
@@ -1663,7 +1751,7 @@ async fn run(
                         }
                     }
                 } else {
-                    relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
+                    relay_pending(&relay, &mut direct, &mut seq, &path, Some("direct receive ended")).await?;
                 }
             }
             payload = from_app.recv(), if message.is_none() => {
@@ -1682,12 +1770,12 @@ async fn run(
                     message = None;
                 }
                 if !seq.can_send_direct(bytes.len()) {
-                    relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
+                    relay_pending(&relay, &mut direct, &mut seq, &path, Some("direct send queue full")).await?;
                 }
                 if let Some(route) = direct.as_mut() {
                     seq.track(bytes.clone());
                     if route.rtc.0.send_raw(bytes.to_vec()).await.is_err() {
-                        relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
+                        relay_pending(&relay, &mut direct, &mut seq, &path, Some("direct send failed")).await?;
                     } else if last {
                         route.first_sent.get_or_insert_with(Instant::now);
                     }
@@ -1708,6 +1796,12 @@ async fn run(
                             }
                         }
                         relay.send(bytes).await?;
+                        if matches!(kind, LITE_OFFER | FULL_OFFER) && (id <= 3 || id.is_power_of_two()) {
+                            if let Some(start) = first_relay_data {
+                                let mode = if kind == LITE_OFFER { "lightweight" } else { "full" };
+                                log::info!("RustDesk {mode} UDP offer sent; relayDataToOfferMs={}", start.elapsed().as_millis());
+                            }
+                        }
                         if kind == PUNCH_READY {
                             if let Some(control) = setup.as_mut().and_then(|a| a.punch.as_mut()) {
                                 control.ready_sent = true;
@@ -1739,8 +1833,10 @@ async fn run(
                         }
                     }
                     if let Some(rtc) = rtc {
+                        let last_rx_progress = rtc.0.rx_progress();
                         direct = Some(Direct {
                             id, rtc, since: Instant::now(), active: false,
+                            ice_silent_since: None, last_rx_progress,
                             first_sent: None, first_received: None, reported: false,
                         });
                     } else if offerer {
@@ -1766,12 +1862,28 @@ async fn run(
             _ = tick.tick() => {
                 #[cfg(test)]
                 if direct.is_some() && DROP_TEST_PATH.swap(false, std::sync::atomic::Ordering::AcqRel) {
-                    relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
+                    relay_pending(&relay, &mut direct, &mut seq, &path, Some("test cut")).await?;
                 }
-                if direct.as_ref().map_or(false, |d| {
-                    !d.active && d.since.elapsed() >= PATH_TIMEOUT || d.rtc.0.is_disconnected()
-                }) || seq.pending.front().map_or(false, |p| p.sent.elapsed() >= PATH_TIMEOUT) {
-                    relay_pending(&relay, &mut direct, &mut seq, &path, true).await?;
+                let now = Instant::now();
+                if let Some(d) = direct.as_mut() {
+                    let rx = d.rtc.0.rx_progress();
+                    let progressed = rx != d.last_rx_progress;
+                    d.last_rx_progress = rx;
+                    let ice_timeout = ice_stalled(
+                        &mut d.ice_silent_since, now, d.rtc.0.is_disconnected(), progressed,
+                    );
+                    let reason = if !d.active && now.duration_since(d.since) >= PATH_TIMEOUT {
+                        Some("relay drain timed out")
+                    } else if seq.pending.front().is_some_and(|p| now.duration_since(p.sent) >= PATH_TIMEOUT) {
+                        Some("direct application acknowledgement timed out")
+                    } else if ice_timeout {
+                        Some("ICE stopped receiving")
+                    } else {
+                        None
+                    };
+                    if reason.is_some() {
+                        relay_pending(&relay, &mut direct, &mut seq, &path, reason).await?;
+                    }
                 }
                 if let Some(mode) = offer_mode {
                     if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {

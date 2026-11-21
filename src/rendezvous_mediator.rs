@@ -20,7 +20,7 @@ use hbb_common::{
     protobuf::Message as _,
     rendezvous_proto::*,
     sleep,
-    socket_client::{self, connect_tcp, is_ipv4, new_direct_udp_for, new_udp_for},
+    socket_client::{self, connect_tcp, is_ipv4, new_udp_for},
     tokio::{
         self, select,
         sync::{mpsc, Mutex, Notify},
@@ -775,9 +775,15 @@ impl RendezvousMediator {
                     .and_then(|result| result)
             };
             let verified = match exchange {
-                Ok(true) if eligible && !carries_answer => {
+                Ok(true) if eligible => {
                     match crate::confirm_signed_direct_permission(&mut socket).await {
                         Ok(true) => Ok(true),
+                        result if carries_answer => {
+                            // Keep the encrypted answer path when the optional observer
+                            // confirmation is unavailable.
+                            log::trace!("Rendezvous observer confirmation: {result:?}");
+                            Ok(false)
+                        }
                         Ok(false) => Err(anyhow::anyhow!("Missing encrypted policy confirmation")),
                         Err(err) => Err(err),
                     }
@@ -786,7 +792,7 @@ impl RendezvousMediator {
                 Err(err) => Err(err),
             };
             match verified {
-                Ok(allowed) => signed_grant = allowed,
+                Ok(allowed) => signed_grant = allowed && !carries_answer,
                 Err(err) => {
                     log::debug!("Rendezvous key exchange unavailable for relay response: {err}");
                     webrtc_sdp_answer.clear();
@@ -1364,7 +1370,7 @@ impl RendezvousMediator {
     ) -> ResultType<()> {
         let mut msg_out = Message::new();
         msg_out.set_punch_hole_sent(msg_punch);
-        let (socket, addr) = new_direct_udp_for(&self.host).await?;
+        let (socket, addr) = crate::p2p::rendezvous_punch_socket(&self.host, true).await?;
         let data = msg_out.write_to_bytes()?;
         socket.send_to(&data, addr).await?;
         // The reply is out, and with it the answer and the v6 address: declined is the listen
