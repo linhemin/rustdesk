@@ -9,6 +9,8 @@ import 'package:percent_indicator/percent_indicator.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/desktop.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:flutter_hbb/desktop/widgets/list_search_action_listener.dart';
@@ -203,8 +205,9 @@ class _FileManagerPageState extends State<FileManagerPage>
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
+        border: Border.all(color: Theme.of(context).dividerColor),
         borderRadius: BorderRadius.all(
-          Radius.circular(15.0),
+          Radius.circular(12.0),
         ),
       ),
       child: child,
@@ -369,36 +372,23 @@ class _FileManagerPageState extends State<FileManagerPage>
 
     return PreferredSize(
       preferredSize: const Size(200, double.infinity),
-      child: Container(
-          margin: const EdgeInsets.only(top: 16.0, bottom: 16.0, right: 16.0),
-          padding: const EdgeInsets.all(8.0),
-          child: Obx(
-            () => jobController.jobTable.isEmpty
-                ? generateCard(
-                    Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SvgPicture.asset(
-                            "assets/transfer.svg",
-                            colorFilter: svgColor(
-                                Theme.of(context).tabBarTheme.labelColor),
-                            height: 40,
-                          ).paddingOnly(bottom: 10),
-                          Text(
-                            translate("No transfers in progress"),
-                            textAlign: TextAlign.center,
-                            textScaler: TextScaler.linear(1.20),
-                            style: TextStyle(
-                                color:
-                                    Theme.of(context).tabBarTheme.labelColor),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                : statusListView(jobController.jobTable),
-          )),
+      child: TransferPane(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          TransferPaneHeading(
+            leading:
+                const WorkspaceIcon(icon: Icons.swap_horiz_rounded, size: 36),
+            title: translate('Transfer file'),
+          ),
+          Expanded(
+            child: Obx(
+              () => jobController.jobTable.isEmpty
+                  ? TransferEmptyState(
+                      message: translate('No transfers in progress'))
+                  : statusListView(jobController.jobTable),
+            ),
+          ),
+        ]),
+      ),
     );
   }
 
@@ -479,9 +469,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   @override
   Widget build(BuildContext context) {
     _handleColumnPorportions();
-    return Container(
-      margin: const EdgeInsets.all(16.0),
-      padding: const EdgeInsets.all(8.0),
+    return TransferPane(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -556,42 +544,33 @@ class _FileManagerViewState extends State<FileManagerView> {
       child: Column(
         children: [
           // symbols
-          PreferredSize(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                          width: 50,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.all(Radius.circular(8)),
-                            color: MyTheme.accent,
-                          ),
-                          padding: EdgeInsets.all(8.0),
-                          child: FutureBuilder<String>(
-                              future: bind.sessionGetPlatform(
-                                  sessionId: _ffi.sessionId,
-                                  isRemote: !isLocal),
-                              builder: (context, snapshot) {
-                                if (snapshot.hasData &&
-                                    snapshot.data!.isNotEmpty) {
-                                  return getPlatformImage('${snapshot.data}');
-                                } else {
-                                  return CircularProgressIndicator(
-                                    color: Theme.of(context)
-                                        .tabBarTheme
-                                        .labelColor,
-                                  );
-                                }
-                              })),
-                      Text(isLocal
-                              ? translate("Local Computer")
-                              : translate("Remote Computer"))
-                          .marginOnly(left: 8.0)
-                    ],
-                  ),
-                  preferredSize: Size(double.infinity, 70))
-              .paddingOnly(bottom: 15),
+          TransferPaneHeading(
+            leading: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+                color: MyTheme.accent,
+              ),
+              padding: EdgeInsets.all(8.0),
+              child: FutureBuilder<String>(
+                future: bind.sessionGetPlatform(
+                    sessionId: _ffi.sessionId, isRemote: !isLocal),
+                builder: (context, snapshot) {
+                  if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+                    return getPlatformImage('${snapshot.data}');
+                  } else {
+                    return CircularProgressIndicator(
+                      color: Theme.of(context).tabBarTheme.labelColor,
+                    );
+                  }
+                },
+              ),
+            ),
+            title: isLocal
+                ? translate('Local Computer')
+                : translate('Remote Computer'),
+          ),
           // buttons
           Row(
             children: [
@@ -1198,7 +1177,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ? MyTheme.button
                       : Theme.of(context).cardColor,
                   borderRadius: BorderRadius.all(
-                    Radius.circular(5.0),
+                    Radius.circular(8.0),
                   ),
                   border: rightClickEntry.value == entry
                       ? Border.all(
@@ -1531,9 +1510,13 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   Widget _buildFileBrowserHeader(BuildContext context) {
     final padding = EdgeInsets.all(1.0);
-    return SizedBox(
+    return Container(
       key: _globalHeaderKey,
       height: kDesktopFileTransferHeaderHeight,
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        borderRadius: BorderRadius.circular(8),
+      ),
       child: Row(
         children: [
           Obx(

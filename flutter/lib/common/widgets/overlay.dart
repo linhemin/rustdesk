@@ -1,6 +1,7 @@
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/desktop.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
@@ -66,6 +67,9 @@ class DraggableChatWindow extends StatelessWidget {
                 ),
                 body: ChatPage(chatModel: chatModel),
               );
+              if (isDesktop || isWebDesktop) {
+                return DesktopOverlaySurface(child: child);
+              }
               return Container(
                   decoration:
                       BoxDecoration(border: Border.all(color: MyTheme.border)),
@@ -120,10 +124,11 @@ class DraggableChatWindow extends StatelessWidget {
   Widget _buildDesktopAppBar(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
           border: Border(
               bottom: BorderSide(
-                  color: Theme.of(context).hintColor.withOpacity(0.4)))),
-      height: 38,
+                  color: Theme.of(context).dividerColor))),
+      height: 44,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [

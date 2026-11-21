@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/desktop.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
@@ -1009,7 +1010,9 @@ class _RemotePageState extends State<RemotePage>
         top: 10,
         right: 10,
         child: _buildRawTouchAndPointerRegion(
-            QualityMonitor(_ffi.qualityMonitorModel), null, null),
+            SessionOverlayFrame(child: QualityMonitor(_ffi.qualityMonitorModel)),
+            null,
+            null),
       ),
     );
     return Stack(
