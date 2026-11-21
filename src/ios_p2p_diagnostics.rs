@@ -67,6 +67,12 @@ struct History(VecDeque<(u64, String)>);
 // distinguishable from a READY that actually reported zero measured sockets.
 fn append_punch_status(out: &mut String, status: &crate::live_direct::PunchStatus) {
     use std::fmt::Write;
+    if let Some(full) = status.full {
+        let _ = writeln!(out, "expandedPorts local {full}");
+        if let Some(peer) = status.full_peer {
+            let _ = writeln!(out, "expandedPorts peer {peer}");
+        }
+    }
     if let Some(group) = status.group_local {
         let _ = writeln!(out, "mappedPairs local {group}");
         if let Some(mask) = status.peer_group_aliases {

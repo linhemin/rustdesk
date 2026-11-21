@@ -2003,6 +2003,9 @@ impl Connection {
                 platform_additions.insert(crate::live_direct::PUNCH_CAPABILITY.into(), json!(true));
                 platform_additions.insert(crate::live_direct::TIMED_CAPABILITY.into(), json!(true));
                 platform_additions.insert(crate::live_direct::GROUP_CAPABILITY.into(), json!(true));
+                if hbb_common::webrtc::WebRTCStream::has_expanded_udp_observer() {
+                    platform_additions.insert(crate::live_direct::FULL_CAPABILITY.into(), json!(true));
+                }
             }
             platform_additions.insert(
                 "is_installed".into(),

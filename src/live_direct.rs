@@ -22,6 +22,7 @@ use std::{collections::VecDeque, future::pending, net::IpAddr};
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const PUNCH_CAPABILITY: &str = "rustdesk_live_direct_punch_v1";
+pub(crate) const FULL_CAPABILITY: &str = "rustdesk_lite_full_punch_v1";
 pub(crate) const GROUP_CAPABILITY: &str = "rustdesk_mapped_pair_groups_v1";
 pub(crate) const TIMED_CAPABILITY: &str = "rustdesk_timed_first_pair_v1";
 #[path = "live_direct/timed.rs"]
@@ -52,6 +53,8 @@ const PUNCH_IO_REQUEST: u8 = 13;
 const PUNCH_IO: u8 = 14;
 const TIMED_OFFER: u8 = 15;
 const GROUP_OFFER: u8 = 22;
+const LITE_OFFER: u8 = 27;
+const FULL_OFFER: u8 = 28;
 const IO_SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 const PUNCH_DELAYS_MS: [u64; 3] = [0, 180, 320];
 // The agent waits up to 680 ms for trickled sockets, then up to 3 s for observers.
@@ -67,6 +70,8 @@ const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_FRAMES: usize = 128;
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
 const RTC_TIMEOUT: u64 = 18_000;
+const FULL_TIMEOUT: u64 = 60_000;
+const CHECK_STAGE: &str = "ICE/DTLS/data-channel checks";
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
 #[cfg(test)]
 static DROP_TEST_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -100,6 +105,7 @@ pub(crate) enum Role {
     CoordinatedOfferer,
     TimedOfferer,
     GroupOfferer,
+    FullOfferer,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,11 +115,17 @@ enum OfferMode {
     Coordinated,
     Timed,
     Grouped,
+    Lite,
+    Full,
 }
 
 impl OfferMode {
     fn timed(self) -> bool {
-        matches!(self, Self::Timed | Self::Grouped)
+        matches!(self, Self::Timed | Self::Grouped | Self::Lite | Self::Full)
+    }
+
+    fn grouped(self) -> bool {
+        matches!(self, Self::Grouped | Self::Lite)
     }
 
     fn for_attempt(self, id: u64) -> Self {
@@ -129,16 +141,60 @@ impl OfferMode {
             Self::Coordinated => PUNCH_OFFER,
             Self::Timed => TIMED_OFFER,
             Self::Grouped => GROUP_OFFER,
+            Self::Lite => LITE_OFFER,
+            Self::Full => FULL_OFFER,
         }
     }
 }
 
+struct RetrySchedule {
+    next_profile: Option<OfferMode>,
+    delay_seconds: u64,
+}
+
+impl Default for RetrySchedule {
+    fn default() -> Self {
+        Self {
+            next_profile: None,
+            delay_seconds: 2,
+        }
+    }
+}
+
+impl RetrySchedule {
+    fn next(&mut self, preferred: OfferMode, id: u64) -> OfferMode {
+        if preferred != OfferMode::Full {
+            return preferred.for_attempt(id);
+        }
+        match self.next_profile.take() {
+            Some(OfferMode::Full) => OfferMode::Full,
+            // Keep both the older coordinated gateway check and the timed single
+            // pair available after an unsuccessful full generation.
+            Some(OfferMode::Timed) => OfferMode::Timed.for_attempt(id),
+            _ => OfferMode::Lite,
+        }
+    }
+
+    fn failed(&mut self, mode: OfferMode, stage: &str) -> Duration {
+        if mode == OfferMode::Lite && stage == CHECK_STAGE {
+            self.next_profile = Some(OfferMode::Full);
+            return Duration::from_millis(250);
+        }
+        self.next_profile = (mode == OfferMode::Full).then_some(OfferMode::Timed);
+        let delay = self.delay_seconds;
+        self.delay_seconds = (delay * 2).min(30);
+        Duration::from_secs(delay)
+    }
+}
+
 impl Role {
-    pub(crate) fn offerer(trickle: bool, punch: bool) -> Self {
-        if trickle && punch {
-            Self::CoordinatedOfferer
-        } else {
-            Self::Offerer { trickle }
+    pub(crate) fn offerer(trickle: bool, punch: bool, timed: bool, groups: bool, full: bool) -> Self {
+        match (trickle, punch, timed, groups, full) {
+            (true, true, true, true, true) => Self::FullOfferer,
+            (true, true, true, true, _) => Self::GroupOfferer,
+            (true, true, true, _, _) => Self::TimedOfferer,
+            (true, true, _, _, _) => Self::CoordinatedOfferer,
+            _ => Self::Offerer { trickle },
         }
     }
 
@@ -150,6 +206,7 @@ impl Role {
             Self::CoordinatedOfferer => Some(OfferMode::Coordinated),
             Self::TimedOfferer => Some(OfferMode::Timed),
             Self::GroupOfferer => Some(OfferMode::Grouped),
+            Self::FullOfferer => Some(OfferMode::Full),
         }
     }
 }
@@ -531,6 +588,8 @@ impl PunchIo {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct PunchStatus {
+    pub(crate) full: Option<timed::FullSample>,
+    pub(crate) full_peer: Option<timed::FullSample>,
     pub(crate) group_local: Option<timed::GroupSample>,
     pub(crate) group_peer: Option<timed::GroupSample>,
     pub(crate) peer_profiles: Option<[u8; 4]>,
@@ -712,7 +771,7 @@ async fn coordinated_punch(
 }
 
 struct Attempt {
-    grouped: bool,
+    mode: OfferMode,
     timed: Option<mpsc::Sender<(u8, Vec<u8>)>>,
     _task: SetupTask,
     answer: Option<oneshot::Sender<String>>,
@@ -744,9 +803,10 @@ fn make_attempt(
     mode: OfferMode,
 ) -> Attempt {
     let offerer = offer.is_none();
+    let rtc_timeout = if mode == OfferMode::Full { FULL_TIMEOUT } else { RTC_TIMEOUT };
     let trickle = mode != OfferMode::Complete;
     let (timed, timed_rx) = mode.timed().then(|| mpsc::channel(12)).unzip();
-    let (punch, coordination) = if matches!(mode, OfferMode::Coordinated | OfferMode::Timed | OfferMode::Grouped) {
+    let (punch, coordination) = if mode == OfferMode::Coordinated || mode.timed() {
         let (control, ready, start) = PunchControl::new();
         let channel = (mode == OfferMode::Coordinated).then(|| (control.status.clone(), ready, start));
         (Some(control), channel)
@@ -762,7 +822,11 @@ fn make_attempt(
         .filter(|_| !offerer)
         .map(|c| c.report_io.subscribe());
     #[cfg(target_os = "ios")]
-    let mut observation = crate::ios_p2p_diagnostics::Observation::new(offerer, "relay-upgrade");
+    let mut observation = crate::ios_p2p_diagnostics::Observation::new(offerer, match mode {
+        OfferMode::Lite => "relay-upgrade-lite",
+        OfferMode::Full => "relay-upgrade-full",
+        _ => "relay-upgrade",
+    });
     #[cfg(target_os = "ios")]
     if let Some(control) = &punch {
         observation.set_punch_status(control.status.subscribe());
@@ -776,7 +840,7 @@ fn make_attempt(
                 bail!("Timed ICE requires a candidate-free trickle offer");
             }
             let mut rtc =
-                Rtc(WebRTCStream::new_with_grouped_checks(offer.as_deref().unwrap_or(""), false, RTC_TIMEOUT, mode == OfferMode::Grouped).await?);
+                Rtc(WebRTCStream::new_with_punch_profile(offer.as_deref().unwrap_or(""), false, rtc_timeout, mode.grouped(), mode == OfferMode::Full).await?);
             let outbound_first = cfg!(target_os = "windows") && !offerer
                 && mode == OfferMode::Coordinated && id % 2 == 1;
             let (events, _advertisements) = if outbound_first {
@@ -807,7 +871,7 @@ fn make_attempt(
 
             // A Build 78 controller will never request these samples. A Build 78
             // responder ignores the request and continues normal trickle and punching.
-            if offerer && matches!(mode, OfferMode::Coordinated | OfferMode::Timed | OfferMode::Grouped) && cfg!(any(target_os = "ios", test)) {
+            if offerer && (mode == OfferMode::Coordinated || mode.timed()) && cfg!(any(target_os = "ios", test)) {
                 let _ = events.try_send(SetupEvent::Send(frame(PUNCH_IO_REQUEST, id, &[])));
             }
             let _io_reporter = io_requested.map(|requested| {
@@ -864,7 +928,11 @@ fn make_attempt(
                 Some(SetupTask(tokio::spawn(async move {
                     let mut first_candidate = Some(first_candidate);
                     if let Some((control, status)) = timed_job {
-                        timed::run(&pc, &events, id, offerer, control, &mut remote_candidates, status, mode == OfferMode::Grouped).await;
+                        if mode == OfferMode::Full {
+                            timed::run_full(&pc, &events, id, offerer, control, &mut remote_candidates, status).await;
+                        } else {
+                            timed::run(&pc, &events, id, offerer, control, &mut remote_candidates, status, mode.grouped()).await;
+                        }
                     }
                     while let Some(candidate) = remote_candidates.recv().await {
                         if pc.add_remote_ice_candidate(&candidate).await.is_err() {
@@ -901,10 +969,10 @@ fn make_attempt(
                     start,
                 )))
             });
-            stage = "ICE/DTLS/data-channel checks";
+            stage = CHECK_STAGE;
             #[cfg(target_os = "ios")]
             observation.set_stage(stage);
-            let connected = rtc.0.wait_connected(RTC_TIMEOUT).await;
+            let connected = rtc.0.wait_connected(rtc_timeout).await;
             #[cfg(target_os = "ios")]
             observation.sample_now(&rtc.0);
             connected?;
@@ -927,7 +995,7 @@ fn make_attempt(
             .await;
     });
     Attempt {
-        grouped: mode == OfferMode::Grouped,
+        mode,
         timed,
         _task: SetupTask(task),
         answer: offerer.then_some(answer),
@@ -1019,13 +1087,43 @@ mod tests {
             (true, true, PUNCH_OFFER),
         ] {
             assert_eq!(
-                Role::offerer(trickle, punch)
+                Role::offerer(trickle, punch, false, false, false)
                     .offer_mode()
                     .unwrap()
                     .frame_kind(),
                 expected
             );
         }
+    }
+
+    #[test]
+    fn full_requires_trickle_punch_timed_groups_and_full_capabilities() {
+        for bits in 0u8..32 {
+            let on = |n: u8| bits & (1 << n) != 0;
+            let role = Role::offerer(on(0), on(1), on(2), on(3), on(4));
+            assert_eq!(matches!(role, Role::FullOfferer), bits == 31);
+        }
+        assert!(matches!(Role::offerer(true, true, true, true, false), Role::GroupOfferer));
+    }
+
+    #[test]
+    fn only_failed_lite_connectivity_checks_escalate_to_full_once() {
+        use OfferMode::*;
+        let mut retries = RetrySchedule::default();
+        assert!(retries.next(Full, 1) == Lite);
+        assert_eq!(retries.failed(Lite, "set remote description"), Duration::from_secs(2));
+        assert!(retries.next(Full, 2) == Lite);
+        assert!(retries.failed(Lite, CHECK_STAGE) < Duration::from_secs(1));
+        assert!(retries.next(Full, 3) == Full);
+        assert_eq!(retries.failed(Full, CHECK_STAGE), Duration::from_secs(4));
+        assert!(retries.next(Full, 4) == Timed);
+        retries.failed(Timed, CHECK_STAGE);
+        assert!(retries.next(Full, 5) == Lite);
+
+        let mut legacy = RetrySchedule::default();
+        legacy.failed(Grouped, CHECK_STAGE);
+        assert!(legacy.next(Grouped, 2) == Grouped);
+        assert_ne!(Grouped.frame_kind(), FULL_OFFER);
     }
 
     #[test]
@@ -1369,7 +1467,8 @@ async fn run(
     let mut attempt = 0;
     let offer_mode = role.offer_mode();
     let offerer = offer_mode.is_some();
-    let mut retry_delay = 2;
+    let mut retries = RetrySchedule::default();
+    let mut accepted_lite = None;
     let mut next_attempt = Instant::now() + Duration::from_secs(1);
     let mut direct: Option<Direct> = None;
     let mut seq = Sequence::default();
@@ -1387,14 +1486,22 @@ async fn run(
                         receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
                     }
                     Some((ACK, number, [])) => seq.acknowledge(number),
-                    Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER), number, data))
+                    Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER | LITE_OFFER | FULL_OFFER), number, data))
                         if !offerer && direct.is_none() && number > attempt
-                            && data.len() <= MAX_SDP && Instant::now() >= next_attempt =>
+                            && data.len() <= MAX_SDP
+                            && if kind == FULL_OFFER {
+                                accepted_lite == number.checked_sub(1) && WebRTCStream::has_expanded_udp_observer()
+                            } else {
+                                Instant::now() >= next_attempt
+                            } =>
                     {
                         if let Ok(sdp) = std::str::from_utf8(data) {
+                            accepted_lite = (kind == LITE_OFFER).then_some(number);
                             attempt = number;
                             next_attempt = Instant::now() + Duration::from_secs(3);
                             let mode = match kind {
+                                LITE_OFFER => OfferMode::Lite,
+                                FULL_OFFER => OfferMode::Full,
                                 GROUP_OFFER => OfferMode::Grouped,
                                 TIMED_OFFER => OfferMode::Timed,
                                 PUNCH_OFFER => OfferMode::Coordinated,
@@ -1419,24 +1526,34 @@ async fn run(
                         }
                     }
                     Some((timed::GROUP_ALIASES, number, [mask])) if number == attempt && *mask < 8 => {
-                        if let Some(p) = setup.as_ref().filter(|a| a.grouped).and_then(|a| a.punch.as_ref()) {
+                        if let Some(p) = setup.as_ref().filter(|a| a.mode.grouped()).and_then(|a| a.punch.as_ref()) {
                             p.status.send_modify(|s| s.peer_group_aliases = Some(*mask));
                         }
                     }
                     Some((timed::PROFILE, number, data)) if number == attempt && data.len() == 4 => {
-                        if let Some(p) = setup.as_ref().filter(|a| a.grouped).and_then(|a| a.punch.as_ref()) {
+                        if let Some(p) = setup.as_ref().filter(|a| a.mode.grouped()).and_then(|a| a.punch.as_ref()) {
                             if let Ok(counts) = <[u8; 4]>::try_from(data) {
                                 p.status.send_modify(|s| s.peer_profiles = Some(counts));
                             }
                         }
                     }
                     Some((timed::GROUP_RESULT, number, data)) if number == attempt => {
-                        if let (Some(p), Some(sample)) = (setup.as_ref().filter(|a| a.grouped).and_then(|a| a.punch.as_ref()), timed::GroupSample::decode(data)) {
+                        if let (Some(p), Some(sample)) = (setup.as_ref().filter(|a| a.mode.grouped()).and_then(|a| a.punch.as_ref()), timed::GroupSample::decode(data)) {
                             p.status.send_modify(|s| s.group_peer = Some(sample));
                         }
                     }
+                    Some((timed::FULL_RESULT, number, data)) if number == attempt => {
+                        if let (Some(p), Some(sample)) = (setup.as_ref().filter(|a| a.mode == OfferMode::Full).and_then(|a| a.punch.as_ref()), timed::FullSample::decode(data)) {
+                            p.status.send_modify(|s| s.full_peer = Some(sample));
+                        }
+                    }
+                    Some((timed::FULL_SELECT, number, data)) if number == attempt && data.len() <= timed::MAX_FULL_ENDPOINTS * 6 => {
+                        if let Some(tx) = setup.as_ref().filter(|a| a.mode == OfferMode::Full).and_then(|a| a.timed.as_ref()) {
+                            let _ = tx.try_send((timed::FULL_SELECT, data.to_vec()));
+                        }
+                    }
                     Some((timed::GROUP_SELECT, number, data)) if number == attempt && data.len() <= 21 => {
-                        if let Some(tx) = setup.as_ref().filter(|a| a.grouped).and_then(|a| a.timed.as_ref()) {
+                        if let Some(tx) = setup.as_ref().filter(|a| a.mode.grouped()).and_then(|a| a.timed.as_ref()) {
                             let _ = tx.try_send((timed::GROUP_SELECT, data.to_vec()));
                         }
                     }
@@ -1553,8 +1670,7 @@ async fn run(
                     if let Some(rtc) = rtc {
                         direct = Some(Direct { id, rtc, since: Instant::now(), active: false });
                     } else if offerer {
-                        next_attempt = Instant::now() + Duration::from_secs(retry_delay);
-                        retry_delay = (retry_delay * 2).min(30);
+                        next_attempt = Instant::now() + retries.failed(current.mode, stage);
                     }
                 }
                 SetupEvent::Finished(_, _, _) => {}
@@ -1572,9 +1688,8 @@ async fn run(
                 if let Some(mode) = offer_mode {
                     if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
                         attempt += 1;
-                        // Give immediately usable LAN/IPv6 candidates the ordinary first
-                        // retry. Use fresh sockets for the timed attempt on the next retry.
-                        let mode = mode.for_attempt(attempt);
+                        // Only an authenticated peer advertising the new capability can enter full mode.
+                        let mode = retries.next(mode, attempt);
                         setup = Some(make_attempt(&event_tx, attempt, None, mode));
                     }
                 }
@@ -1584,7 +1699,7 @@ async fn run(
             if !direct.active && seq.acked == seq.sent {
                 direct.active = true;
                 path.send_replace(true);
-                retry_delay = 2;
+                retries = RetrySchedule::default();
                 log::info!("Active RustDesk session switched to direct WebRTC");
             }
         }

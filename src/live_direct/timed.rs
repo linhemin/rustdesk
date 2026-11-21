@@ -26,6 +26,10 @@ pub(super) const GROUP_ALIASES: u8 = 26;
 #[path = "groups.rs"]
 mod groups;
 pub(crate) use groups::GroupSample;
+#[path = "full.rs"]
+mod full;
+pub(super) use full::{run_full, FULL_RESULT, FULL_SELECT, MAX_FULL_ENDPOINTS};
+pub(crate) use full::FullSample;
 const BUDGET: Duration = Duration::from_secs(7);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

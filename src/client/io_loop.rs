@@ -119,6 +119,7 @@ struct ParsedPeerInfo {
     live_direct_punch: bool,
     live_direct_timed: bool,
     live_direct_groups: bool,
+    live_direct_full: bool,
 }
 
 impl ParsedPeerInfo {
@@ -198,6 +199,7 @@ impl<T: InvokeUiSession> Remote<T> {
         self.video_delivery = Default::default();
         self.peer_info.live_direct_timed = false;
         self.peer_info.live_direct_groups = false;
+        self.peer_info.live_direct_full = false;
         let mut received = false;
         let conn_type = if self.handler.is_file_transfer() {
             ConnType::FILE_TRANSFER
@@ -364,15 +366,13 @@ impl<T: InvokeUiSession> Remote<T> {
                                         last_recv_time = Instant::now();
                                         if waiting_for_live_direct && bytes.as_ref() == crate::live_direct::ACCEPT {
                                             waiting_for_live_direct = false;
-                                            let role = if self.peer_info.live_direct_timed && self.peer_info.live_direct_trickle && self.peer_info.live_direct_punch {
-                                                if self.peer_info.live_direct_groups {
-                                                    crate::live_direct::Role::GroupOfferer
-                                                } else {
-                                                    crate::live_direct::Role::TimedOfferer
-                                                }
-                                            } else {
-                                                crate::live_direct::Role::offerer(self.peer_info.live_direct_trickle, self.peer_info.live_direct_punch)
-                                            };
+                                            let role = crate::live_direct::Role::offerer(
+                                                self.peer_info.live_direct_trickle,
+                                                self.peer_info.live_direct_punch,
+                                                self.peer_info.live_direct_timed,
+                                                self.peer_info.live_direct_groups,
+                                                self.peer_info.live_direct_full && hbb_common::webrtc::WebRTCStream::has_expanded_udp_observer(),
+                                            );
                                             match crate::live_direct::wrap(&mut peer, role) {
                                                 Ok(path) => live_path = Some(path),
                                                 Err(err) => {
@@ -2736,6 +2736,9 @@ impl<T: InvokeUiSession> Remote<T> {
                 .get(crate::live_direct::PUNCH_CAPABILITY)
                 .and_then(serde_json::Value::as_bool)
                 == Some(true);
+            self.peer_info.live_direct_full = platform_additions
+                .get(crate::live_direct::FULL_CAPABILITY)
+                .and_then(serde_json::Value::as_bool) == Some(true);
             self.peer_info.live_direct_groups = platform_additions
                 .get(crate::live_direct::GROUP_CAPABILITY)
                 .and_then(serde_json::Value::as_bool) == Some(true);
