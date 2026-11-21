@@ -61,7 +61,7 @@ void main() {
     expect(find.text('Password is required'), findsOneWidget);
     expect(
         tester
-            .widget<TextFormField>(find.byType(TextFormField).last)
+            .widget<TextField>(find.byType(TextField).last)
             .obscureText,
         isTrue);
     await tester.tap(find.byType(CheckboxListTile));
