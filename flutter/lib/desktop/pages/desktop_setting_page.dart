@@ -28,7 +28,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
 
-const double _kTabWidth = 200;
+const double _kTabWidth = 232;
 const double _kTabHeight = 42;
 const double _kCardFixedWidth = 540;
 const double _kCardLeftMargin = 15;
@@ -312,7 +312,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
       style: const TextStyle(
         color: _accentColor,
         fontSize: _kTitleFontSize,
-        fontWeight: FontWeight.w400,
+        fontWeight: FontWeight.w700,
       ),
     );
     return Row(

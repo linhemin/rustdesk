@@ -1167,6 +1167,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.2.2"
+  rustdesk_ui:
+    dependency: "direct main"
+    description:
+      path: "packages/rustdesk_ui"
+      relative: true
+    source: path
+    version: "0.0.0"
   rxdart:
     dependency: transitive
     description:

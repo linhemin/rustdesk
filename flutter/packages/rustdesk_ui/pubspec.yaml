@@ -1,0 +1,8 @@
+name: rustdesk_ui
+description: Shared visual components for RustDesk desktop, mobile, and UI previews.
+publish_to: none
+environment:
+  sdk: '>=3.1.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
