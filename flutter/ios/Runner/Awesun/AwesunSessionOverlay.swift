@@ -110,8 +110,8 @@ final class AwesunSessionOverlay {
     private func setPresentation(_ values: [String: Any]) {
         let obscured = values["obscured"] as? Bool == true
         let inset = CGFloat(values["keyboardInset"] as? Double ?? 0)
-        if obscured || inset > 0 { surface?.mouseInput.cancel() }
         if obscured {
+            surface?.mouseInput.cancel()
             model.endDrag()
             model.pauseMouseIdleTimer()
             model.closeObscuredPanels()
@@ -119,11 +119,16 @@ final class AwesunSessionOverlay {
         }
         if model.keyboardInset != 0 && inset == 0 {
             model.releaseModifiers()
-            if !model.isKeyboardPanel { model.closePanel() }
         }
-        model.keyboardInset = inset
+        if model.keyboardInset != inset {
+            let before = model.mouseObstruction
+            model.keyboardInset = inset
+            if model.mouseObstruction > before, let size = surface?.bounds.size {
+                model.keepVirtualMouseReachable(in: size)
+            }
+        }
         surface?.isHidden = !model.active || obscured
-        if !obscured && inset == 0 { model.refreshMouseIdleTimer() }
+        if !obscured { model.refreshMouseIdleTimer() }
     }
 
     private func savePhoto(_ png: Data?, result: @escaping FlutterResult) {
@@ -168,11 +173,15 @@ private final class AwesunTouchSurface: UIView {
     required init?(coder: NSCoder) { nil }
 
     private var mouseAvailable: Bool {
-        model.active && !model.functionsOpen && model.sheet == nil &&
-            model.keyboardInset <= 0
+        model.active && !model.functionsOpen && (model.sheet == nil || model.isKeyboardPanel)
+    }
+
+    private var mouseArea: CGSize {
+        AwesunControlLayout.mouseArea(in: bounds.size, obstruction: model.mouseObstruction)
     }
 
     private func floatingControl(at point: CGPoint) -> Bool {
+        guard model.mouseObstruction == 0 else { return false }
         let size = bounds.size
         let controls = [AwesunControlLayout.dockCenter(model.lockPlacement, in: size)] +
             (0..<3).map { AwesunControlLayout.rail($0, in: size) }
@@ -183,7 +192,7 @@ private final class AwesunTouchSurface: UIView {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if !isHidden && isUserInteractionEnabled && bounds.contains(point) &&
-            mouseAvailable && !floatingControl(at: point),
+            mouseAvailable && point.y < mouseArea.height && !floatingControl(at: point),
             AwesunControlLayout.mouseRegion(point, model: model, size: bounds.size) != nil {
             if mouseInput.canStart { return mouseInput }
             return nil
@@ -193,15 +202,14 @@ private final class AwesunTouchSurface: UIView {
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard super.point(inside: point, with: event) else { return false }
-        if model.functionsOpen || (model.sheet != nil &&
-            !(model.isKeyboardPanel && model.keyboardInset > 0)) { return true }
+        if model.functionsOpen || (model.sheet != nil && !model.isKeyboardPanel) { return true }
 
-        let size = bounds.size
-        if model.keyboardInset > 0 {
-            return (size.height - model.keyboardInset - 38 ... size.height - model.keyboardInset).contains(point.y)
+        let area = mouseArea
+        if model.mouseObstruction > 0 && point.y >= area.height {
+            return point.y < bounds.height - model.keyboardInset
         }
         if model.mouseVisible && model.mouseCollapsed &&
-            AwesunControlLayout.circle(point, at: AwesunControlLayout.dockCenter(model.mousePlacement, in: size),
+            AwesunControlLayout.circle(point, at: AwesunControlLayout.dockCenter(model.mousePlacement, in: area),
                                        radius: AwesunControlLayout.controlRadius) {
             return true
         }
@@ -220,6 +228,9 @@ private final class AwesunMouseInput: UIView {
     private var hubTap: Task<Void, Never>?
     private var wheelAngle: Double?
     private var wheelRemainder = 0.0
+    private var edgeTimer: Timer?
+    private var edgeDirection: CGSize = .zero
+    private let edgeInterval: TimeInterval = 1.0 / 30.0
 
     init(surface: AwesunTouchSurface) {
         self.surface = surface
@@ -234,9 +245,14 @@ private final class AwesunMouseInput: UIView {
 
     var canStart: Bool { contact == nil }
 
+    private func geometry(_ surface: AwesunTouchSurface, center: CGPoint? = nil) -> AwesunMouseGeometry {
+        AwesunControlLayout.mouseGeometry(center ?? surface.model.mouseAnchor, in: bounds.size,
+                                          viewport: surface.model.mouseViewport,
+                                          obstruction: surface.model.mouseObstruction)
+    }
+
     private func pointer(_ surface: AwesunTouchSurface) -> CGPoint {
-        AwesunControlLayout.pointer(surface.model.mouseAnchor, in: bounds.size,
-                                   viewport: surface.model.mouseViewport)
+        geometry(surface).pointer
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -280,12 +296,12 @@ private final class AwesunMouseInput: UIView {
                 hubTap?.cancel()
                 hubTap = nil
                 let origin = wasMoved ? previous : start
-                let old = AwesunControlLayout.mouseAnchor(surface.model.mouseAnchor, in: bounds.size)
-                let next = CGPoint(x: old.x + current.x - origin.x, y: old.y + current.y - origin.y)
-                let anchor = AwesunControlLayout.mouseAnchor(next, in: bounds.size)
-                let target = AwesunControlLayout.pointer(anchor, in: bounds.size,
-                                                         viewport: surface.model.mouseViewport)
-                surface.model.moveVirtualPointer(anchor: anchor, point: target)
+                let old = geometry(surface).center
+                let motion = CGSize(width: current.x - origin.x, height: current.y - origin.y)
+                let next = CGPoint(x: old.x + motion.width, y: old.y + motion.height)
+                let layout = geometry(surface, center: next)
+                surface.model.moveVirtualPointer(anchor: layout.center, point: layout.aim)
+                updateEdgeMotion(motion, layout: layout, locked: surface.model.displayLocked)
             }
         case .wheelTop:
             if moved {
@@ -325,7 +341,7 @@ private final class AwesunMouseInput: UIView {
                     guard !Task.isCancelled else { return }
                     self?.hubTap = nil
                     if let model = model, model.mouseVisible && !model.mouseCollapsed &&
-                        !model.functionsOpen && model.sheet == nil && model.keyboardInset <= 0 {
+                        !model.functionsOpen && (model.sheet == nil || model.isKeyboardPanel) {
                         model.click("left", at: target)
                     }
                 }
@@ -355,6 +371,7 @@ private final class AwesunMouseInput: UIView {
     }
 
     private func finish() {
+        stopEdgeMotion()
         let temporaryWheel = region == .wheelTop
         contact = nil
         region = nil
@@ -369,13 +386,53 @@ private final class AwesunMouseInput: UIView {
         }
     }
 
+    private func updateEdgeMotion(_ motion: CGSize, layout: AwesunMouseGeometry, locked: Bool) {
+        let velocity = layout.canvasVelocity(toward: motion)
+        guard !locked && velocity != .zero else {
+            stopEdgeMotion()
+            return
+        }
+        edgeDirection = motion
+        guard edgeTimer == nil else { return }
+        let timer = Timer(timeInterval: edgeInterval, repeats: true) { [weak self] timer in
+            if self == nil {
+                timer.invalidate()
+                return
+            }
+            Task { @MainActor [weak self] in self?.advanceEdgeMotion() }
+        }
+        edgeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        advanceEdgeMotion()
+    }
+
+    private func advanceEdgeMotion() {
+        guard let surface = surface, contact != nil, !surface.isHidden, !surface.model.displayLocked else {
+            stopEdgeMotion()
+            return
+        }
+        let layout = geometry(surface)
+        let velocity = layout.canvasVelocity(toward: edgeDirection)
+        guard velocity != .zero else {
+            stopEdgeMotion()
+            return
+        }
+        AwesunBridge.shared.virtualMove(to: layout.aim, canvasDelta: CGSize(
+            width: velocity.width * edgeInterval, height: velocity.height * edgeInterval))
+    }
+
+    private func stopEdgeMotion() {
+        edgeTimer?.invalidate()
+        edgeTimer = nil
+        edgeDirection = .zero
+    }
+
     private func updateWheel(at point: CGPoint) {
         guard let surface = surface else { return }
-        let center = AwesunControlLayout.mouseCenter(
-            surface.model.mouseAnchor, in: bounds.size, viewport: surface.model.mouseViewport)
-        let dx = point.x - center.x
-        let dy = point.y - center.y
-        guard hypot(dx, dy) >= AwesunControlLayout.ringRadius / 2 else {
+        let layout = geometry(surface)
+        let dx = point.x - layout.center.x
+        let dy = point.y - layout.center.y
+        guard hypot(dx, dy) >= AwesunControlLayout.ringRadius * layout.scale / 2 else {
             wheelAngle = nil
             return
         }

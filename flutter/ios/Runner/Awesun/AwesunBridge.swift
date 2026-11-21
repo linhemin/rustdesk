@@ -28,8 +28,11 @@ final class AwesunBridge {
         channel?.invokeMethod("virtualClick", arguments: args)
     }
 
-    func virtualMove(to point: CGPoint) {
-        channel?.invokeMethod("virtualMove", arguments: ["x": Double(point.x), "y": Double(point.y)])
+    func virtualMove(to point: CGPoint, canvasDelta: CGSize = .zero) {
+        channel?.invokeMethod("virtualMove", arguments: [
+            "x": Double(point.x), "y": Double(point.y),
+            "panX": Double(canvasDelta.width), "panY": Double(canvasDelta.height)
+        ])
     }
 
     func virtualDrag(_ down: Bool, at point: CGPoint? = nil) {

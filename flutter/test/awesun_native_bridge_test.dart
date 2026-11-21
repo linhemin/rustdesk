@@ -77,7 +77,7 @@ void main() {
         commands.add(id);
         return ['Copy P2P diagnostics', 'Refresh'];
       },
-      onVirtualMove: (delta) => virtual.add(delta),
+      onVirtualMove: (point, pan) => virtual.add((point, pan)),
       onVirtualClick: (button, point) => virtual.add((button, point)),
       onVirtualDrag: (down, point) => virtual.add((down, point)),
       onVirtualScroll: (steps, point) => virtual.add((steps, point)),
@@ -98,11 +98,16 @@ void main() {
 
     const point = Offset(73, 91);
     await send(const MethodCall('virtualPointerVisible', {'visible': true}));
-    await send(const MethodCall('virtualDrag', {'down': true, 'x': 73, 'y': 91}));
+    await send(
+        const MethodCall('virtualDrag', {'down': true, 'x': 73, 'y': 91}));
     await send(const MethodCall('virtualMove', {'x': 75, 'y': 93}));
+    await send(const MethodCall(
+        'virtualMove', {'x': 280, 'y': 450, 'panX': -12, 'panY': -8}));
     await send(const MethodCall('virtualDrag', {'down': false}));
-    await send(const MethodCall('virtualClick', {'button': 'left', 'x': 73, 'y': 91}));
-    await send(const MethodCall('virtualClick', {'button': 'right', 'x': 73, 'y': 91}));
+    await send(
+        const MethodCall('virtualClick', {'button': 'left', 'x': 73, 'y': 91}));
+    await send(const MethodCall(
+        'virtualClick', {'button': 'right', 'x': 73, 'y': 91}));
     await send(const MethodCall('scroll', {'dy': -2, 'x': 73, 'y': 91}));
     await send(const MethodCall('virtualClick', {'button': 'invalid'}));
     allowed = false;
@@ -112,7 +117,8 @@ void main() {
     expect(virtual, [
       true,
       (true, point),
-      const Offset(75, 93),
+      (const Offset(75, 93), Offset.zero),
+      (const Offset(280, 450), const Offset(-12, -8)),
       (false, null),
       (MouseButtons.left, point),
       (MouseButtons.right, point),

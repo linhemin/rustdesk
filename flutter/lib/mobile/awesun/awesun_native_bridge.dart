@@ -28,7 +28,7 @@ class AwesunNativeBridge {
   final bool Function() canSendInput;
   final VoidCallback onClose;
   final Future<Object?> Function(String, Map<Object?, Object?>) onCommand;
-  final void Function(Offset) onVirtualMove;
+  final void Function(Offset, Offset) onVirtualMove;
   final void Function(MouseButtons, Offset?) onVirtualClick;
   final void Function(bool, Offset?) onVirtualDrag;
   final void Function(int, Offset) onVirtualScroll;
@@ -50,7 +50,8 @@ class AwesunNativeBridge {
     return active && shown;
   }
 
-  Future<bool> _setNativeVisibility(bool active, {bool touchMode = false}) async {
+  Future<bool> _setNativeVisibility(bool active,
+      {bool touchMode = false}) async {
     try {
       return await _channel.invokeMethod<bool>('setActive', {
             'active': active,
@@ -80,7 +81,8 @@ class AwesunNativeBridge {
       await _channel.invokeMethod<String>('saveTexturePhoto') ?? 'saveFailed';
 
   Future<bool> configureVideoTexture(bool enabled) async =>
-      await _channel.invokeMethod<bool>('setVideoTexture', {'enabled': enabled}) ??
+      await _channel
+          .invokeMethod<bool>('setVideoTexture', {'enabled': enabled}) ??
       false;
 
   Future<void> setMouseViewport(Rect area) =>
@@ -138,7 +140,10 @@ class AwesunNativeBridge {
     final point = _point(args);
     switch (call.method) {
       case 'virtualMove':
-        if (point != null) onVirtualMove(point);
+        if (point != null) {
+          final delta = _point(args, xKey: 'panX', yKey: 'panY') ?? Offset.zero;
+          onVirtualMove(point, delta);
+        }
       case 'virtualDrag':
         if (args['down'] == true && point != null) onVirtualDrag(true, point);
       case 'virtualClick':
@@ -185,9 +190,10 @@ class AwesunNativeBridge {
     return null;
   }
 
-  Offset? _point(Map<dynamic, dynamic> args) {
-    final x = args['x'];
-    final y = args['y'];
+  Offset? _point(Map<dynamic, dynamic> args,
+      {String xKey = 'x', String yKey = 'y'}) {
+    final x = args[xKey];
+    final y = args[yKey];
     if (x is num && x.isFinite && y is num && y.isFinite) {
       return Offset(x.toDouble(), y.toDouble());
     }

@@ -99,11 +99,13 @@ class RemotePage extends StatefulWidget {
 }
 
 class _NativePointerBatch {
-  _NativePointerBatch(this.target);
+  _NativePointerBatch(this.target, this.pan);
   Offset target;
+  Offset pan;
 }
 
-class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
+class _RemotePageState extends State<RemotePage>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final _sessionOpened = DateTime.now();
   Timer? _timer;
   bool _showBar = !isWebDesktop;
@@ -148,6 +150,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool _nativePointerVisible = false;
   Rect? _nativeMouseViewport;
   bool _nativeMouseViewportScheduled = false;
+  double _nativeKeyboardPanel = 0;
+  ({Size full, double visible})? _nativeKeyboardViewport;
+  late final AnimationController _nativeKeyboardShift =
+      AnimationController.unbounded(vsync: this)
+        ..addListener(() {
+          gFFI.canvasModel.setNativeKeyboardOffset(_nativeKeyboardShift.value);
+        });
   int _nativeSessionRevision = 0;
   late final _nativeSession = AwesunNativeBridge(
     inputModel: inputModel,
@@ -290,6 +299,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       gFFI.chatModel.chatWindowOpen.removeListener(_syncNativePresentation);
       if (_nativeSessionRevision != 0) _nativeSession.dispose();
     }
+    if (isIOS) _nativeKeyboardShift.dispose();
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
     _textController.removeListener(_sendSessionImeEdit);
@@ -401,7 +411,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         _mobileFocusNode.unfocus();
         _physicalFocusNode.requestFocus();
       }
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      if (!_nativeSessionActive || chatHasFocus) {
+        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
+      }
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
           gFFI.ffiModel.pi.version.isNotEmpty) {
@@ -432,8 +444,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
         if (!mounted) return;
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-            overlays: SystemUiOverlay.values);
+        if (!_nativeSessionActive || gFFI.chatModel.inputNode.hasFocus) {
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+              overlays: SystemUiOverlay.values);
+        }
         if (_showEdit && !gFFI.chatModel.inputNode.hasFocus) {
           _mobileFocusNode.requestFocus();
         }
@@ -827,28 +841,56 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         await gFFI.cursorModel.updatePan(delta, Offset.zero, false);
       });
 
-  void _moveNativePointer(Offset point) {
+  void _moveNativePointer(Offset point, Offset pan) {
     final pending = _nativePointerBatch;
     if (pending != null) {
       pending.target = point;
+      pending.pan += pan;
       return;
     }
-    final batch = _NativePointerBatch(point);
+    final batch = _NativePointerBatch(point, pan);
     _nativePointerBatch = batch;
     _queueVirtualMouse(() async {
       if (identical(_nativePointerBatch, batch)) _nativePointerBatch = null;
-      await _moveToNativePointer(batch.target);
+      await _moveToNativePointer(batch.target, pan: batch.pan);
     });
   }
 
-  Future<bool> _moveToNativePointer(Offset point) async {
+  Rect _nativePointerViewport(RenderBox box) {
+    final keyboardInset = _nativePresentation?.inset ?? 0;
+    final obstruction = keyboardInset > 0 ? keyboardInset + 38 : _nativeKeyboardPanel;
+    final keyboardTop = MediaQuery.sizeOf(context).height - obstruction;
+    final bottom = obstruction <= 0
+        ? box.size.height
+        : (keyboardTop - box.localToGlobal(Offset.zero).dy)
+            .clamp(0.0, box.size.height)
+            .toDouble();
+    return Rect.fromLTWH(0, 0, box.size.width, bottom);
+  }
+
+  Rect _nativeVideoRect(CanvasModel canvas) => Rect.fromLTWH(
+        canvas.x,
+        canvas.y + canvas.getAdjustY(),
+        canvas.getDisplayWidth() * canvas.scale,
+        canvas.getDisplayHeight() * canvas.scale,
+      );
+
+  Future<bool> _moveToNativePointer(Offset point, {Offset pan = Offset.zero}) async {
     if (!mounted || !_nativeSessionActive || !_canSendSessionInput) return false;
     final box = _sessionViewportKey.currentContext?.findRenderObject();
     if (box is! RenderBox || !box.attached || !box.hasSize) return false;
     final local = box.globalToLocal(point);
+    final viewport = _nativePointerViewport(box);
+    final canvas = gFFI.canvasModel;
+    canvas.panNativeVirtualMouse(pan, viewport, local);
+    final target = clampNativePointer(local, _nativeVideoRect(canvas), viewport);
+    if (target == null) return false;
     final cursor = gFFI.cursorModel;
-    if (cursor.getRemotePosInRect(local) == null) return false;
-    cursor.moveLocal(local.dx, local.dy, adjust: gFFI.canvasModel.getAdjustY());
+    final remote = cursor.getRemotePosInRect(target);
+    if (remote == null) return false;
+    // Holding against the canvas limit must not resend the same remote pixel.
+    if (pan != Offset.zero && remote == cursor.offset) return true;
+    cursor.moveLocal(target.dx, target.dy, adjust: canvas.getAdjustY());
     await cursor.syncCursorPosition();
     return true;
   }
@@ -929,6 +971,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       });
       _nativePresentation = null;
       _nativeMouseViewport = null;
+      _nativeKeyboardViewport = null;
+      _nativeKeyboardPanel = 0;
+      if (!active) _nativeKeyboardShift.value = 0;
       _lastNativePerformance = const {};
       _syncNativePresentation();
       await gFFI.canvasModel.setMobileHeightFit(active);
@@ -949,6 +994,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     );
     if (_nativePresentation == next) return;
     _nativePresentation = next;
+    _scheduleSessionViewportUpdate();
     unawaited(_nativeSession.updatePresentation(
         obscured: next.obscured, keyboardInset: next.inset));
   }
@@ -987,6 +1033,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         }
       case 'chat':
         _sessionAction(SessionAction.chat);
+      case 'keyboardPanelHeight':
+        final height = arguments['height'];
+        if (height is num && height.isFinite && height >= 0 &&
+            _nativeKeyboardPanel != height) {
+          _nativeKeyboardPanel = height.toDouble();
+          _scheduleSessionViewportUpdate();
+        }
       case 'keyboard':
         if (arguments['visible'] == false) {
           setState(_hideSessionIme);
@@ -1408,17 +1461,45 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
       final canvas = bounds(_sessionViewportKey);
       if (canvas == null) return;
-      final keyboard = _nativeSessionActive &&
-              _showEdit &&
-              keyboardVisibilityController.isVisible
-          ? Rect.fromLTRB(canvas.left, canvas.bottom - 38, canvas.right,
-              canvas.bottom)
-          : bounds(_sessionKeyboardKey);
+      if (_nativeSessionActive) {
+        final box = _sessionViewportKey.currentContext?.findRenderObject();
+        if (box is RenderBox && box.attached && box.hasSize) {
+          _updateNativeKeyboardViewport(box);
+        }
+        return;
+      }
+      final keyboard = bounds(_sessionKeyboardKey);
       gFFI.canvasModel.updateMobileSessionViewport(
         sessionVisibleViewport(canvas, keyboard),
         keyboardOpen: keyboard != null,
       );
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _updateNativeKeyboardViewport(RenderBox box) {
+    final viewport = (full: box.size, visible: _nativePointerViewport(box).height);
+    if (_nativeKeyboardViewport == viewport) return;
+    _nativeKeyboardViewport = viewport;
+    final canvas = gFFI.canvasModel;
+    canvas.updateMobileSessionViewport(viewport.full, keyboardOpen: false);
+    var shift = 0.0;
+    final display = gFFI.ffiModel.rect;
+    if (display != null && viewport.visible < viewport.full.height) {
+      shift = nativeKeyboardRevealOffset(
+        canvas.y - _nativeKeyboardShift.value,
+        (gFFI.cursorModel.y - display.top) * canvas.scale,
+        canvas.getDisplayHeight() * canvas.scale,
+        viewport.visible,
+      );
+    }
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _nativeKeyboardShift.value = shift;
+    } else {
+      _nativeKeyboardShift.animateTo(shift,
+          duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+    }
+    _scheduleNativeMouseViewport();
   }
 
   Widget _sessionInputOverlays(bool imeVisible) {
@@ -1530,6 +1611,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         return false;
       },
       child: Scaffold(
+          resizeToAvoidBottomInset: !_nativeSessionActive,
           backgroundColor: isMobile ? Colors.black : null,
           // workaround for https://github.com/rustdesk/rustdesk/issues/3131
           floatingActionButtonLocation: keyboardIsVisible
@@ -1620,6 +1702,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final canvas = ColoredBox(
       color: isMobile ? Colors.black : kColorCanvas,
       child: SafeArea(
+        maintainBottomViewPadding: _nativeSessionActive,
         child: isMobile
             ? LayoutBuilder(builder: (context, constraints) {
                 _scheduleSessionViewportUpdate();
@@ -1792,12 +1875,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       final box = _sessionViewportKey.currentContext?.findRenderObject();
       if (box is! RenderBox || !box.attached || !box.hasSize) return;
       final canvas = gFFI.canvasModel;
-      final local = Rect.fromLTWH(
-        canvas.x,
-        canvas.y + canvas.getAdjustY(),
-        canvas.getDisplayWidth() * canvas.scale,
-        canvas.getDisplayHeight() * canvas.scale,
-      ).intersect(Offset.zero & box.size);
+      final local = _nativeVideoRect(canvas).intersect(_nativePointerViewport(box));
       if (local.isEmpty) return;
       final global = box.localToGlobal(local.topLeft) & local.size;
       if (_nativeMouseViewport == global) return;

@@ -2312,6 +2312,7 @@ class CanvasModel with ChangeNotifier {
   Size? _mobileSessionViewport;
   bool _mobileSessionKeyboardOpen = false;
   Offset? _mobileSessionKeyboardAnchor;
+  double _nativeKeyboardOffset = 0;
 
   // `isMobileCanvasChanged` is used to avoid canvas reset when changing the input method
   // after showing the soft keyboard.
@@ -2329,7 +2330,7 @@ class CanvasModel with ChangeNotifier {
   }
 
   double get x => _x;
-  double get y => _y;
+  double get y => _y + _nativeKeyboardOffset;
   double get scale => _scale;
   bool get locked => _locked;
   bool _mobileHeightFit = false;
@@ -2782,6 +2783,24 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
+  void setNativeKeyboardOffset(double offset) {
+    if (_nativeKeyboardOffset == offset) return;
+    _nativeKeyboardOffset = offset;
+    notifyListeners();
+  }
+
+  void panNativeVirtualMouse(Offset delta, Rect viewport, Offset tip) {
+    if (_locked || delta == Offset.zero) return;
+    final origin = Offset(x, y);
+    final image = Size(getDisplayWidth() * _scale, getDisplayHeight() * _scale);
+    final next = panNativePointerCanvas(origin, image, viewport, tip, delta);
+    if (next == origin) return;
+    _x = next.dx;
+    _y = next.dy - _nativeKeyboardOffset;
+    isMobileCanvasChanged = true;
+    notifyListeners();
+  }
+
   panX(double dx) {
     _x += dx;
     if (isMobile) {
@@ -2857,6 +2876,7 @@ class CanvasModel with ChangeNotifier {
     _mobileSessionViewport = null;
     _mobileSessionKeyboardOpen = false;
     _mobileSessionKeyboardAnchor = null;
+    _nativeKeyboardOffset = 0;
   }
 
   updateScrollPercent() {

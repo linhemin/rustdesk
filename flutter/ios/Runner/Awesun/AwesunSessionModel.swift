@@ -12,7 +12,7 @@ enum AwesunMode {
     }
 }
 
-enum AwesunSheetKind {
+enum AwesunSheetKind: Equatable {
     case mode, lock, guide, actions, displays, shortcuts, displaySettings, keyboardMore, keyboardLayout, keyboardFull, gamepad
 }
 
@@ -31,6 +31,7 @@ struct AwesunFunctionItem: Identifiable {
 final class AwesunSessionModel: ObservableObject {
     @Published var active = false
     @Published var keyboardInset: CGFloat = 0
+    @Published private(set) var keyboardPanelHeight: CGFloat = 0
     @Published var mode: AwesunMode = .pointer
     @Published var soundOn = true
     @Published var displayLocked = false
@@ -164,6 +165,7 @@ final class AwesunSessionModel: ObservableObject {
         restoreSystemKeyboard = false
         if isKeyboardPanel { releaseModifiers() }
         sheet = nil
+        setKeyboardPanelHeight(0)
         if reopen { systemKeyboard() }
     }
 
@@ -174,6 +176,24 @@ final class AwesunSessionModel: ObservableObject {
 
     var isKeyboardPanel: Bool {
         sheet == .keyboardMore || sheet == .keyboardLayout || sheet == .keyboardFull || sheet == .shortcuts
+    }
+
+    var mouseObstruction: CGFloat {
+        keyboardInset > 0 ? keyboardInset + 38 : (isKeyboardPanel ? keyboardPanelHeight : 0)
+    }
+
+    func keepVirtualMouseReachable(in size: CGSize) {
+        guard mouseVisible && !mouseCollapsed else { return }
+        let center = AwesunControlLayout.mouseGeometry(mouseAnchor, in: size, viewport: mouseViewport,
+                                                        obstruction: mouseObstruction).center
+        if mouseAnchor != center { mouseAnchor = center }
+    }
+
+    func setKeyboardPanelHeight(_ height: CGFloat) {
+        let height = isKeyboardPanel && height.isFinite ? max(0, height) : 0
+        guard keyboardPanelHeight != height else { return }
+        keyboardPanelHeight = height
+        AwesunBridge.shared.command("keyboardPanelHeight", ["height": Double(height)])
     }
 
     func openKeyboardPanel(_ panel: AwesunSheetKind) {
