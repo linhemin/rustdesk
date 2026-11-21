@@ -47,6 +47,9 @@ import Network
       launchOptions[.url] = launchURL
     }
     _ = super.application(UIApplication.shared, didFinishLaunchingWithOptions: launchOptions)
+    DispatchQueue.main.async {
+      AwesunSessionOverlay.shared.installIfNeeded(window: window)
+    }
   }
     
   public func dummyMethodToEnforceBundling() {

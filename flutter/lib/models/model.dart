@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter_hbb/mobile/image_ready_samples.dart';
+import 'package:flutter_hbb/mobile/session_viewport.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1482,6 +1483,7 @@ class FfiModel with ChangeNotifier {
       }
       Map<String, dynamic> features = json.decode(evt['features']);
       _pi.features.privacyMode = features['privacy_mode'] == true;
+      _pi.features.fixedScreenFps = features['fixed_screen_fps'] == true;
       if (!isCache) {
         handleResolutions(peerId, evt["resolutions"]);
       }
@@ -2307,6 +2309,10 @@ class CanvasModel with ChangeNotifier {
   Timer? _timerMobileRestoreCanvasOffset;
   Offset? _offsetBeforeMobileSoftKeyboard;
   double? _scaleBeforeMobileSoftKeyboard;
+  Size? _mobileSessionViewport;
+  bool _mobileSessionKeyboardOpen = false;
+  Offset? _mobileSessionKeyboardAnchor;
+  double _nativeKeyboardOffset = 0;
 
   // `isMobileCanvasChanged` is used to avoid canvas reset when changing the input method
   // after showing the soft keyboard.
@@ -2324,9 +2330,35 @@ class CanvasModel with ChangeNotifier {
   }
 
   double get x => _x;
-  double get y => _y;
+  double get y => _y + _nativeKeyboardOffset;
   double get scale => _scale;
   bool get locked => _locked;
+  bool _mobileHeightFit = false;
+  bool get mobileHeightFit => _mobileHeightFit;
+
+  Future<void> setMobileHeightFit(bool enabled) async {
+    if (_mobileHeightFit == enabled) return;
+    _mobileHeightFit = enabled;
+    if (enabled) {
+      updateSize();
+      if (_applyMobileHeightFit()) notifyListeners();
+    } else {
+      _lastViewStyle = ViewStyle.defaultViewStyle();
+      await updateViewStyle();
+    }
+  }
+
+  bool _applyMobileHeightFit() {
+    final height = getDisplayHeight();
+    final width = getDisplayWidth();
+    final viewport = size;
+    final fitted = mobileHeightFitScale(viewport, Size(width.toDouble(), height.toDouble()));
+    if (fitted == null) return false;
+    _scale = fitted;
+    _x = (viewport.width - width * _scale) / 2;
+    _y = (viewport.height - height * _scale) / 2;
+    return true;
+  }
   double get devicePixelRatio => _devicePixelRatio;
   Size get size => _size;
   ScrollStyle get scrollStyle => _scrollStyle;
@@ -2371,6 +2403,8 @@ class CanvasModel with ChangeNotifier {
       isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.bottom : 0;
 
   Size getSize() {
+    final sessionViewport = _mobileSessionViewport;
+    if (sessionViewport != null) return sessionViewport;
     final mediaData = MediaQueryData.fromView(ui.window);
     final size = mediaData.size;
     // If minimized, w or h may be negative here.
@@ -2409,6 +2443,7 @@ class CanvasModel with ChangeNotifier {
 
   // mobile only
   double getAdjustY() {
+    if (_mobileSessionViewport != null) return 0;
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
     return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
@@ -2468,7 +2503,9 @@ class CanvasModel with ChangeNotifier {
         _scale /= _devicePixelRatio;
       }
     }
-    _resetCanvasOffset(displayWidth, displayHeight);
+    if (!_mobileHeightFit || _mobileSessionKeyboardOpen || !_applyMobileHeightFit()) {
+      _resetCanvasOffset(displayWidth, displayHeight);
+    }
     final overflow = _x < 0 || y < 0;
     if (_imageOverflow.value != overflow) {
       _imageOverflow.value = overflow;
@@ -2486,7 +2523,11 @@ class CanvasModel with ChangeNotifier {
     _x = (size.width - displayWidth * _scale) / 2;
     _y = (size.height - displayHeight * _scale) / 2;
     if (isMobile) {
-      _moveToCenterCursor();
+      if (_mobileSessionKeyboardOpen) {
+        _constrainMobileSessionCanvas(focus: _mobileSessionKeyboardAnchor);
+      } else {
+        _moveToCenterCursor();
+      }
     }
   }
 
@@ -2742,9 +2783,28 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
+  void setNativeKeyboardOffset(double offset) {
+    if (_nativeKeyboardOffset == offset) return;
+    _nativeKeyboardOffset = offset;
+    notifyListeners();
+  }
+
+  void panNativeVirtualMouse(Offset delta, Rect viewport, Offset tip) {
+    if (_locked || delta == Offset.zero) return;
+    final origin = Offset(x, y);
+    final image = Size(getDisplayWidth() * _scale, getDisplayHeight() * _scale);
+    final next = panNativePointerCanvas(origin, image, viewport, tip, delta);
+    if (next == origin) return;
+    _x = next.dx;
+    _y = next.dy - _nativeKeyboardOffset;
+    isMobileCanvasChanged = true;
+    notifyListeners();
+  }
+
   panX(double dx) {
     _x += dx;
     if (isMobile) {
+      _constrainMobileSessionCanvas();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2762,6 +2822,7 @@ class CanvasModel with ChangeNotifier {
   panY(double dy) {
     _y += dy;
     if (isMobile) {
+      _constrainMobileSessionCanvas();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2784,6 +2845,7 @@ class CanvasModel with ChangeNotifier {
     // _y_2 = focalPoint.dy - adjust - (focalPoint.dy - _y_1 - adjust) / s1 * s2
     _y = focalPoint.dy - adjust - (focalPoint.dy - _y - adjust) / s * _scale;
     if (isMobile) {
+      _constrainMobileSessionCanvas();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2811,6 +2873,10 @@ class CanvasModel with ChangeNotifier {
     _timerMobileRestoreCanvasOffset?.cancel();
     _offsetBeforeMobileSoftKeyboard = null;
     _scaleBeforeMobileSoftKeyboard = null;
+    _mobileSessionViewport = null;
+    _mobileSessionKeyboardOpen = false;
+    _mobileSessionKeyboardAnchor = null;
+    _nativeKeyboardOffset = 0;
   }
 
   updateScrollPercent() {
@@ -2837,6 +2903,56 @@ class CanvasModel with ChangeNotifier {
       _resetCanvasOffset(getDisplayWidth(), getDisplayHeight());
       notifyListeners();
     });
+  }
+
+  void updateMobileSessionViewport(Size visible, {required bool keyboardOpen}) {
+    if (visible.isEmpty ||
+        (_mobileSessionViewport == visible &&
+            _mobileSessionKeyboardOpen == keyboardOpen)) {
+      return;
+    }
+    if (keyboardOpen && !_mobileSessionKeyboardOpen) {
+      saveMobileOffsetBeforeSoftKeyboard();
+      final cursor = parent.target?.cursorModel;
+      if (cursor != null) {
+        _mobileSessionKeyboardAnchor = Offset(cursor.x, cursor.y);
+      }
+    } else if (!keyboardOpen && _mobileSessionKeyboardOpen) {
+      final before = _offsetBeforeMobileSoftKeyboard;
+      if (before != null) {
+        _x = before.dx;
+        _y = before.dy;
+      }
+      _scale = _scaleBeforeMobileSoftKeyboard ?? _scale;
+      _offsetBeforeMobileSoftKeyboard = null;
+      _scaleBeforeMobileSoftKeyboard = null;
+      _mobileSessionKeyboardAnchor = null;
+    }
+    final previousViewport = _mobileSessionViewport;
+    final wasKeyboardOpen = _mobileSessionKeyboardOpen;
+    _mobileSessionKeyboardOpen = keyboardOpen;
+    _mobileSessionViewport = visible;
+    _size = visible;
+    if (_mobileHeightFit && !keyboardOpen && !wasKeyboardOpen &&
+        previousViewport != visible) {
+      _applyMobileHeightFit();
+    }
+    _constrainMobileSessionCanvas(focus: _mobileSessionKeyboardAnchor);
+    notifyListeners();
+  }
+
+  void _constrainMobileSessionCanvas({Offset? focus}) {
+    final viewport = _mobileSessionViewport;
+    if (viewport == null) return;
+    final image = Size(getDisplayWidth() * _scale, getDisplayHeight() * _scale);
+    final current = Offset(_x, _y);
+    final input = focus == null ? null : focus * _scale;
+    final offset =
+        input != null && (Offset.zero & image).contains(input)
+            ? revealSessionInput(current, input, image, viewport)
+            : clampSessionCanvas(current, image, viewport);
+    _x = offset.dx;
+    _y = offset.dy;
   }
 
   void saveMobileOffsetBeforeSoftKeyboard() {
@@ -3929,6 +4045,8 @@ class QualityMonitorData {
   String? fps;
   String? delay;
   String? targetBitrate;
+  int? fixedScreenFps;
+  bool? gpuTextureEncode;
   String? codecFormat;
   String? chroma;
 }
@@ -4023,6 +4141,12 @@ class QualityMonitorModel with ChangeNotifier {
       if (evt.containsKey('target_bitrate') &&
           (evt['target_bitrate'] as String).isNotEmpty) {
         _data.targetBitrate = evt['target_bitrate'];
+      }
+      final fixedFps = int.tryParse(evt['fixed_screen_fps'] as String? ?? '');
+      if (fixedFps != null) _data.fixedScreenFps = fixedFps;
+      final textureEncode = evt['gpu_texture_encode'];
+      if (textureEncode == 'true' || textureEncode == 'false') {
+        _data.gpuTextureEncode = textureEncode == 'true';
       }
       if (evt.containsKey('codec_format') &&
           (evt['codec_format'] as String).isNotEmpty) {
@@ -4568,6 +4692,7 @@ class Resolution {
 
 class Features {
   bool privacyMode = false;
+  bool fixedScreenFps = false;
 }
 
 const kInvalidDisplayIndex = -1;

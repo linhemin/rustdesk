@@ -920,7 +920,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                     Some(message::Union::Misc(misc)) => match misc.union {
                         Some(misc::Union::Option(ref option)) => {
-                            if option.custom_fps > 0 {
+                            if option.custom_fps > 0 || option.fixed_screen_fps != 0 {
                                 self.last_auto_fps = None;
                             }
                         }
@@ -1705,7 +1705,9 @@ impl<T: InvokeUiSession> Remote<T> {
         let trendings: Vec<_> = displays.iter().map(|k| fps_trending(*k)).collect();
         let should_decrease = trendings.iter().any(|v| *v == Some(false));
         let should_increase = !should_decrease && trendings.iter().any(|v| *v == Some(true));
-        if last_auto_fps.is_none() || should_decrease || should_increase {
+        if self.handler.lc.read().unwrap().fixed_screen_fps.is_none()
+            && (last_auto_fps.is_none() || should_decrease || should_increase)
+        {
             // limited_fps to ensure decoding is faster than encoding
             let mut auto_fps = limited_fps;
             if should_decrease && limited_fps < max_queue_len {

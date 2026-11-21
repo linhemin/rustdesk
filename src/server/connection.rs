@@ -1214,9 +1214,15 @@ impl Connection {
                     if conn.last_test_delay.is_none() && !(conn.port_forward_socket.is_some() && conn.authorized) {
                         conn.last_test_delay = Some(Instant::now());
                         let mut msg_out = Message::new();
+                        let (target_bitrate, fixed_screen_fps, gpu_texture_encode) = {
+                            let qos = video_service::VIDEO_QOS.lock().unwrap();
+                            (qos.bitrate(), qos.fixed_target().unwrap_or_default(), qos.gpu_texture_encode())
+                        };
                         msg_out.set_test_delay(TestDelay{
                             last_delay: conn.network_delay,
-                            target_bitrate: video_service::VIDEO_QOS.lock().unwrap().bitrate(),
+                            target_bitrate,
+                            fixed_screen_fps,
+                            gpu_texture_encode,
                             ..Default::default()
                         });
                         conn.send(msg_out.into()).await;
@@ -2128,6 +2134,7 @@ impl Connection {
         pi.sas_enabled = sas_enabled;
         pi.features = Some(Features {
             privacy_mode: privacy_mode::is_privacy_mode_supported(),
+            fixed_screen_fps: cfg!(windows) && !self.view_camera && !self.terminal,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             terminal,
             ..Default::default()
@@ -4997,6 +5004,10 @@ impl Connection {
                     .user_image_quality(self.inner.id(), image_quality);
             }
         }
+        if cfg!(windows) && o.fixed_screen_fps != 0 && self.is_authed_remote_conn() {
+            video_service::VIDEO_QOS.lock().unwrap()
+                .set_fixed_screen_fps(self.inner.id(), o.fixed_screen_fps);
+        }
         if o.custom_fps > 0 {
             video_service::VIDEO_QOS
                 .lock()
@@ -6052,6 +6063,7 @@ impl Connection {
             && option.image_quality.enum_value() == Ok(ImageQuality::NotSet)
             && option.custom_image_quality == 0
             && option.custom_fps == 0
+            && option.fixed_screen_fps == 0
             && Self::is_bool_option_not_set(option.lock_after_session_end)
             && Self::is_bool_option_not_set(option.show_remote_cursor)
             && Self::is_bool_option_not_set(option.privacy_mode)
@@ -6195,7 +6207,8 @@ impl Connection {
     }
 
     fn option_has_non_view_camera_login_field(option: &OptionMessage) -> bool {
-        !(Self::is_bool_option_not_set(option.lock_after_session_end)
+        !(option.fixed_screen_fps == 0
+            && Self::is_bool_option_not_set(option.lock_after_session_end)
             && Self::is_bool_option_not_set(option.show_remote_cursor)
             && Self::is_bool_option_not_set(option.privacy_mode)
             && Self::is_bool_option_not_set(option.block_input)
@@ -6213,6 +6226,7 @@ impl Connection {
         option.image_quality.enum_value() != Ok(ImageQuality::NotSet)
             || option.custom_image_quality != 0
             || option.custom_fps != 0
+            || option.fixed_screen_fps != 0
             || option.supported_decoding.is_some()
             || !Self::is_bool_option_not_set(option.lock_after_session_end)
             || !Self::is_bool_option_not_set(option.show_remote_cursor)

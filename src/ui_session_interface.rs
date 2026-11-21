@@ -497,7 +497,7 @@ impl<T: InvokeUiSession> Session<T> {
         if let Some(msg) = msg {
             self.send(Data::Message(msg));
         }
-        if value != "custom" {
+        if value != "custom" && self.lc.read().unwrap().fixed_screen_fps.is_none() {
             let custom_fps = *self.lc.read().unwrap().custom_fps.lock().unwrap();
             if custom_fps.unwrap_or(30) != 30 {
                 // non custom quality use 30 fps
@@ -1931,6 +1931,8 @@ impl<T: InvokeUiSession> Interface for Session<T> {
             self.update_quality_status(QualityStatus {
                 delay: Some(t.last_delay as _),
                 target_bitrate: Some(t.target_bitrate as _),
+                fixed_screen_fps: Some(t.fixed_screen_fps),
+                gpu_texture_encode: Some(t.gpu_texture_encode),
                 ..Default::default()
             });
             handle_test_delay(t, peer).await;

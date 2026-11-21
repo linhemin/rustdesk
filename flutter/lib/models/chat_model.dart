@@ -59,6 +59,7 @@ class ChatModel with ChangeNotifier {
 
   OverlayEntry? chatIconOverlayEntry;
   OverlayEntry? chatWindowOverlayEntry;
+  final chatWindowOpen = ValueNotifier(false);
 
   bool isConnManager = false;
 
@@ -235,6 +236,7 @@ class ChatModel with ChangeNotifier {
     });
     overlayState.insert(overlay);
     chatWindowOverlayEntry = overlay;
+    chatWindowOpen.value = true;
     if (isMobile && !requestSoftKeyboard) {
       inputNode.addListener(_updateChatInputControl);
       _updateChatInputControl();
@@ -247,6 +249,7 @@ class ChatModel with ChangeNotifier {
       _blockableOverlayState.setMiddleBlocked(false);
       chatWindowOverlayEntry!.remove();
       chatWindowOverlayEntry = null;
+      chatWindowOpen.value = false;
       _softKeyboardRequested.value = false;
       inputNode.removeListener(_updateChatInputControl);
       _restoreChatInputControl();
