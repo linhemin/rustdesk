@@ -62,6 +62,7 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
   final Widget child;
   final FFI ffi;
   final bool isCamera;
+  final bool awesunCanvas;
   late final InputModel inputModel = ffi.inputModel;
   late final FfiModel ffiModel = ffi.ffiModel;
 
@@ -69,6 +70,7 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
     required this.child,
     required this.ffi,
     this.isCamera = false,
+    this.awesunCanvas = false,
   });
 
   @override
@@ -92,6 +94,8 @@ class _RawTouchGestureDetectorRegionState
   int _cacheLongPressPositionTs = 0;
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
   double _scale = 1;
+  Future<bool>? _awesunLongPress;
+  bool _awesunLongPressMoved = false;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -114,6 +118,8 @@ class _RawTouchGestureDetectorRegionState
   FfiModel get ffiModel => widget.ffiModel;
   InputModel get inputModel => widget.inputModel;
   bool get handleTouch => (isDesktop || isWebDesktop) || ffiModel.touchMode;
+  bool get _usesAwesunCanvas => widget.awesunCanvas && !ffiModel.isPeerMobile;
+  bool get _isAbsoluteCanvasTap => _usesAwesunCanvas ? ffiModel.touchMode : handleTouch;
   SessionID get sessionId => ffi.sessionId;
   bool get canvasLocked => isMobile && ffi.canvasModel.locked;
 
@@ -143,7 +149,7 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
-    if (handleTouch) {
+    if (_isAbsoluteCanvasTap) {
       _lastPosOfDoubleTapDown = d.localPosition;
       // Desktop or mobile "Touch mode"
       _lastTapDownDetails = d;
@@ -162,7 +168,7 @@ class _RawTouchGestureDetectorRegionState
     if (inputModel.shouldIgnoreTouchTap(d.globalPosition)) {
       return;
     }
-    if (handleTouch) {
+    if (_isAbsoluteCanvasTap) {
       final isMoved =
           await ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
       if (isMoved) {
@@ -184,7 +190,7 @@ class _RawTouchGestureDetectorRegionState
     if (lastPos != null && inputModel.shouldIgnoreTouchTap(lastPos)) {
       return;
     }
-    if (!handleTouch) {
+    if (!_isAbsoluteCanvasTap) {
       // Cannot use `_lastTapDownDetails` because Flutter calls `onTapUp` before `onTap`, clearing the cached details.
       // Using `_lastTapDownPositionForMouseMode` instead.
       if (shouldBlockMouseModeEvent()) {
@@ -200,7 +206,7 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
-    if (handleTouch) {
+    if (_isAbsoluteCanvasTap) {
       _lastPosOfDoubleTapDown = d.localPosition;
       await ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
     } else {
@@ -215,12 +221,12 @@ class _RawTouchGestureDetectorRegionState
     if (ffiModel.touchMode && ffi.cursorModel.lastIsBlocked) {
       return;
     }
-    if (handleTouch &&
+    if (_isAbsoluteCanvasTap &&
         !ffi.cursorModel.isInRemoteRect(_lastPosOfDoubleTapDown)) {
       return;
     }
     // Check if the position is in a blocked area when using the mouse mode.
-    if (!handleTouch) {
+    if (!_isAbsoluteCanvasTap) {
       if (shouldBlockMouseModeEvent()) {
         return;
       }
@@ -234,7 +240,11 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
-    if (handleTouch) {
+    if (_usesAwesunCanvas) {
+      _awesunLongPress = null;
+      _awesunLongPressMoved = false;
+    }
+    if (_isAbsoluteCanvasTap) {
       _lastPosOfDoubleTapDown = d.localPosition;
       _cacheLongPressPosition = d.localPosition;
       if (!ffi.cursorModel.isInRemoteRect(d.localPosition)) {
@@ -255,7 +265,15 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
-    if (handleTouch) {
+    if (_usesAwesunCanvas && _isAbsoluteCanvasTap) {
+      final rightClick = _awesunLongPress;
+      _awesunLongPress = null;
+      if (!_awesunLongPressMoved && rightClick != null && await rightClick) {
+        await inputModel.tap(MouseButtons.left);
+      }
+      return;
+    }
+    if (handleTouch && (!isMobile || ffiModel.isPeerMobile)) {
       await inputModel.tapUp(MouseButtons.left);
     }
   }
@@ -265,8 +283,20 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
+    if (_usesAwesunCanvas && _isAbsoluteCanvasTap) {
+      final point = _cacheLongPressPosition;
+      _lastTapDownDetails = null;
+      _awesunLongPress = () async {
+        if (!await ffi.cursorModel.move(point.dx, point.dy)) return false;
+        await inputModel.tap(MouseButtons.right);
+        return true;
+      }();
+      await _awesunLongPress;
+      return;
+    }
     if (!ffi.ffiModel.isPeerMobile) {
       if (handleTouch) {
+        if (isMobile) _lastTapDownDetails = null;
         final isMoved = await ffi.cursorModel
             .move(_cacheLongPressPosition.dx, _cacheLongPressPosition.dy);
         if (!isMoved) {
@@ -286,6 +316,10 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onLongPressMoveUpdate(LongPressMoveUpdateDetails d) async {
+    if (_usesAwesunCanvas && _isAbsoluteCanvasTap) {
+      if (d.offsetFromOrigin.distance > 8) _awesunLongPressMoved = true;
+      return;
+    }
     if (!ffiModel.isPeerMobile || isNotTouchBasedDevice()) {
       return;
     }
@@ -356,7 +390,7 @@ class _RawTouchGestureDetectorRegionState
     final TapDownDetails? lastTapDownDetails = _lastTapDownDetails;
     _lastTapDownDetails = null;
     lastDeviceKind = d.kind ?? lastDeviceKind;
-    if (isNotTouchBasedDevice()) {
+    if (_usesAwesunCanvas || isNotTouchBasedDevice()) {
       return;
     }
     if (handleTouch) {
@@ -411,6 +445,15 @@ class _RawTouchGestureDetectorRegionState
     if (ffi.cursorModel.shouldBlock(d.localPosition.dx, d.localPosition.dy)) {
       return;
     }
+    if (_usesAwesunCanvas) {
+      if (!ffiModel.touchMode) {
+        await ffi.cursorModel.updatePan(d.delta, d.localPosition, false);
+      } else if (!canvasLocked) {
+        ffi.canvasModel.panX(d.delta.dx);
+        ffi.canvasModel.panY(d.delta.dy);
+      }
+      return;
+    }
     if (handleTouch && !_touchModePanStarted) {
       return;
     }
@@ -424,7 +467,7 @@ class _RawTouchGestureDetectorRegionState
 
   onOneFingerPanEnd(DragEndDetails d) async {
     _touchModePanStarted = false;
-    if (isNotTouchBasedDevice()) {
+    if (_usesAwesunCanvas || isNotTouchBasedDevice()) {
       return;
     }
     if (isDesktop || isWebDesktop) {

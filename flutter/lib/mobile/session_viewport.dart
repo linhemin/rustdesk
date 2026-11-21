@@ -1,6 +1,13 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+double? mobileHeightFitScale(Size viewport, Size frame) {
+  if (viewport.isEmpty || frame.isEmpty || !viewport.isFinite || !frame.isFinite) {
+    return null;
+  }
+  return viewport.height / frame.height;
+}
+
 Size sessionVisibleViewport(Rect canvas, Rect? bottomPanel) {
   if (bottomPanel == null || !bottomPanel.overlaps(canvas)) return canvas.size;
   return Size(canvas.width, math.max(0, bottomPanel.top - canvas.top));

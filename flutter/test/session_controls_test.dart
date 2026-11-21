@@ -1,18 +1,70 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/remote_input.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/mobile/widgets/session_controls.dart';
 import 'package:flutter_hbb/mobile/widgets/session_keyboard.dart';
 import 'package:flutter_hbb/mobile/widgets/session_touchpad.dart';
 import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:uuid/uuid.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
   @override
   String translate(
           {required String name, required String locale, dynamic hint}) =>
       name;
+}
+
+class _TouchPeer extends Fake implements FfiModel {
+  _TouchPeer(this.touchMode);
+  @override
+  final bool touchMode;
+  @override
+  bool get isPeerMobile => false;
+  @override
+  bool get isPeerAndroid => false;
+}
+
+class _TouchCursor extends Fake implements CursorModel {
+  final moves = <Offset>[];
+  @override
+  bool shouldBlock(double x, double y) => false;
+  @override
+  bool isInRemoteRect(Offset offset) => true;
+  @override
+  Future<bool> move(double x, double y) async {
+    moves.add(Offset(x, y));
+    return true;
+  }
+}
+
+class _TouchInput extends Fake implements InputModel {
+  final events = <(String, MouseButtons)>[];
+
+  @override
+  bool shouldIgnoreTouchTap(Offset pos) => false;
+  @override
+  Future<void> tap(MouseButtons button) async => events.add(('tap', button));
+  @override
+  Future<void> tapDown(MouseButtons button) async =>
+      events.add(('down', button));
+  @override
+  Future<void> tapUp(MouseButtons button) async => events.add(('up', button));
+}
+
+class _TouchSession extends Fake implements FFI {
+  _TouchSession({bool touch = true}) : ffiModel = _TouchPeer(touch);
+  @override
+  final sessionId = const Uuid().v4obj();
+  @override
+  final _TouchPeer ffiModel;
+  @override
+  final _TouchInput inputModel = _TouchInput();
+  @override
+  final _TouchCursor cursorModel = _TouchCursor();
 }
 
 void main() {
@@ -27,6 +79,7 @@ void main() {
     final modes = <SessionInputMode>[];
     final actions = <SessionAction>[];
     var keyboard = 0;
+    var centered = 0;
     var virtualMouse = false;
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
@@ -42,6 +95,7 @@ void main() {
                 : null,
             onGestureSettings: () {},
             onKeyboard: () => keyboard++,
+            onCenterCursor: () => centered++,
             actions: SessionAction.values,
             onAction: actions.add,
           );
@@ -49,10 +103,14 @@ void main() {
       ),
     ));
 
+    expect(find.byTooltip('Show virtual mouse'), findsNothing);
+    await tester.tap(find.byTooltip('Show Toolbar'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Show virtual mouse'));
     await tester.pumpAndSettle();
     expect(find.byTooltip('Touchscreen mode'), findsOneWidget);
     expect(find.byTooltip('Hide virtual mouse'), findsOneWidget);
+    await tester.tap(find.byTooltip('Center cursor'));
     await tester.tap(find.byTooltip('Touchscreen mode'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Pointer mode'));
@@ -72,6 +130,96 @@ void main() {
     expect(modes, [SessionInputMode.pointer, SessionInputMode.touch]);
     expect(actions, [SessionAction.display]);
     expect(keyboard, 1);
+    expect(centered, 1);
+    await tester.tap(find.byTooltip('Collapse toolbar'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Keyboard'), findsNothing);
+    expect(find.byTooltip('Show Toolbar'), findsOneWidget);
+  });
+
+  testWidgets(
+      'touching a remote desktop with a long press sends only right click',
+      (tester) async {
+    final originalMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = originalMobile);
+    final session = _TouchSession();
+    const target = ValueKey('desktop-screen');
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: RawTouchGestureDetectorRegion(
+          ffi: session,
+          child: const ColoredBox(
+            key: target,
+            color: Colors.black,
+            child: SizedBox.expand(),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.longPress(find.byKey(target));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.inputModel.events, [('tap', MouseButtons.right)]);
+    await tester.tap(find.byKey(target));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.inputModel.events, [
+      ('tap', MouseButtons.right),
+      ('down', MouseButtons.left),
+      ('up', MouseButtons.left),
+    ]);
+  });
+
+  testWidgets('iPhone session canvas keeps its long press release behavior',
+      (tester) async {
+    final originalMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = originalMobile);
+    final session = _TouchSession();
+    const target = ValueKey('iphone-session-canvas');
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: RawTouchGestureDetectorRegion(
+          ffi: session,
+          awesunCanvas: true,
+          child: const ColoredBox(
+            key: target,
+            color: Colors.black,
+            child: SizedBox.expand(),
+          ),
+        ),
+      ),
+    ));
+
+    await tester.longPress(find.byKey(target));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.inputModel.events, [
+      ('tap', MouseButtons.right),
+      ('tap', MouseButtons.left),
+    ]);
+  });
+
+  testWidgets('iPhone pointer clicks at the existing cursor without jumping',
+      (tester) async {
+    final originalMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = originalMobile);
+    final session = _TouchSession(touch: false);
+    const target = ValueKey('iphone-pointer-canvas');
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: RawTouchGestureDetectorRegion(
+          ffi: session,
+          awesunCanvas: true,
+          child: const ColoredBox(
+              key: target, color: Colors.black, child: SizedBox.expand()),
+        ),
+      ),
+    ));
+    await tester.tap(find.byKey(target));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.inputModel.events, [('tap', MouseButtons.left)]);
+    expect(session.cursorModel.moves, isEmpty);
   });
 
   testWidgets('a narrow keyboard keeps modifiers and mouse buttons accessible',
@@ -165,6 +313,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(area, findsNothing);
     expect(buttons, ['left', 'right']);
+    final ball = find.byKey(const ValueKey('session-cursor-ball'));
+    await tester.longPress(ball);
+    await tester.pumpAndSettle();
+    expect(buttons, ['left', 'right', 'right']);
+    expect(area, findsNothing);
+    final before = tester.getCenter(ball);
+    await tester.drag(ball, const Offset(-35, -20));
+    await tester.pumpAndSettle();
+    expect(tester.getCenter(ball), isNot(before));
+    expect(moves, isNotEmpty);
+    moves.clear();
     await tester.tap(find.byTooltip('Virtual mouse'));
     await tester.pumpAndSettle();
 
@@ -172,7 +331,7 @@ void main() {
     await tester.tap(left);
     await tester.tap(find.byTooltip('Right button'));
     await tester.tap(find.byTooltip('Middle mouse button'));
-    expect(buttons, ['left', 'right', 'left', 'right', 'middle']);
+    expect(buttons, ['left', 'right', 'right', 'left', 'right', 'middle']);
     buttons.clear();
     final drag = await tester.startGesture(tester.getCenter(left));
     await drag.moveBy(const Offset(45, 0));
@@ -267,8 +426,8 @@ void main() {
       ),
     ));
 
-    final pad = tester.getCenter(
-        find.byKey(const ValueKey('session-touchpad-area')));
+    final pad =
+        tester.getCenter(find.byKey(const ValueKey('session-touchpad-area')));
     final move = await tester.startGesture(pad);
     await move.moveBy(const Offset(24, 0));
     await tester.tapAt(const Offset(300, 100));

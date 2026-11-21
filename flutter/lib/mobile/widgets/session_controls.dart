@@ -48,7 +48,7 @@ class SessionControlsSurface extends StatelessWidget {
       );
 }
 
-class SessionControlsDock extends StatelessWidget {
+class SessionControlsDock extends StatefulWidget {
   const SessionControlsDock({
     super.key,
     required this.mode,
@@ -58,6 +58,7 @@ class SessionControlsDock extends StatelessWidget {
     required this.onToggleVirtualMouse,
     required this.onGestureSettings,
     required this.onKeyboard,
+    required this.onCenterCursor,
     required this.actions,
     required this.onAction,
   });
@@ -69,8 +70,16 @@ class SessionControlsDock extends StatelessWidget {
   final VoidCallback? onToggleVirtualMouse;
   final VoidCallback onGestureSettings;
   final VoidCallback? onKeyboard;
+  final VoidCallback? onCenterCursor;
   final List<SessionAction> actions;
   final ValueChanged<SessionAction> onAction;
+
+  @override
+  State<SessionControlsDock> createState() => _SessionControlsDockState();
+}
+
+class _SessionControlsDockState extends State<SessionControlsDock> {
+  bool _expanded = false;
 
   PopupMenuItem<T> _item<T>(T value, String text, IconData icon,
       {bool selected = false, bool destructive = false}) {
@@ -96,58 +105,79 @@ class SessionControlsDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => SessionControlsSurface(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (showInputModes)
-              PopupMenuButton<SessionInputMode>(
-                tooltip: translate(mode.label),
-                color: sessionControlSurface,
-                icon: Icon(mode.icon, color: sessionControlAccent),
-                onSelected: onMode,
-                itemBuilder: (context) => [
-                  for (final choice in SessionInputMode.values)
-                    _item(choice, choice.label, choice.icon,
-                        selected: choice == mode),
-                  const PopupMenuDivider(),
-                  PopupMenuItem<SessionInputMode>(
-                    onTap: onGestureSettings,
-                    child: Text(translate('Gesture guide'),
-                        style: const TextStyle(color: sessionControlInk)),
-                  ),
-                ],
-              ),
-            if (onToggleVirtualMouse != null)
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          reverse: true,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_expanded) ..._actions(),
               IconButton(
-                tooltip: translate(virtualMouseEnabled
-                    ? 'Hide virtual mouse'
-                    : 'Show virtual mouse'),
-                isSelected: virtualMouseEnabled,
-                onPressed: onToggleVirtualMouse,
-                color: sessionControlInk,
-                icon: const Icon(Icons.mouse_outlined),
-                selectedIcon:
-                    const Icon(Icons.mouse, color: sessionControlAccent),
+                tooltip:
+                    translate(_expanded ? 'Collapse toolbar' : 'Show Toolbar'),
+                onPressed: () => setState(() => _expanded = !_expanded),
+                color: sessionControlAccent,
+                icon: Icon(_expanded ? Icons.close : Icons.widgets_outlined),
               ),
-            if (onKeyboard != null)
-              IconButton(
-                tooltip: translate('Keyboard'),
-                onPressed: onKeyboard,
-                color: sessionControlInk,
-                icon: const Icon(Icons.keyboard_outlined),
-              ),
-            PopupMenuButton<SessionAction>(
-              tooltip: translate('More'),
-              color: sessionControlSurface,
-              icon: const Icon(Icons.more_horiz, color: sessionControlInk),
-              onSelected: onAction,
-              itemBuilder: (context) => [
-                for (final action in actions)
-                  _item(action, action.label, action.icon,
-                      destructive: action == SessionAction.disconnect),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       );
+
+  List<Widget> _actions() => [
+        if (widget.showInputModes)
+          PopupMenuButton<SessionInputMode>(
+            tooltip: translate(widget.mode.label),
+            color: sessionControlSurface,
+            icon: Icon(widget.mode.icon, color: sessionControlAccent),
+            onSelected: widget.onMode,
+            itemBuilder: (context) => [
+              for (final choice in SessionInputMode.values)
+                _item(choice, choice.label, choice.icon,
+                    selected: choice == widget.mode),
+              const PopupMenuDivider(),
+              PopupMenuItem<SessionInputMode>(
+                onTap: widget.onGestureSettings,
+                child: Text(translate('Gesture guide'),
+                    style: const TextStyle(color: sessionControlInk)),
+              ),
+            ],
+          ),
+        if (widget.onToggleVirtualMouse != null)
+          IconButton(
+            tooltip: translate(widget.virtualMouseEnabled
+                ? 'Hide virtual mouse'
+                : 'Show virtual mouse'),
+            isSelected: widget.virtualMouseEnabled,
+            onPressed: widget.onToggleVirtualMouse,
+            color: sessionControlInk,
+            icon: const Icon(Icons.mouse_outlined),
+            selectedIcon: const Icon(Icons.mouse, color: sessionControlAccent),
+          ),
+        if (widget.onCenterCursor != null)
+          IconButton(
+            tooltip: translate('Center cursor'),
+            onPressed: widget.onCenterCursor,
+            color: sessionControlInk,
+            icon: const Icon(Icons.center_focus_strong),
+          ),
+        if (widget.onKeyboard != null)
+          IconButton(
+            tooltip: translate('Keyboard'),
+            onPressed: widget.onKeyboard,
+            color: sessionControlInk,
+            icon: const Icon(Icons.keyboard_outlined),
+          ),
+        PopupMenuButton<SessionAction>(
+          tooltip: translate('More'),
+          color: sessionControlSurface,
+          icon: const Icon(Icons.more_horiz, color: sessionControlInk),
+          onSelected: widget.onAction,
+          itemBuilder: (context) => [
+            for (final action in widget.actions)
+              _item(action, action.label, action.icon,
+                  destructive: action == SessionAction.disconnect),
+          ],
+        ),
+      ];
 }

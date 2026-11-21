@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,6 +25,7 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
+import '../awesun/awesun_native_bridge.dart';
 import '../ios_p2p_diagnostics.dart';
 import '../session_ime.dart';
 import '../session_viewport.dart';
@@ -94,6 +96,11 @@ class RemotePage extends StatefulWidget {
   State<RemotePage> createState() => _RemotePageState(id);
 }
 
+class _NativePointerBatch {
+  _NativePointerBatch(this.position);
+  Offset position;
+}
+
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   final _sessionOpened = DateTime.now();
   Timer? _timer;
@@ -123,6 +130,39 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Worker? _waylandKeyboardGateWorker;
   bool _waylandKeyboardGateInitialized = false;
+  Worker? _nativeSessionReadiness;
+  List<VoidCallback> _nativeActions = const [];
+  List<Future<void> Function()> _nativeDisplayActions = const [];
+  _NativePointerBatch? _nativePointerBatch;
+  bool _savingNativeScreenshot = false;
+  ({bool obscured, double inset})? _nativePresentation;
+  bool _nativeSessionRequested = false;
+  bool _nativeSessionActive = false;
+  int _nativeSessionRevision = 0;
+  late final _nativeSession = AwesunNativeBridge(
+    inputModel: inputModel,
+    cursorModel: gFFI.cursorModel,
+    canvasPoint: (point) {
+      final box = _sessionViewportKey.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+      return box.globalToLocal(point);
+    },
+    canSendInput: () => mounted && _sessionReady && _canSendSessionInput,
+    onClose: () {
+      if (mounted) clientClose(sessionId, gFFI);
+    },
+    onCommand: _nativeCommand,
+    onVirtualMove: _moveSessionMouse,
+    onVirtualPosition: _moveNativePointer,
+    onVirtualClick: (button) {
+      _nativePointerBatch = null;
+      _queueVirtualMouse(() => _clickSessionMouse(button));
+    },
+    onVirtualDrag: (down) {
+      _nativePointerBatch = null;
+      down ? _holdVirtualMouse() : _releaseVirtualMouse();
+    },
+  );
 
   InputModel get inputModel => gFFI.inputModel;
   SessionID get sessionId => gFFI.sessionId;
@@ -200,10 +240,26 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (gFFI.ffiModel.pi.isSet.value) {
       _initWaylandKeyboardGateIfNeeded();
     }
+    if (isIOS) {
+      final model = gFFI.ffiModel;
+      _nativeSessionReadiness =
+          everAll([model.pi.isSet, model.waitForFirstImage], (_) {
+        unawaited(_syncNativeSession());
+      });
+      gFFI.dialogManager.openDialog.addListener(_syncNativePresentation);
+      gFFI.chatModel.chatWindowOpen.addListener(_syncNativePresentation);
+      unawaited(_syncNativeSession());
+    }
   }
 
   @override
   Future<void> dispose() async {
+    _nativeSessionReadiness?.dispose();
+    if (isIOS) {
+      gFFI.dialogManager.openDialog.removeListener(_syncNativePresentation);
+      gFFI.chatModel.chatWindowOpen.removeListener(_syncNativePresentation);
+      if (_nativeSessionRevision != 0) _nativeSession.dispose();
+    }
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
     _textController.removeListener(_sendSessionImeEdit);
@@ -705,12 +761,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<bool> _ensureVisibleCursor() async {
+  Future<bool> _ensureVisibleCursor({bool recenter = false}) async {
     final cursor = gFFI.cursorModel;
     final remote = gFFI.ffiModel.rect;
     if (remote == null) return false;
     final visible = cursor.getVisibleRect();
-    if (visible.contains(cursor.offset) && remote.contains(cursor.offset)) {
+    if (!recenter &&
+        visible.contains(cursor.offset) &&
+        remote.contains(cursor.offset)) {
       return true;
     }
     final intersection = visible.intersect(remote);
@@ -737,6 +795,33 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         if (!mounted || !_canSendSessionInput) return;
         await gFFI.cursorModel.updatePan(delta, Offset.zero, false);
       });
+
+  void _moveNativePointer(Offset point) {
+    if (!point.isFinite) return;
+    final pending = _nativePointerBatch;
+    if (pending != null) {
+      pending.position = point;
+      return;
+    }
+    final batch = _NativePointerBatch(point);
+    _nativePointerBatch = batch;
+    _queueVirtualMouse(() async {
+      if (identical(_nativePointerBatch, batch)) _nativePointerBatch = null;
+      final next = batch.position;
+      if (!mounted || !_nativeSessionActive || !_canSendSessionInput) return;
+      final canvas = gFFI.canvasModel;
+      final view = canvas.size;
+      final frame = Rect.fromLTWH(
+        canvas.x, canvas.y + canvas.getAdjustY(),
+        canvas.getDisplayWidth() * canvas.scale,
+        canvas.getDisplayHeight() * canvas.scale,
+      ).intersect(Offset.zero & view);
+      if (frame.width < 1 || frame.height < 1) return;
+      final x = next.dx.clamp(frame.left, frame.right - 0.5).toDouble();
+      final y = next.dy.clamp(frame.top, frame.bottom - 0.5).toDouble();
+      await gFFI.cursorModel.move(x, y);
+    });
+  }
 
   void _holdVirtualMouse() => _queueVirtualMouse(() async {
         if (_virtualMouseDown ||
@@ -792,6 +877,286 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   bool get _sessionReady =>
       gFFI.ffiModel.pi.isSet.value && !gFFI.ffiModel.waitForFirstImage.value;
 
+  Future<void> _syncNativeSession() async {
+    final requested = _sessionReady;
+    if (_nativeSessionRequested == requested) return;
+    _nativeSessionRequested = requested;
+    if (!requested) {
+      _nativePointerBatch = null;
+      _releaseVirtualMouse();
+      _clearSessionModifiers();
+    }
+    final revision = ++_nativeSessionRevision;
+    final active = await _nativeSession.setActive(requested,
+        touchMode: gFFI.ffiModel.touchMode);
+    if (mounted &&
+        revision == _nativeSessionRevision &&
+        active != _nativeSessionActive) {
+      setState(() => _nativeSessionActive = active);
+      _nativePresentation = null;
+      _syncNativePresentation();
+      await gFFI.canvasModel.setMobileHeightFit(active);
+    }
+  }
+
+  void _syncNativePresentation() {
+    if (!mounted || !_nativeSessionActive) return;
+    final next = (
+      obscured: gFFI.dialogManager.openDialog.value ||
+          gFFI.chatModel.chatWindowOpen.value ||
+          ModalRoute.isCurrentOf(context) == false,
+      inset: _showEdit ? MediaQuery.viewInsetsOf(context).bottom : 0.0,
+    );
+    if (_nativePresentation == next) return;
+    _nativePresentation = next;
+    unawaited(_nativeSession.updatePresentation(
+        obscured: next.obscured, keyboardInset: next.inset));
+  }
+
+  Future<Object?> _nativeCommand(
+      String id, Map<Object?, Object?> arguments) async {
+    if (!mounted || !_sessionReady) return null;
+    final model = gFFI.ffiModel;
+    switch (id) {
+      case 'menu':
+        return _nativeMenu(model);
+      case 'action':
+        final index = arguments['index'];
+        if (index is int && index >= 0 && index < _nativeActions.length) {
+          final action = _nativeActions[index];
+          _nativeActions = const [];
+          action();
+        }
+      case 'display':
+        return _nativeDisplayMenu();
+      case 'displayAction':
+        final index = arguments['index'];
+        if (index is int && index >= 0 && index < _nativeDisplayActions.length) {
+          await _nativeDisplayActions[index]();
+        }
+      case 'displayAdvanced':
+        showOptions(context, widget.id, gFFI.dialogManager,
+            clearHeightFitOnScale: true);
+      case 'chat':
+        _sessionAction(SessionAction.chat);
+      case 'keyboard':
+        if (arguments['visible'] == false) {
+          setState(_hideSessionIme);
+        } else if (_canSendSessionInput) {
+          openKeyboard();
+        }
+      case 'mode':
+        if (_canSendSessionInput && !model.isPeerAndroid) {
+          await _setSessionInputMode(arguments['touch'] == true
+              ? SessionInputMode.touch
+              : SessionInputMode.pointer);
+        }
+        return model.touchMode;
+      case 'modifier':
+        final name = arguments['name'];
+        for (final modifier in SessionModifier.values) {
+          if (modifier.name == name &&
+              (_canSendSessionInput || arguments['down'] == false)) {
+            _setSessionModifier(modifier, arguments['down'] == true);
+          }
+        }
+      case 'shortcut':
+        final key = arguments['key'];
+        if (!_canSendSessionInput || key is! String) return null;
+        if (key == 'secure-attention') {
+          final pi = model.pi;
+          if (pi.sasEnabled || pi.platform == kPeerPlatformLinux) {
+            await bind.sessionCtrlAltDel(sessionId: sessionId);
+          }
+          return null;
+        }
+        final modifiers = arguments['modifiers'];
+        if (modifiers is List) {
+          final previous = _sessionModifiers;
+          for (final modifier in SessionModifier.values) {
+            _setSessionModifier(modifier, modifiers.contains(modifier.name));
+          }
+          try {
+            _sendSessionKey(key);
+          } finally {
+            for (final modifier in SessionModifier.values) {
+              _setSessionModifier(modifier, previous.contains(modifier));
+            }
+          }
+        } else {
+          _sendSessionKey(key);
+        }
+      case 'releaseModifiers':
+        _clearSessionModifiers();
+      case 'lock':
+        gFFI.canvasModel.setLocked(arguments['locked'] == true);
+        return gFFI.canvasModel.locked;
+      case 'sound':
+        if (model.permissions['audio'] != false) {
+          const option = 'disable-audio';
+          await bind.sessionToggleOption(sessionId: sessionId, value: option);
+          return !_nativeOption(option);
+        }
+      case 'screen':
+        final index = arguments['index'];
+        if (index is int && _nativeCanSwitchDisplay(model) &&
+            index >= 0 && index < model.pi.displays.length &&
+            index != model.pi.currentDisplay) {
+          openMonitorInTheSameTab(index, gFFI, model.pi);
+        }
+      case 'shot':
+        return _saveNativeScreenshot();
+      case 'quality':
+        await bind.sessionToggleOption(
+            sessionId: sessionId, value: 'show-quality-monitor');
+        gFFI.qualityMonitorModel.checkShowQualityMonitor(sessionId);
+    }
+    return null;
+  }
+
+  Map<String, Object?> _nativeMenu(FfiModel model) {
+    final actions = <VoidCallback>[];
+    final titles = <String>[];
+    void add(String title, VoidCallback action) {
+      titles.add(title);
+      actions.add(action);
+    }
+
+    String? label(Widget child) => switch (child) {
+          Text(:final data) => data,
+          Row(:final children) when children.isNotEmpty => label(children.first),
+          _ => null,
+        };
+
+    for (final menu in [
+      ..._getMobileActionMenus(),
+      ...toolbarControls(context, widget.id, gFFI),
+    ]) {
+      final command = menu.onPressed;
+      final blocked = BlockInputState.find(widget.id).value;
+      final title = menu.actionId == kShortcutActionToggleBlockInput
+          ? translate(blocked ? 'Unblock user input' : 'Block user input')
+          : label(menu.child);
+      if (command != null && title != null) add(title, command);
+      if (command != null && title == translate('OS Password')) {
+        add('${translate('Edit')} $title',
+            () => handleOsPasswordEditIcon(sessionId, gFFI.dialogManager));
+      }
+    }
+    if (_canSendSessionInput && !model.isPeerAndroid) {
+      add(translate('Center cursor'), () => _queueVirtualMouse(() async {
+            if (mounted && _canSendSessionInput) {
+              await _ensureVisibleCursor(recenter: true);
+            }
+          }));
+    }
+    if (recordIosP2pDiagnostics) {
+      add(translate('Copy P2P diagnostics'), _copyP2pDiagnostics);
+    }
+    _nativeActions = actions;
+    return {
+      'actions': titles,
+      'canInput': _canSendSessionInput,
+      'canSwitchMode': _canSendSessionInput && !model.isPeerAndroid,
+      'locked': gFFI.canvasModel.locked,
+      'touch': model.touchMode,
+      'sound': !_nativeOption('disable-audio'),
+      'canSound': model.permissions['audio'] != false,
+      'screenshot': gFFI.imageModel.image != null,
+      'displays': _nativeCanSwitchDisplay(model) ? model.pi.displays.length : 0,
+      'selectedDisplay': model.pi.currentDisplay,
+      'quality': _nativeOption('show-quality-monitor'),
+    };
+  }
+
+  bool _nativeOption(String option) =>
+      bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option);
+
+  bool _nativeCanSwitchDisplay(FfiModel model) {
+    final state = PrivacyModeState.find(widget.id);
+    return model.pi.displays.length > 1 &&
+        model.pi.currentDisplay != kAllDisplayValue &&
+        (state.isEmpty || allowDisplaySwitchInPrivacyMode(model.pi, state.value));
+  }
+
+  Future<List<Map<String, Object?>>> _nativeDisplayMenu() async {
+    final choices = <Map<String, Object?>>[];
+    final commands = <Future<void> Function()>[];
+    final canvas = gFFI.canvasModel;
+    void add(String group, String name, bool selected,
+        Future<void> Function() apply) {
+      choices.add({
+        'index': commands.length,
+        'group': group,
+        'title': name,
+        'selected': selected,
+      });
+      commands.add(apply);
+    }
+
+    add('画面比例', '高度撑满', canvas.mobileHeightFit,
+        () => canvas.setMobileHeightFit(true));
+    final scales = await toolbarViewStyle(context, widget.id, gFFI);
+    if (!mounted) return const [];
+    final qualities = await toolbarImageQuality(context, widget.id, gFFI);
+    if (!mounted) return const [];
+    final codecs = await toolbarCodec(context, widget.id, gFFI);
+    if (!mounted) return const [];
+    final toggles = await toolbarDisplayToggle(context, widget.id, gFFI);
+    if (!mounted) return const [];
+    for (final item in scales) {
+      if (item.value == kRemoteViewStyleCustom) continue;
+      final name = item.value == kRemoteViewStyleAdaptive ? '完整画面' : '原始比例';
+      add('画面比例', name,
+          !canvas.mobileHeightFit && item.value == item.groupValue, () async {
+        await canvas.setMobileHeightFit(false);
+        await bind.sessionSetViewStyle(sessionId: sessionId, value: item.value);
+        await canvas.updateViewStyle();
+      });
+    }
+    for (final group in [('画质', qualities), ('编码', codecs)]) {
+      for (final item in group.$2) {
+        final title = item.child;
+        if (title is! Text || title.data == null || item.onChanged == null) {
+          continue;
+        }
+        add(group.$1, title.data!, item.value == item.groupValue, () async {
+          item.onChanged?.call(item.value);
+        });
+      }
+    }
+    for (final item in toggles) {
+      final title = item.child;
+      if (title is! Text || title.data == null || item.onChanged == null) {
+        continue;
+      }
+      add('显示选项', title.data!, item.value, () async {
+        item.onChanged?.call(!item.value);
+      });
+    }
+    _nativeDisplayActions = commands;
+    return choices;
+  }
+
+  Future<String> _saveNativeScreenshot() async {
+    if (_savingNativeScreenshot) return 'pending';
+    final frame = gFFI.imageModel.image?.clone();
+    if (frame == null) return 'noFrame';
+    _savingNativeScreenshot = true;
+    try {
+      final png = await frame.toByteData(format: ui.ImageByteFormat.png);
+      if (png == null) return 'encodeFailed';
+      return await _nativeSession.savePhoto(
+          png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes));
+    } catch (error) {
+      debugPrint('Remote frame screenshot failed: ${error.runtimeType}');
+      return 'saveFailed';
+    } finally {
+      frame.dispose();
+      _savingNativeScreenshot = false;
+    }
+  }
+
   void _openSessionKeyboard() {
     setState(() => _showSessionKeyboard = true);
     openKeyboard();
@@ -827,6 +1192,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   : null,
           onGestureSettings: () => setState(() => _showGestureHelp = true),
           onKeyboard: _canSendSessionInput ? _openSessionKeyboard : null,
+          onCenterCursor: _canSendSessionInput && !model.isPeerAndroid
+              ? () => _queueVirtualMouse(() async {
+                    if (mounted && _canSendSessionInput) {
+                      await _ensureVisibleCursor(recenter: true);
+                    }
+                  })
+              : null,
           actions: [
             SessionAction.display,
             SessionAction.chat,
@@ -855,7 +1227,12 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
       final canvas = bounds(_sessionViewportKey);
       if (canvas == null) return;
-      final keyboard = bounds(_sessionKeyboardKey);
+      final keyboard = _nativeSessionActive &&
+              _showEdit &&
+              keyboardVisibilityController.isVisible
+          ? Rect.fromLTRB(canvas.left, canvas.bottom - 38, canvas.right,
+              canvas.bottom)
+          : bounds(_sessionKeyboardKey);
       gFFI.canvasModel.updateMobileSessionViewport(
         sessionVisibleViewport(canvas, keyboard),
         keyboardOpen: keyboard != null,
@@ -956,6 +1333,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     final keyboardIsVisible =
         keyboardVisibilityController.isVisible && _showEdit;
     final showActionButton = !_showBar || keyboardIsVisible || _showGestureHelp;
+    if (_nativeSessionActive) _syncNativePresentation();
 
     return WillPopScope(
       onWillPop: () async {
@@ -977,7 +1355,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
           floatingActionButton: isMobile
-              ? (keyboardVisibilityController.isVisible && !_showEdit
+              ? (_nativeSessionActive ||
+                      (keyboardVisibilityController.isVisible && !_showEdit)
                   ? null
                   : _sessionDock())
               : !showActionButton
@@ -1028,7 +1407,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                   Overlay.wrap(child: _buildSessionCanvas()))),
               if (isMobile && _showEdit && _canSendSessionIme)
                 _sessionImeEditor(),
-              if (isMobile) _sessionInputOverlays(keyboardIsVisible),
+              if (isMobile && !_nativeSessionActive)
+                _sessionInputOverlays(keyboardIsVisible),
             ],
           )),
     );
@@ -1051,7 +1431,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       return Obx(() => inputModel.isPhysicalMouse.value
           ? getBodyForMobile()
           : RawTouchGestureDetectorRegion(
-              child: getBodyForMobile(), ffi: gFFI));
+              child: getBodyForMobile(),
+              ffi: gFFI,
+              awesunCanvas: _nativeSessionActive,
+            ));
     });
     final canvas = ColoredBox(
       color: isMobile ? Colors.black : kColorCanvas,
@@ -1274,11 +1657,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           if (showCursorPaint) {
             paints.add(CursorPaint(widget.id));
           }
-          if (gFFI.ffiModel.touchMode && !isMobile) {
+          if (!_nativeSessionActive && gFFI.ffiModel.touchMode && !isMobile) {
             paints.add(FloatingMouse(
               ffi: gFFI,
             ));
-          } else if (!gFFI.ffiModel.touchMode && !_showSessionKeyboard) {
+          } else if (!_nativeSessionActive &&
+              !gFFI.ffiModel.touchMode &&
+              !_showSessionKeyboard) {
             paints.add(FloatingMouseWidgets(
               ffi: gFFI,
             ));
@@ -1834,8 +2219,8 @@ class CursorPaint extends StatelessWidget {
   }
 }
 
-void showOptions(
-    BuildContext context, String id, OverlayDialogManager dialogManager) async {
+void showOptions(BuildContext context, String id, OverlayDialogManager dialogManager,
+    {bool clearHeightFitOnScale = false}) async {
   var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
   final image = gFFI.ffiModel.getConnectionImageText(peerId: id);
@@ -1930,7 +2315,10 @@ void showOptions(
             e.value,
             viewStyle.value,
             e.onChanged != null
-                ? (v) {
+                ? (v) async {
+                    if (v != null && clearHeightFitOnScale) {
+                      await gFFI.canvasModel.setMobileHeightFit(false);
+                    }
                     e.onChanged?.call(v);
                     if (v != null) viewStyle.value = v;
                   }

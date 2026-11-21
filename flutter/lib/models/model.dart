@@ -2331,6 +2331,32 @@ class CanvasModel with ChangeNotifier {
   double get y => _y;
   double get scale => _scale;
   bool get locked => _locked;
+  bool _mobileHeightFit = false;
+  bool get mobileHeightFit => _mobileHeightFit;
+
+  Future<void> setMobileHeightFit(bool enabled) async {
+    if (_mobileHeightFit == enabled) return;
+    _mobileHeightFit = enabled;
+    if (enabled) {
+      updateSize();
+      if (_applyMobileHeightFit()) notifyListeners();
+    } else {
+      _lastViewStyle = ViewStyle.defaultViewStyle();
+      await updateViewStyle();
+    }
+  }
+
+  bool _applyMobileHeightFit() {
+    final height = getDisplayHeight();
+    final width = getDisplayWidth();
+    final viewport = size;
+    final fitted = mobileHeightFitScale(viewport, Size(width.toDouble(), height.toDouble()));
+    if (fitted == null) return false;
+    _scale = fitted;
+    _x = (viewport.width - width * _scale) / 2;
+    _y = (viewport.height - height * _scale) / 2;
+    return true;
+  }
   double get devicePixelRatio => _devicePixelRatio;
   Size get size => _size;
   ScrollStyle get scrollStyle => _scrollStyle;
@@ -2475,7 +2501,9 @@ class CanvasModel with ChangeNotifier {
         _scale /= _devicePixelRatio;
       }
     }
-    _resetCanvasOffset(displayWidth, displayHeight);
+    if (!_mobileHeightFit || _mobileSessionKeyboardOpen || !_applyMobileHeightFit()) {
+      _resetCanvasOffset(displayWidth, displayHeight);
+    }
     final overflow = _x < 0 || y < 0;
     if (_imageOverflow.value != overflow) {
       _imageOverflow.value = overflow;
@@ -2879,9 +2907,15 @@ class CanvasModel with ChangeNotifier {
       _scaleBeforeMobileSoftKeyboard = null;
       _mobileSessionKeyboardAnchor = null;
     }
+    final previousViewport = _mobileSessionViewport;
+    final wasKeyboardOpen = _mobileSessionKeyboardOpen;
     _mobileSessionKeyboardOpen = keyboardOpen;
     _mobileSessionViewport = visible;
     _size = visible;
+    if (_mobileHeightFit && !keyboardOpen && !wasKeyboardOpen &&
+        previousViewport != visible) {
+      _applyMobileHeightFit();
+    }
     _constrainMobileSessionCanvas(focus: _mobileSessionKeyboardAnchor);
     notifyListeners();
   }

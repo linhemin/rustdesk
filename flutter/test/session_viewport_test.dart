@@ -27,6 +27,14 @@ class _Session extends Fake implements FFI {
 }
 
 void main() {
+  test('portrait sessions fill height without stretching the remote frame', () {
+    final scale = mobileHeightFitScale(
+        const Size(393, 780), const Size(1920, 1080))!;
+    expect(1080 * scale, closeTo(780, 0.001));
+    expect(1920 * scale, greaterThan(393));
+    expect(mobileHeightFitScale(Size.zero, const Size(1920, 1080)), isNull);
+  });
+
   test('only actual bottom-panel overlap is subtracted from resized canvas',
       () {
     const canvas = Rect.fromLTWH(10, 44, 390, 416);

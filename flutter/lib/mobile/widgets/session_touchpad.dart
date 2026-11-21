@@ -253,17 +253,7 @@ class _SessionTouchpadState extends State<SessionTouchpad>
                 width: width,
                 height: height,
                 child: compact
-                    ? SessionControlsSurface(
-                        child: GestureDetector(
-                          onPanUpdate: moveHandle,
-                          child: IconButton(
-                            tooltip: translate('Virtual mouse'),
-                            onPressed: () => _setCompact(false),
-                            color: sessionControlAccent,
-                            icon: const Icon(Icons.mouse_outlined),
-                          ),
-                        ),
-                      )
+                    ? _cursorBall(moveHandle)
                     : _showWheel
                         ? _wheelMode(width)
                         : _mouseControls(moveHandle),
@@ -271,6 +261,32 @@ class _SessionTouchpadState extends State<SessionTouchpad>
             ],
           );
         },
+      );
+
+  Widget _cursorBall(GestureDragUpdateCallback moveHandle) => Tooltip(
+        message: translate('Virtual mouse'),
+        child: GestureDetector(
+          key: const ValueKey('session-cursor-ball'),
+          onTap: () => _setCompact(false),
+          onLongPress: () => _click(widget.onRightClick, Icons.more_horiz),
+          onPanUpdate: (details) {
+            moveHandle(details);
+            widget.onMove(details.delta);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            decoration: BoxDecoration(
+              color: sessionControlSurface,
+              shape: BoxShape.circle,
+              border: Border.all(
+                  color: _feedback == null
+                      ? const Color(0x4D93A9B8)
+                      : sessionControlAccent),
+            ),
+            child: Icon(_feedback ?? Icons.mouse_outlined,
+                color: sessionControlAccent),
+          ),
+        ),
       );
 
   Widget _mouseControls(GestureDragUpdateCallback moveHandle) => Column(
@@ -422,8 +438,9 @@ class _SessionScrollRingState extends State<_SessionScrollRing> {
   void _move(PointerMoveEvent event) {
     if (_pointer != event.pointer) return;
     final vector = _vector(event);
-    if (vector.distance < _inner / 2) {
-      setState(() => _angle = null);
+    if (vector.distance < _inner) {
+      if (_angle != null) setState(() => _angle = null);
+      _pending = 0;
       return;
     }
     final angle = math.atan2(vector.dy, vector.dx);

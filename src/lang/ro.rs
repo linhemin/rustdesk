@@ -843,5 +843,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Exit keyboard", ""),
         ("Middle mouse button", ""),
         ("Drag", ""),
+        ("Center cursor", ""),
     ].iter().cloned().collect();
 }
