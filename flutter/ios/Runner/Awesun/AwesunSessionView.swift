@@ -88,7 +88,7 @@ struct AwesunSessionView: View {
                     Image(systemName: symbol).resizable().scaledToFit()
                 }
             }
-                .foregroundColor(accent ? AwesunPalette.brandRed : .white)
+                .foregroundColor(accent ? AwesunPalette.brandBlue : AwesunPalette.textPrimary)
                 .modifier(AwesunFloatingChrome())
         }
         .buttonStyle(AwesunPressStyle())
@@ -135,10 +135,10 @@ struct AwesunSessionView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
                 .frame(width: width, height: 28)
-                .background(selected ? AwesunPalette.brandRed : Color.white.opacity(0.09))
-                .cornerRadius(7)
+                .background(selected ? AwesunPalette.brandBlue.opacity(0.16) : AwesunPalette.controlFill)
+                .cornerRadius(8)
         }
-        .foregroundColor(.white)
+        .foregroundColor(AwesunPalette.textPrimary)
         .buttonStyle(.plain)
     }
 
@@ -217,7 +217,7 @@ struct AwesunSessionView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .foregroundColor(.white)
+                        .foregroundColor(AwesunPalette.textPrimary)
                         Divider().background(AwesunPalette.hairline)
                     }
                 }
@@ -515,7 +515,9 @@ struct AwesunFloatingChrome: ViewModifier {
         content.frame(width: AwesunControlLayout.glyphSize, height: AwesunControlLayout.glyphSize)
             .frame(width: AwesunControlLayout.controlRadius * 2,
                    height: AwesunControlLayout.controlRadius * 2)
-            .background(Circle().fill(Color.black.opacity(0.78)))
+            .background(Circle().fill(AwesunPalette.sheetFill))
+            .overlay(Circle().strokeBorder(AwesunPalette.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
             .contentShape(Circle())
     }
 }
@@ -532,7 +534,7 @@ struct AwesunDockButton<Glyph: View>: View {
         let anchor = AwesunControlLayout.dockCenter(placement, in: size)
         let button = CGPoint(x: anchor.x + drag.width, y: anchor.y + drag.height)
         glyph()
-            .foregroundColor(.white)
+            .foregroundColor(AwesunPalette.textPrimary)
             .modifier(AwesunFloatingChrome())
             .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("awesunControls"))
                 .updating($drag) { value, state, _ in state = value.translation }

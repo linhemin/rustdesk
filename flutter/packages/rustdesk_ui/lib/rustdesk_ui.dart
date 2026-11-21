@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+export 'mobile.dart';
+
 /// Visual primitives shared by the app and the backend-free UI catalog.
 class WorkspaceStyle {
   WorkspaceStyle._();

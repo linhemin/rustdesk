@@ -8,6 +8,14 @@ import 'package:get/get.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import '../../common/widgets/workspace.dart';
+
+Widget _workspaceDialog({required Widget title, required Widget content,
+    List<Widget> actions = const []}) => isMobile
+    ? MobileWorkspaceDialogTheme(child: CustomAlertDialog(
+        title: title, content: content, actions: actions,
+        titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 20)))
+    : CustomAlertDialog(title: title, content: content, actions: actions);
 
 void _showSuccess() {
   showToast(translate("Successful"));
@@ -35,7 +43,7 @@ void setTemporaryPasswordLengthDialog(
       });
     }
 
-    return CustomAlertDialog(
+    return _workspaceDialog(
       title: Text(translate("Set one-time password length")),
       content: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -143,7 +151,7 @@ void showServerSettingsWithValue(
       ).workaroundFreezeLinuxMint();
     }
 
-    return CustomAlertDialog(
+    return _workspaceDialog(
       title: Row(
         children: [
           Expanded(child: Text(translate('ID/Relay Server'))),
@@ -151,7 +159,7 @@ void showServerSettingsWithValue(
         ],
       ),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 500),
+        constraints: BoxConstraints(minWidth: isMobile ? 0 : 500),
         child: Form(
           child: Obx(() => Column(
                 mainAxisSize: MainAxisSize.min,

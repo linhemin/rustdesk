@@ -121,7 +121,7 @@ struct AwesunKeyboardView: View {
             .accessibilityLabel("关闭虚拟键盘")
         }
         .font(.system(size: 12))
-        .foregroundColor(.white)
+        .foregroundColor(AwesunPalette.textPrimary)
         .buttonStyle(.plain)
         .padding(.horizontal, 10)
     }
@@ -323,17 +323,17 @@ struct AwesunKeyTile: View {
             if let second = second {
                 Text(second)
                     .font(.system(size: 10))
-                    .foregroundColor(.white.opacity(0.72))
+                    .foregroundColor(AwesunPalette.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
         }
         .multilineTextAlignment(.center)
-        .foregroundColor(.white)
+        .foregroundColor(AwesunPalette.textPrimary)
         .padding(.horizontal, 2)
         .frame(maxWidth: .infinity, maxHeight: expanded ? .infinity : nil)
         .frame(minHeight: expanded ? 0 : 39)
-        .background(selected ? AwesunPalette.brandRed.opacity(0.78) : AwesunPalette.keyboardCap)
+        .background(selected ? AwesunPalette.brandBlue.opacity(0.78) : AwesunPalette.keyboardCap)
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .contentShape(Rectangle())
     }
@@ -352,8 +352,8 @@ struct AwesunKeyTile: View {
 }
 
 extension AwesunPalette {
-    static let keyboardDeck = Color(awesun: 0xFF171522)
-    static let keyboardCap = Color(awesun: 0xFF292834)
+    static let keyboardDeck = Color(workspaceLight: 0xFFF4F6FA, dark: 0xFF101725)
+    static let keyboardCap = Color(workspaceLight: 0xFFFFFFFF, dark: 0xFF303E54)
 }
 
 struct AwesunAccessorySlot: Equatable {
@@ -476,7 +476,7 @@ struct AwesunAccessoryEditor: View {
             .frame(maxHeight: max(100, height - 120))
         }
         .buttonStyle(.plain)
-        .foregroundColor(.white)
+        .foregroundColor(AwesunPalette.textPrimary)
         .padding(.horizontal, 5)
         .padding(.bottom, 8)
         .background(AwesunPalette.keyboardDeck)

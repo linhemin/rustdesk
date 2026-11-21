@@ -2188,9 +2188,12 @@ class _RemotePageState extends State<RemotePage>
   /// aka changeTouchMode
   BottomAppBar getGestureHelp() {
     return BottomAppBar(
+        color: isMobile ? Theme.of(context).cardColor : null,
+        shape: isMobile ? const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24))) : null,
         child: SingleChildScrollView(
             controller: ScrollController(),
-            padding: EdgeInsets.symmetric(vertical: 10),
+            padding: EdgeInsets.symmetric(vertical: isMobile ? 20 : 10),
             child: GestureHelp(
               touchMode: gFFI.ffiModel.touchMode,
               onTouchModeChange: (t) {

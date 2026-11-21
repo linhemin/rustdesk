@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:rustdesk_ui/rustdesk_ui.dart';
+import 'mobile_catalog.dart';
 
 void main() => runApp(const RustDeskPreview());
 
@@ -13,8 +14,9 @@ class RustDeskPreview extends StatefulWidget {
 }
 
 class _RustDeskPreviewState extends State<RustDeskPreview> {
-  bool dark = false;
-  bool mobile = false;
+  bool dark = Uri.base.queryParameters['theme'] == 'dark';
+  bool mobile = Uri.base.queryParameters['catalog'] == 'mobile';
+  bool mobileCatalog = Uri.base.queryParameters['catalog'] == 'mobile';
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -30,6 +32,16 @@ class _RustDeskPreviewState extends State<RustDeskPreview> {
               title: const Text('RustDesk / UI preview',
                   style: TextStyle(fontSize: 15)),
               actions: [
+                IconButton(
+                  tooltip: mobileCatalog
+                      ? 'Connection catalog'
+                      : 'Mobile screen catalog',
+                  onPressed: () => setState(() {
+                    mobileCatalog = !mobileCatalog;
+                    if (mobileCatalog) mobile = true;
+                  }),
+                  icon: const Icon(Icons.dashboard_customize_outlined),
+                ),
                 IconButton(
                   tooltip: mobile ? 'Desktop layout' : 'Phone layout',
                   onPressed: () => setState(() => mobile = !mobile),
@@ -59,7 +71,9 @@ class _RustDeskPreviewState extends State<RustDeskPreview> {
                               BorderSide(color: Theme.of(context).dividerColor))
                       : null,
                 ),
-                child: const PreviewWorkspace(),
+                child: mobileCatalog
+                    ? const MobileScreensCatalog()
+                    : const PreviewWorkspace(),
               ),
             ),
           );

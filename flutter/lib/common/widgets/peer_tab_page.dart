@@ -25,6 +25,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import 'workspace.dart';
 
 class PeerTabPage extends StatefulWidget {
   const PeerTabPage({Key? key}) : super(key: key);
@@ -111,7 +112,7 @@ class _PeerTabPageState extends State<PeerTabPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Obx(() => SizedBox(
-              height: 32,
+              height: isMobile ? 48 : 32,
               child: Container(
                 padding: stateGlobal.isPortrait.isTrue
                     ? EdgeInsets.symmetric(horizontal: 2)
@@ -167,11 +168,19 @@ class _PeerTabPageState extends State<PeerTabPage>
                     onTriggered: isMobile ? mobileShowTabVisibilityMenu : null,
                     child: InkWell(
                       child: Container(
-                        decoration: (hover.value
+                        decoration: isMobile
+                            ? BoxDecoration(
+                                color: selected
+                                    ? WorkspaceStyle.accent.withOpacity(.12)
+                                    : Colors.transparent,
+                                borderRadius: BorderRadius.circular(12))
+                            : (hover.value
                             ? (selected ? decoBorder : deco)
                             : (selected ? decoBorder : null)),
-                        child: Icon(model.tabIcon(t), color: color)
-                            .paddingSymmetric(horizontal: 4),
+                        child: Icon(model.tabIcon(t), color: isMobile && selected
+                            ? Theme.of(context).colorScheme.primary : color)
+                            .paddingSymmetric(horizontal: isMobile ? 10 : 4,
+                                vertical: isMobile ? 10 : 0),
                       ).paddingSymmetric(horizontal: 4),
                       onTap: isOptionFixed(kOptionPeerTabIndex)
                           ? null

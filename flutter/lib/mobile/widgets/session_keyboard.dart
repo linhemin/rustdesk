@@ -72,10 +72,10 @@ class _SessionKeyboardState extends State<SessionKeyboard> {
       child: TextButton(
         style: TextButton.styleFrom(
           padding: const EdgeInsets.symmetric(horizontal: 2),
-          foregroundColor: active ? const Color(0xFF102821) : sessionControlInk,
+          foregroundColor: active ? const Color(0xFF101725) : sessionControlInk,
           disabledForegroundColor: sessionControlInk.withOpacity(.4),
           backgroundColor:
-              active ? sessionControlAccent : const Color(0xFF2B3A47),
+              active ? sessionControlAccent : const Color(0xFF303E54),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         onPressed: widget.enabled ? action : null,

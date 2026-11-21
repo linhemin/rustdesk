@@ -37,6 +37,29 @@ flutter analyze lib
 flutter build web
 ```
 
+## Mobile screen catalog
+
+Use **Mobile screen catalog** in the toolbar, then the screen picker. It covers
+settings, favorites, address book, session canvas, session controls, remote
+keyboard, gesture help, file transfer, chat, server dialog, and keyboard shortcuts.
+The dialog's **Edit server settings** button opens the production mobile dialog
+shell. Settings toggles, input mode, file-side selection, and sample chat stay
+local to the catalog.
+
+Direct links support screenshots, for example:
+`/?catalog=mobile&screen=files&theme=dark` (omit `theme=dark` for light).
+Use the keys in `MobileScreensCatalog.screens` for other screens.
+
+The catalog reuses production mobile section, session-surface, chat-header and
+dialog components. Its remote image, content, and controls are sample fixtures,
+not a running remote session. The controls page is a **design reference** for
+SwiftUI, not a rendering or verification of native SwiftUI. Native layout,
+keyboard input, touch hit-testing and safe areas still require iOS verification.
+
+```sh
+flutter test ../test/workspace_ui_test.dart ../test/mobile_workspace_ui_test.dart
+```
+
 ## Verification boundary
 
 This is a design/component preview, **not** an end-to-end RustDesk session or a

@@ -113,7 +113,7 @@ class ChatPage extends StatelessWidget implements PageShape {
                         isDense: true,
                         hintText: translate('Write a message'),
                         filled: true,
-                        fillColor: Theme.of(context).colorScheme.background,
+                        fillColor: isMobile ? Theme.of(context).cardColor : Theme.of(context).colorScheme.background,
                         contentPadding: EdgeInsets.all(10),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10.0),
@@ -143,12 +143,14 @@ class ChatPage extends StatelessWidget implements PageShape {
                               : CrossAxisAlignment.start,
                           children: <Widget>[
                             Text(message.text,
-                                style: TextStyle(color: Colors.white)),
+                                style: TextStyle(color: isMobile && !isOwnMessage
+                                    ? Theme.of(context).colorScheme.onSurface : Colors.white)),
                             Text(
                               "${message.createdAt.hour}:${message.createdAt.minute.toString().padLeft(2, '0')}",
                               style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 8,
+                                color: isMobile && !isOwnMessage
+                                    ? Theme.of(context).hintColor : Colors.white,
+                                fontSize: isMobile ? 10 : 8,
                               ),
                             ).marginOnly(top: 3),
                           ],
@@ -159,9 +161,9 @@ class ChatPage extends StatelessWidget implements PageShape {
                         final isOwnMessage = message.user.id.isBlank!;
                         return defaultMessageDecoration(
                           color:
-                              isOwnMessage ? MyTheme.accent : Colors.blueGrey,
-                          borderTopLeft: 8,
-                          borderTopRight: 8,
+                              isOwnMessage ? MyTheme.accent : isMobile ? Theme.of(context).cardColor : Colors.blueGrey,
+                          borderTopLeft: isMobile ? 16 : 8,
+                          borderTopRight: isMobile ? 16 : 8,
                           borderBottomRight: isOwnMessage ? 2 : 8,
                           borderBottomLeft: isOwnMessage ? 8 : 2,
                         );

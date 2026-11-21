@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
+import '../../common/widgets/workspace.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
@@ -39,6 +40,21 @@ class SettingsPage extends StatefulWidget implements PageShape {
 }
 
 const url = 'https://rustdesk.com/';
+
+SettingsThemeData _workspaceSettingsTheme(BuildContext context) {
+  final theme = Theme.of(context);
+  return SettingsThemeData(
+    settingsListBackground: theme.scaffoldBackgroundColor,
+    settingsSectionBackground: theme.cardColor,
+    dividerColor: theme.dividerColor,
+    titleTextColor: theme.hintColor,
+    settingsTileTextColor: theme.colorScheme.onSurface,
+    leadingIconsColor: theme.colorScheme.primary,
+    trailingTextColor: theme.hintColor,
+    tileDescriptionTextColor: theme.hintColor,
+    tileHighlightColor: theme.colorScheme.primary.withOpacity(.08),
+  );
+}
 
 enum KeepScreenOn {
   never,
@@ -293,7 +309,15 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final incomingOnly = bind.isIncomingOnly();
     final customClientSection = CustomSettingsSection(
         child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+          child: WorkspaceHeading(
+            title: translate('Settings'),
+            trailing: const WorkspaceIcon(icon: Icons.tune_rounded),
+          ),
+        ),
         if (bind.isCustomClient())
           Align(
             alignment: Alignment.center,
@@ -734,6 +758,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final hideSecuritySettings =
         bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) == 'Y';
     final settings = SettingsList(
+      platform: DevicePlatform.iOS,
+      lightTheme: _workspaceSettingsTheme(context),
+      darkTheme: _workspaceSettingsTheme(context),
       sections: [
         customClientSection,
         if (!bind.isDisableAccount())
@@ -1293,7 +1320,11 @@ class __DisplayPageState extends State<_DisplayPage> {
         title: Text(translate('Display Settings')),
         centerTitle: true,
       ),
-      body: SettingsList(sections: [
+      body: SettingsList(
+        platform: DevicePlatform.iOS,
+        lightTheme: _workspaceSettingsTheme(context),
+        darkTheme: _workspaceSettingsTheme(context),
+        sections: [
         SettingsSection(
           tiles: [
             _getPopupDialogRadioEntry(

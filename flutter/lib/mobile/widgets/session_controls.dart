@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../common.dart';
+import '../../common/widgets/workspace.dart';
 
-const sessionControlSurface = Color(0xF01A242E);
-const sessionControlInk = Color(0xFFEDF4F7);
-const sessionControlAccent = Color(0xFFA2F4D8);
+const sessionControlSurface = WorkspaceStyle.nightSurface;
+const sessionControlInk = Color(0xFFE8EDF7);
+const sessionControlAccent = Color(0xFFA5B4FC);
 
 enum SessionInputMode {
   touch('Touchscreen mode', Icons.touch_app_outlined),
@@ -35,16 +36,10 @@ class SessionControlsSurface extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Material(
-        color: sessionControlSurface,
-        elevation: 4,
-        shadowColor: Colors.black54,
-        clipBehavior: Clip.antiAlias,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: const BorderSide(color: Color(0x4D93A9B8)),
-        ),
-        child: child,
+  Widget build(BuildContext context) => Theme(
+        // Session tools stay dark against arbitrary remote desktop imagery.
+        data: WorkspaceStyle.apply(ThemeData.dark(useMaterial3: false)),
+        child: MobileSessionSurface(child: child),
       );
 }
 

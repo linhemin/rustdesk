@@ -86,10 +86,16 @@ class _PeerCardState extends State<_PeerCard>
   Widget _buildPortrait() {
     final peer = super.widget.peer;
     return Card(
-        margin: EdgeInsets.symmetric(horizontal: 2),
+        elevation: isMobile ? 0 : null,
+        color: isMobile ? Theme.of(context).cardColor : null,
+        shape: isMobile ? RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: Theme.of(context).dividerColor),
+        ) : null,
+        margin: isMobile ? EdgeInsets.only(bottom: 8) : EdgeInsets.symmetric(horizontal: 2),
         child: gestureDetector(
           child: Container(
-              padding: EdgeInsets.only(left: 12, top: 8, bottom: 8),
+              padding: EdgeInsets.only(left: 12, top: isMobile ? 12 : 8, bottom: isMobile ? 12 : 8),
               child: _buildPeerTile(context, peer, null)),
         ));
   }

@@ -9,6 +9,7 @@ import 'package:toggle_switch/toggle_switch.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
+import '../../common/widgets/workspace.dart';
 import '../../consts.dart';
 import '../../utils/android_documents.dart';
 
@@ -313,7 +314,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
         return false;
       },
       child: Scaffold(
-        // backgroundColor: MyTheme.grayBg,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         appBar: AppBar(
           leading: Row(children: [
             IconButton(
@@ -323,13 +324,11 @@ class _FileManagerPageState extends State<FileManagerPage> {
           centerTitle: true,
           title: ToggleSwitch(
             initialLabelIndex: showLocal ? 0 : 1,
-            activeBgColor: [MyTheme.idColor],
-            inactiveBgColor: Theme.of(context).brightness == Brightness.light
-                ? MyTheme.grayBg
-                : null,
-            inactiveFgColor: Theme.of(context).brightness == Brightness.light
-                ? Colors.black54
-                : null,
+            activeBgColor: [WorkspaceStyle.accent],
+            activeFgColor: Colors.white,
+            inactiveBgColor: Theme.of(context).scaffoldBackgroundColor,
+            inactiveFgColor: Theme.of(context).hintColor,
+            cornerRadius: 12,
             totalSwitches: 2,
             minWidth: 100,
             fontSize: 15,
@@ -744,6 +743,7 @@ class _FileManagerViewState extends State<FileManagerView> {
       Expanded(child: Obx(() {
         final entries = controller.directory.value.entries;
         return ListView.builder(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           controller: _listScrollController,
           itemCount: entries.length + 1,
           itemBuilder: (context, index) {
@@ -764,6 +764,13 @@ class _FileManagerViewState extends State<FileManagerView> {
                   widget.selectMode.value.eq(controller.selectedItems.isLocal);
             }();
             return Card(
+              elevation: 0,
+              margin: const EdgeInsets.only(bottom: 8),
+              color: Theme.of(context).cardColor,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: Theme.of(context).dividerColor),
+              ),
               child: ListTile(
                 leading: entries[index].isDrive
                     ? Padding(
@@ -775,10 +782,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                                 .iconTheme
                                 .color
                                 ?.withOpacity(0.7)))
-                    : Icon(
-                        entries[index].isFile
+                    : WorkspaceIcon(
+                        icon: entries[index].isFile
                             ? Icons.feed_outlined
-                            : Icons.folder,
+                            : Icons.folder_outlined,
                         size: 40),
                 title: Text(entries[index].name),
                 selected: selected,
@@ -786,7 +793,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                     ? null
                     : Text(
                         "${entries[index].lastModified().toString().replaceAll(".000", "")}   $sizeStr",
-                        style: TextStyle(fontSize: 12, color: MyTheme.darkGray),
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).hintColor),
                       ),
                 trailing: entries[index].isDrive
                     ? null
@@ -1019,8 +1026,9 @@ class BottomSheetBody extends StatelessWidget {
             height: 65,
             alignment: Alignment.centerLeft,
             decoration: BoxDecoration(
-                color: MyTheme.accent50,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
+                color: Theme.of(context).cardColor,
+                border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 15),
               child: Row(

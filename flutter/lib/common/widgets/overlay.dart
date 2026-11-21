@@ -11,6 +11,7 @@ import '../../desktop/widgets/tabbar_widget.dart';
 import '../../models/chat_model.dart';
 import '../../models/model.dart';
 import 'chat_page.dart';
+import 'workspace.dart';
 
 class DraggableChatWindow extends StatelessWidget {
   const DraggableChatWindow(
@@ -74,46 +75,15 @@ class DraggableChatWindow extends StatelessWidget {
   }
 
   Widget _buildMobileAppBar(BuildContext context) {
-    return Container(
-      color: Theme.of(context).colorScheme.primary,
-      height: 50,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 15),
-              child: Text(
-                translate("Chat"),
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontFamily: 'WorkSans',
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20),
-              )),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              IconButton(
-                  onPressed: () {
-                    chatModel.hideChatWindowOverlay();
-                  },
-                  icon: const Icon(
-                    Icons.keyboard_arrow_down,
-                    color: Colors.white,
-                  )),
-              IconButton(
-                  onPressed: () {
-                    chatModel.hideChatWindowOverlay();
-                    chatModel.hideChatIconOverlay();
-                  },
-                  icon: const Icon(
-                    Icons.close,
-                    color: Colors.white,
-                  ))
-            ],
-          )
-        ],
-      ),
+    return MobileChatHeader(
+      title: translate('Chat'),
+      minimizeLabel: translate('Minimize'),
+      closeLabel: translate('Close'),
+      onMinimize: chatModel.hideChatWindowOverlay,
+      onClose: () {
+        chatModel.hideChatWindowOverlay();
+        chatModel.hideChatIconOverlay();
+      },
     );
   }
 

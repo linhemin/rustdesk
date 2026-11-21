@@ -4,6 +4,17 @@ import UIKit
 // MARK: - Session design tokens
 
 extension Color {
+    init(workspaceLight light: UInt32, dark: UInt32) {
+        self = Color(UIColor { traits in
+            let argb = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat((argb >> 16) & 0xFF) / 255,
+                green: CGFloat((argb >> 8) & 0xFF) / 255,
+                blue: CGFloat(argb & 0xFF) / 255,
+                alpha: CGFloat((argb >> 24) & 0xFF) / 255)
+        })
+    }
+
     init(awesun argb: UInt32) {
         let a = Double((argb >> 24) & 0xFF) / 255.0
         let r = Double((argb >> 16) & 0xFF) / 255.0
@@ -27,18 +38,20 @@ enum AwesunPalette {
     static let pairStroke = Color(awesun: 0xFF465670)
     static let glyph = Color(awesun: 0xFFF4FAFF)
 
-    static let brandBlue = Color(awesun: 0xFF4263EB)
+    static let brandBlue = Color(workspaceLight: 0xFF4263EB, dark: 0xFFA5B4FC)
     static let brandRed = Color(awesun: 0xFFEF6685)
-    static let kbBackground = Color(awesun: 0xFFA9B8C1)
-    static let kbKey = Color.white
-    static let kbKeyOn = Color(awesun: 0xE6000000)
-    static let kbKeyText = Color(awesun: 0xFF4A4A4A)
-    static let kbSecondText = Color(awesun: 0xFF9A9A9A)
-    static let sheetFill = Color(awesun: 0xF5101725)
-    static let textPrimary = Color.white
-    static let textSecondary = Color(awesun: 0xFFD3DCEC)
-    static let textTertiary = Color(awesun: 0xFF9AA9BF)
-    static let hairline = Color(awesun: 0x33FFFFFF)
+    static let kbBackground = Color(workspaceLight: 0xFFF4F6FA, dark: 0xFF101725)
+    static let kbKey = Color(workspaceLight: 0xFFFFFFFF, dark: 0xFF303E54)
+    static let kbKeyOn = Color(awesun: 0xFF4263EB)
+    static let kbKeyText = Color(workspaceLight: 0xFF17233B, dark: 0xFFE8EDF7)
+    static let kbSecondText = Color(workspaceLight: 0xFF66758C, dark: 0xFF9AA9BF)
+    static let sheetFill = Color(workspaceLight: 0xFFFFFFFF, dark: 0xFF1A2436)
+    static let textPrimary = Color(workspaceLight: 0xFF17233B, dark: 0xFFE8EDF7)
+    static let textSecondary = Color(workspaceLight: 0xFF66758C, dark: 0xFFD3DCEC)
+    static let textTertiary = Color(workspaceLight: 0xFF66758C, dark: 0xFF9AA9BF)
+    static let hairline = Color(workspaceLight: 0xFFE2E7F0, dark: 0xFF303E54)
+    static let controlFill = Color(workspaceLight: 0xFFF4F6FA, dark: 0xFF303E54)
+    static let onAccent = Color.white
     static let ripple = Color(awesun: 0xFFB2B2B2).opacity(100.0 / 255.0)
     static let mouseFill = Color.white.opacity(0.61)
 }

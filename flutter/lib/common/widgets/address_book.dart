@@ -21,6 +21,7 @@ import 'package:flex_color_picker/flex_color_picker.dart';
 import '../../common.dart';
 import 'dialog.dart';
 import 'login.dart';
+import 'workspace.dart';
 
 final hideAbTagsPanel = false.obs;
 
@@ -111,6 +112,27 @@ class _AddressBookState extends State<AddressBook> {
 
   Widget _buildAddressBookPortrait() {
     const padding = 8.0;
+    if (isMobile) {
+      return Column(children: [
+        Offstage(
+          offstage: hideAbTagsPanel.value,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: WorkspacePanel(
+              padding: const EdgeInsets.all(12),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildAbDropdown(),
+                  _buildTagHeader(),
+                  SizedBox(width: double.infinity, child: _buildTags()),
+                ],
+              ),
+            ),
+          ),
+        ),
+        _buildPeersViews(),
+      ]);
+    }
     return Column(
       children: [
         Offstage(
