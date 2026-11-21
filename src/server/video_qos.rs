@@ -464,6 +464,10 @@ impl VideoQoS {
 
     pub fn user_video_delivery(&mut self, id: i32, kbps: u32, fps: u32, queued: u32) {
         let now = self.now();
+        let target = self.bitrate();
+        let floor_adaptation = self.displays.len() == 1 && self.in_vbr_state()
+            && self.latest_quality() == Quality::Best && target > 0;
+        let min_ratio = self.min_ratio();
         if let Some(user) = self.users.get_mut(&id) {
             if !(6..=1000).contains(&fps) || !(1..=1_000_000).contains(&kbps) || queued > 100 {
                 user.delivery.clear();
@@ -474,6 +478,23 @@ impl VideoQoS {
             }
             if user.delivery.len() == 3 { user.delivery.pop_front(); }
             user.delivery.push_back((now, kbps, queued));
+            if floor_adaptation && user.delivery.len() == 3 {
+                let (_, _, oldest_queue) = user.delivery[0];
+                let (_, _, previous_queue) = user.delivery[1];
+                let delivery_floor = user.delivery.iter().map(|(_, kbps, _)| *kbps).min().unwrap_or(target);
+                // A low delivered rate alone is common on a still desktop. Act only
+                // when active samples also show that the receiver is falling behind.
+                if previous_queue >= oldest_queue && queued >= previous_queue.saturating_add(3)
+                    && queued >= 6 && kbps < target.saturating_mul(4) / 5
+                    && user.delay.avg_delay() >= 24
+                {
+                    let factor = (delivery_floor as f32 * 1.10 / target as f32).clamp(0.55, 0.85);
+                    self.ratio = (self.ratio * factor).max(min_ratio);
+                    let until = now + Duration::from_secs(6);
+                    user.probe_blocked_until = Some(user.probe_blocked_until.map_or(until, |old| old.max(until)));
+                    user.delivery.clear();
+                }
+            }
         }
     }
 
@@ -998,6 +1019,27 @@ mod tests {
         assert!(!qos.delivery_growth_budget(8000).1);
         qos.advance_ms(1100);
         assert!(qos.delivery_growth_budget(8000).1);
+    }
+
+    #[test]
+    fn falling_delivery_and_growing_backlog_lower_best_quality_before_slow_probe_brake() {
+        let mut qos = stable_qos();
+        qos.new_display("monitor".into());
+        qos.set_support_changing_quality("monitor", true);
+        qos.users.get_mut(&1).unwrap().quality = Some((1, Quality::Best));
+        qos.ratio = BR_BEST;
+        qos.store_bitrate(8000);
+        qos.user_network_delay(1, 80);
+        for (rate, queue) in [(4600, 0), (4500, 0), (4000, 0)] {
+            qos.advance_ms(500);
+            qos.user_video_delivery(1, rate, 30, queue);
+        }
+        assert_eq!(qos.ratio(), BR_BEST);
+        for (rate, queue) in [(4600, 2), (4500, 4), (4000, 8)] {
+            qos.advance_ms(500);
+            qos.user_video_delivery(1, rate, 30, queue);
+        }
+        assert!(qos.ratio() < BR_BEST * 0.8);
     }
 
     #[test]
