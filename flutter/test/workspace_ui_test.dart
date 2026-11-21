@@ -33,6 +33,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Office workstation'), findsOneWidget);
     expect(find.text('Studio Mac'), findsNothing);
+    await tester.tap(find.text('Favorites'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'Living');
+    await tester.pumpAndSettle();
+    expect(find.text('Living room PC'), findsNothing);
+    expect(find.text('No matching devices'), findsOneWidget);
     await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Preferences'), findsOneWidget);

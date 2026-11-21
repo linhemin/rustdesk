@@ -191,12 +191,16 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 12),
             leading: Icon(icon,
                 size: 21,
-                color: selected == index ? WorkspaceStyle.accent : null),
+                color: selected == index
+                    ? Theme.of(context).colorScheme.primary
+                    : null),
             title: Text(label,
                 style: TextStyle(
                     fontWeight:
                         selected == index ? FontWeight.w600 : FontWeight.w400,
-                    color: selected == index ? WorkspaceStyle.accent : null)),
+                    color: selected == index
+                        ? Theme.of(context).colorScheme.primary
+                        : null)),
             onTap: () => setState(() => selected = index),
           ),
         ),
@@ -324,8 +328,9 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
               ]),
             ),
           ),
-        if (devices.every(
-            (device) => !device.$1.toLowerCase().contains(query.toLowerCase())))
+        if (!devices.any((device) =>
+            device.$1.toLowerCase().contains(query.toLowerCase()) &&
+            (selected != 1 || device.$4)))
           Padding(
               padding: const EdgeInsets.all(24),
               child: Center(child: muted('No matching devices'))),
