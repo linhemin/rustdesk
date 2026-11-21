@@ -1413,6 +1413,10 @@ class InputModel {
     await sendMouse('up', button);
   }
 
+  // Finish a virtual drag that started before mouse permission changed.
+  Future<void> releaseVirtualMouseDrag() =>
+      _sendMouseUnchecked('up', MouseButtons.left);
+
   /// Send scroll event with scroll distance [y].
   Future<void> scroll(int y) async {
     if (isViewCamera) return;

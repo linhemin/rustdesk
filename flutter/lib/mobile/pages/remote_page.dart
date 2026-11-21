@@ -25,8 +25,13 @@ import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
 import '../ios_p2p_diagnostics.dart';
+import '../session_ime.dart';
+import '../session_viewport.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
+import '../widgets/session_controls.dart';
+import '../widgets/session_keyboard.dart';
+import '../widgets/session_touchpad.dart';
 
 final initText = '1' * 1024;
 
@@ -103,9 +108,18 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   final keyboardVisibilityController = KeyboardVisibilityController();
   late final StreamSubscription<bool> keyboardSubscription;
-  final FocusNode _mobileFocusNode = FocusNode();
+  late final FocusNode _mobileFocusNode =
+      FocusNode(onKeyEvent: _handleSessionImeKey);
   final FocusNode _physicalFocusNode = FocusNode();
   var _showEdit = false; // use soft keyboard
+  bool _showSessionKeyboard = false;
+  Future<void> _virtualMouseInput = Future.value();
+  bool _virtualMouseDown = false;
+  final _sessionKeyboardKey = GlobalKey();
+  final _sessionViewportKey = GlobalKey();
+  bool _viewportUpdateScheduled = false;
+  final _sessionIme = SessionIme();
+  Future<void> _imeQueue = Future.value();
 
   Worker? _waylandKeyboardGateWorker;
   bool _waylandKeyboardGateInitialized = false;
@@ -125,6 +139,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    if (isMobile) _textController.addListener(_sendSessionImeEdit);
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
     gFFI.start(
       widget.id,
@@ -191,6 +206,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Future<void> dispose() async {
     HardwareKeyboard.instance.removeHandler(_handleLocalKeyEvent);
     WidgetsBinding.instance.removeObserver(this);
+    _textController.removeListener(_sendSessionImeEdit);
+    _releaseVirtualMouse();
     // Close the session up-front. `gFFI.close()` below only calls `sessionClose`
     // after several awaits (canvas save, image update, the `enable_soft_keyboard`
     // platform call), so if the app is backgrounded while this page is disposing,
@@ -208,6 +225,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     await gFFI.invokeMethod("enable_soft_keyboard", true);
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
+    _textController.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
@@ -230,6 +248,8 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
+    } else if (isMobile && _showSessionKeyboard) {
+      _clearSessionModifiers();
     }
   }
 
@@ -287,7 +307,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (!mounted) return;
+    final chatHasFocus = gFFI.chatModel.inputNode.hasFocus;
     if (!visible) {
+      if (isMobile && _showEdit && !chatHasFocus) {
+        _showEdit = false;
+        _mobileFocusNode.unfocus();
+        _physicalFocusNode.requestFocus();
+      }
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
       if (gFFI.chatModel.chatWindowOverlayEntry == null &&
@@ -298,13 +325,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       // Workaround for iOS: physical keyboard input fails after virtual keyboard is hidden
       // https://github.com/flutter/flutter/issues/39900
       // https://github.com/rustdesk/rustdesk/discussions/11843#discussioncomment-13499698 - Virtual keyboard issue
-      if (isIOS) {
+      if (isIOS && !chatHasFocus) {
         _iosKeyboardWorkaroundTimer?.cancel();
         _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 100), () {
-          if (!mounted || gFFI.chatModel.inputNode.hasFocus) return;
+          if (!mounted || _showEdit || gFFI.chatModel.inputNode.hasFocus) {
+            return;
+          }
           _physicalFocusNode.unfocus();
           _iosKeyboardWorkaroundTimer = Timer(Duration(milliseconds: 50), () {
-            if (!mounted || gFFI.chatModel.inputNode.hasFocus) return;
+            if (!mounted || _showEdit || gFFI.chatModel.inputNode.hasFocus) {
+              return;
+            }
             _physicalFocusNode.requestFocus();
           });
         });
@@ -314,13 +345,92 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       _iosKeyboardWorkaroundTimer = null;
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
+        if (!mounted) return;
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
             overlays: SystemUiOverlay.values);
-        _mobileFocusNode.requestFocus();
+        if (_showEdit && !gFFI.chatModel.inputNode.hasFocus) {
+          _mobileFocusNode.requestFocus();
+        }
       });
     }
     // update for Scaffold
     setState(() {});
+  }
+
+  void _resetSessionIme() {
+    _sessionIme.reset();
+    _textController.value = SessionIme.initialValue;
+  }
+
+  bool get _canSendSessionIme =>
+      _canSendSessionInput && inputModel.keyboardInputAllowed;
+
+  void _sendSessionImeEdit() {
+    if (!_showEdit || !_mobileFocusNode.hasFocus || !_canSendSessionIme) return;
+    final value = _textController.value;
+    final edit = _sessionIme.update(value);
+    final restored = _sessionIme.restoreMarker(value);
+    if (restored != null) _textController.value = restored;
+    if (edit == null) return;
+    final target = sessionId;
+    final modifiers = _sessionModifiers;
+    _imeQueue = _imeQueue
+        .then((_) => _applySessionImeEdit(target, edit, modifiers))
+        .catchError((Object error) {
+      debugPrint('Remote IME input failed: ${error.runtimeType}');
+    });
+  }
+
+  Future<void> _applySessionImeEdit(SessionID target, SessionImeEdit edit,
+      Set<SessionModifier> modifiers) async {
+    bool allowed() => mounted && sessionId == target && _canSendSessionIme;
+    Future<void> press(String key, Set<SessionModifier> modifiers) =>
+        bind.sessionInputKey(
+          sessionId: target,
+          name: key,
+          down: false,
+          press: true,
+          alt: modifiers.contains(SessionModifier.alt),
+          ctrl: modifiers.contains(SessionModifier.ctrl),
+          shift: modifiers.contains(SessionModifier.shift),
+          command: modifiers.contains(SessionModifier.meta),
+        );
+
+    for (var i = 0; i < edit.backspaces && allowed(); i++) {
+      await press('VK_BACK', const {});
+    }
+    if (!allowed() || edit.text.isEmpty) return;
+    if (edit.text.length == 1 && edit.text.codeUnitAt(0) < 128) {
+      final key = switch (edit.text) {
+        '\n' => 'VK_RETURN',
+        ' ' => 'VK_SPACE',
+        _ => edit.text,
+      };
+      await press(key, modifiers);
+    } else {
+      await bind.sessionInputString(sessionId: target, value: edit.text);
+    }
+  }
+
+  KeyEventResult _handleSessionImeKey(FocusNode node, KeyEvent event) {
+    if (!isMobile || !_showEdit || !_canSendSessionInput) {
+      return KeyEventResult.ignored;
+    }
+    final composing = _textController.value.composing;
+    final keyboard = HardwareKeyboard.instance;
+    if (!useRemoteSessionKey(
+      event.logicalKey,
+      composing: composing.isValid && !composing.isCollapsed,
+      shortcut: keyboard.isControlPressed ||
+          keyboard.isAltPressed ||
+          keyboard.isMetaPressed,
+    )) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyDownEvent && !isSessionImeModifier(event.logicalKey)) {
+      _resetSessionIme();
+    }
+    return inputModel.handleKeyEvent(event);
   }
 
   void _handleIOSSoftKeyboardInput(String newValue) {
@@ -467,17 +577,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   void _openKeyboardUnlocked() {
     inputModel.keyboardInputAllowed = true;
     gFFI.invokeMethod("enable_soft_keyboard", true);
-    // destroy first, so that our _value trick can work
-    _value = initText;
-    _textController.text = _value;
+    if (isMobile) {
+      _resetSessionIme();
+    } else {
+      _value = initText;
+      _textController.text = _value;
+    }
     setState(() => _showEdit = false);
     _timer?.cancel();
     _timer = Timer(kMobileDelaySoftKeyboard, () {
+      if (!mounted || gFFI.chatModel.inputNode.hasFocus) return;
       // show now, and sleep a while to requestFocus to
       // make sure edit ready, so that keyboard won't show/hide/show/hide happen
       setState(() => _showEdit = true);
       _timer?.cancel();
       _timer = Timer(kMobileDelaySoftKeyboardFocus, () {
+        if (!mounted || !_showEdit || gFFI.chatModel.inputNode.hasFocus) return;
         SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
             overlays: SystemUiOverlay.values);
         _mobileFocusNode.requestFocus();
@@ -487,9 +602,354 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget _bottomWidget() => _showGestureHelp
       ? getGestureHelp()
-      : (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
+      : (!isMobile && _showBar && gFFI.ffiModel.pi.displays.isNotEmpty
           ? getBottomAppBar()
           : Offstage());
+
+  bool get _canSendSessionInput =>
+      gFFI.ffiModel.keyboard && !gFFI.ffiModel.viewOnly;
+
+  Future<void> _setSessionInputMode(SessionInputMode mode) async {
+    if (!_canSendSessionInput || gFFI.ffiModel.isPeerAndroid) return;
+    final model = gFFI.ffiModel;
+    final touch = mode == SessionInputMode.touch;
+    inputModel.setRelativeMouseMode(false);
+    if (model.touchMode != touch) {
+      model.toggleTouchMode();
+      await bind.mainSetLocalOption(
+          key: kOptionTouchMode, value: touch ? 'Y' : 'N');
+    }
+  }
+
+  void _toggleSessionVirtualMouse() {
+    final model = gFFI.ffiModel;
+    if (!_canSendSessionInput || !model.touchMode || model.isPeerAndroid) return;
+    final mouse = model.virtualMouseMode;
+    final show = !mouse.showVirtualMouse;
+    mouse.setShowVirtualMouse(show);
+    _queueVirtualMouse(() => bind.mainSetLocalOption(
+        key: kOptionShowVirtualMouse, value: show ? 'Y' : 'N'));
+  }
+
+  void _hideSessionIme() {
+    _timer?.cancel();
+    _showEdit = false;
+    gFFI.invokeMethod('enable_soft_keyboard', false);
+    _mobileFocusNode.unfocus();
+    _physicalFocusNode.requestFocus();
+  }
+
+  void _closeSessionKeyboard() {
+    _clearSessionModifiers();
+    setState(() {
+      _showSessionKeyboard = false;
+      _hideSessionIme();
+    });
+  }
+
+  Set<SessionModifier> get _sessionModifiers => {
+        if (inputModel.ctrl) SessionModifier.ctrl,
+        if (inputModel.shift) SessionModifier.shift,
+        if (inputModel.alt) SessionModifier.alt,
+        if (inputModel.command) SessionModifier.meta,
+      };
+
+  void _setSessionModifier(SessionModifier modifier, bool selected) {
+    switch (modifier) {
+      case SessionModifier.ctrl:
+        inputModel.ctrl = selected;
+      case SessionModifier.shift:
+        inputModel.shift = selected;
+      case SessionModifier.alt:
+        inputModel.alt = selected;
+      case SessionModifier.meta:
+        inputModel.command = selected;
+    }
+  }
+
+  void _clearSessionModifiers() {
+    final keyboard = HardwareKeyboard.instance;
+    inputModel.ctrl = keyboard.isControlPressed;
+    inputModel.shift = keyboard.isShiftPressed;
+    inputModel.alt = keyboard.isAltPressed;
+    inputModel.command = keyboard.isMetaPressed;
+  }
+
+  void _sendSessionKey(String key) {
+    if (_canSendSessionInput && inputModel.keyboardInputAllowed) {
+      if (isMobile && _showEdit) _resetSessionIme();
+      inputModel.inputKey(key);
+    }
+  }
+
+  void _sendSessionShortcut(SessionModifier modifier, String key) {
+    final old = _sessionModifiers;
+    for (final value in SessionModifier.values) {
+      _setSessionModifier(value, value == modifier);
+    }
+    try {
+      _sendSessionKey(key);
+    } finally {
+      for (final value in SessionModifier.values) {
+        _setSessionModifier(value, old.contains(value));
+      }
+    }
+  }
+
+  Future<void> _clickSessionMouse(MouseButtons button) async {
+    if (mounted && _canSendSessionInput && await _ensureVisibleCursor()) {
+      if (mounted && _canSendSessionInput) {
+        if (isMobile && _showEdit) _resetSessionIme();
+        await inputModel.tap(button);
+      }
+    }
+  }
+
+  Future<bool> _ensureVisibleCursor() async {
+    final cursor = gFFI.cursorModel;
+    final remote = gFFI.ffiModel.rect;
+    if (remote == null) return false;
+    final visible = cursor.getVisibleRect();
+    if (visible.contains(cursor.offset) && remote.contains(cursor.offset)) {
+      return true;
+    }
+    final intersection = visible.intersect(remote);
+    if (intersection.isEmpty) return false;
+    final canvas = gFFI.canvasModel;
+    final local = (intersection.center - visible.topLeft) * canvas.scale;
+    final adjust = canvas.getAdjustY();
+    cursor.moveLocal(local.dx, local.dy + adjust, adjust: adjust);
+    await cursor.syncCursorPosition();
+    return true;
+  }
+
+  void _queueVirtualMouse(Future<void> Function() event) {
+    _virtualMouseInput =
+        _virtualMouseInput.then((_) => event()).catchError((Object error) {
+      debugPrint('Virtual mouse input failed: ${error.runtimeType}');
+    });
+  }
+
+  void _moveSessionMouse(Offset delta) => _queueVirtualMouse(() async {
+        if (!mounted || !_canSendSessionInput || !await _ensureVisibleCursor()) {
+          return;
+        }
+        if (!mounted || !_canSendSessionInput) return;
+        await gFFI.cursorModel.updatePan(delta, Offset.zero, false);
+      });
+
+  void _holdVirtualMouse() => _queueVirtualMouse(() async {
+        if (_virtualMouseDown ||
+            !mounted ||
+            !_canSendSessionInput ||
+            !await _ensureVisibleCursor()) {
+          return;
+        }
+        if (!mounted || !_canSendSessionInput) return;
+        await inputModel.tapDown(MouseButtons.left);
+        _virtualMouseDown = true;
+      });
+
+  void _releaseVirtualMouse() {
+    final model = inputModel;
+    _queueVirtualMouse(() async {
+      if (!_virtualMouseDown) return;
+      _virtualMouseDown = false;
+      await model.releaseVirtualMouseDrag();
+    });
+  }
+
+  void _sessionAction(SessionAction action) {
+    switch (action) {
+      case SessionAction.display:
+        showOptions(context, widget.id, gFFI.dialogManager);
+      case SessionAction.chat:
+        if (isAndroid) {
+          _openSessionChat();
+        } else {
+          onPressedTextChat(widget.id);
+        }
+      case SessionAction.mobile:
+        gFFI.dialogManager.toggleMobileActionsOverlay(ffi: gFFI);
+      case SessionAction.more:
+        showActions(widget.id);
+      case SessionAction.disconnect:
+        clientClose(sessionId, gFFI);
+    }
+  }
+
+  Future<void> _openSessionChat() async {
+    final support =
+        await gFFI.invokeMethod('get_value', 'KEY_IS_SUPPORT_VOICE_CALL');
+    if (!mounted) return;
+    if (support == true) {
+      showChatOptions(widget.id);
+    } else {
+      onPressedTextChat(widget.id);
+    }
+  }
+
+  bool get _sessionReady =>
+      gFFI.ffiModel.pi.isSet.value && !gFFI.ffiModel.waitForFirstImage.value;
+
+  void _openSessionKeyboard() {
+    setState(() => _showSessionKeyboard = true);
+    openKeyboard();
+  }
+
+  Widget _sessionDock() {
+    final model = context.watch<FfiModel>();
+    return Obx(() {
+      if (!_sessionReady || (_showSessionKeyboard && _canSendSessionInput)) {
+        return const SizedBox.shrink();
+      }
+      if (_showGestureHelp) {
+        return SessionControlsSurface(
+          child: IconButton(
+            tooltip: translate('Close'),
+            color: sessionControlInk,
+            onPressed: () => setState(() => _showGestureHelp = false),
+            icon: const Icon(Icons.close),
+          ),
+        );
+      }
+      return ListenableBuilder(
+        listenable: model.virtualMouseMode,
+        builder: (context, child) => SessionControlsDock(
+          mode:
+              model.touchMode ? SessionInputMode.touch : SessionInputMode.pointer,
+          showInputModes: _canSendSessionInput && !model.isPeerAndroid,
+          onMode: _setSessionInputMode,
+          virtualMouseEnabled: model.virtualMouseMode.showVirtualMouse,
+          onToggleVirtualMouse:
+              _canSendSessionInput && !model.isPeerAndroid && model.touchMode
+                  ? _toggleSessionVirtualMouse
+                  : null,
+          onGestureSettings: () => setState(() => _showGestureHelp = true),
+          onKeyboard: _canSendSessionInput ? _openSessionKeyboard : null,
+          actions: [
+            SessionAction.display,
+            SessionAction.chat,
+            if (_canSendSessionInput && model.isPeerAndroid)
+              SessionAction.mobile,
+            SessionAction.more,
+            SessionAction.disconnect,
+          ],
+          onAction: _sessionAction,
+        ),
+      );
+    });
+  }
+
+  void _scheduleSessionViewportUpdate() {
+    if (_viewportUpdateScheduled) return;
+    _viewportUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _viewportUpdateScheduled = false;
+      if (!mounted) return;
+      Rect? bounds(GlobalKey key) {
+        final box = key.currentContext?.findRenderObject();
+        if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+        return box.localToGlobal(Offset.zero) & box.size;
+      }
+
+      final canvas = bounds(_sessionViewportKey);
+      if (canvas == null) return;
+      final keyboard = bounds(_sessionKeyboardKey);
+      gFFI.canvasModel.updateMobileSessionViewport(
+        sessionVisibleViewport(canvas, keyboard),
+        keyboardOpen: keyboard != null,
+      );
+    });
+  }
+
+  Widget _sessionInputOverlays(bool imeVisible) {
+    final model = context.watch<FfiModel>();
+    return Obx(() {
+      _scheduleSessionViewportUpdate();
+      if (!_sessionReady || !_canSendSessionInput) {
+        return const SizedBox.shrink();
+      }
+      if (_showSessionKeyboard) {
+        return SafeArea(
+          minimum: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: LayoutBuilder(
+            builder: (context, constraints) => Align(
+              alignment: Alignment.bottomCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 620,
+                  maxHeight: constraints.maxHeight * (imeVisible ? .60 : .65),
+                ),
+                child: NotificationListener<SizeChangedLayoutNotification>(
+                  onNotification: (_) {
+                    _scheduleSessionViewportUpdate();
+                    return false;
+                  },
+                  child: SizeChangedLayoutNotifier(
+                    key: _sessionKeyboardKey,
+                    child: SessionKeyboard(
+                      compact: _showEdit,
+                      isMac: model.pi.platform == kPeerPlatformMacOS,
+                      showMouseButtons: !model.isPeerAndroid,
+                      enabled: inputModel.keyboardInputAllowed,
+                      modifiers: _sessionModifiers,
+                      onModifier: (modifier) => setState(() =>
+                          _setSessionModifier(
+                              modifier, !_sessionModifiers.contains(modifier))),
+                      onKey: _sendSessionKey,
+                      onMouse: _clickSessionMouse,
+                      onShortcut: _sendSessionShortcut,
+                      onTextInput: _showEdit
+                          ? () => setState(_hideSessionIme)
+                          : openKeyboard,
+                      onClose: _closeSessionKeyboard,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      if (_showGestureHelp || model.isPeerAndroid || !model.touchMode) {
+        return const SizedBox.shrink();
+      }
+      return ListenableBuilder(
+        listenable: model.virtualMouseMode,
+        builder: (context, child) {
+          if (!model.virtualMouseMode.showVirtualMouse) {
+            return const SizedBox.shrink();
+          }
+          return SafeArea(
+            minimum: const EdgeInsets.only(bottom: 56),
+            child: SessionTouchpad(
+              scale: model.virtualMouseMode.virtualMouseScale,
+              onMove: _moveSessionMouse,
+              onLeftClick: () => _queueVirtualMouse(
+                  () => _clickSessionMouse(MouseButtons.left)),
+              onRightClick: () => _queueVirtualMouse(
+                  () => _clickSessionMouse(MouseButtons.right)),
+              onMiddleClick: () => _queueVirtualMouse(
+                  () => _clickSessionMouse(MouseButtons.wheel)),
+              onDragStart: _holdVirtualMouse,
+              onDragEnd: _releaseVirtualMouse,
+              onScroll: (steps) {
+                if (_canSendSessionInput) unawaited(inputModel.scroll(steps));
+              },
+              onZoom: (ratio) {
+                final canvas = gFFI.canvasModel;
+                if (!canvas.locked) {
+                  canvas.updateScale(
+                      ratio, canvas.getSize().center(Offset.zero));
+                }
+              },
+            ),
+          );
+        },
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -499,39 +959,52 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
     return WillPopScope(
       onWillPop: () async {
+        if (isMobile && _showSessionKeyboard) {
+          _closeSessionKeyboard();
+          return false;
+        }
+        if (isMobile && _showGestureHelp) {
+          setState(() => _showGestureHelp = false);
+          return false;
+        }
         clientClose(sessionId, gFFI);
         return false;
       },
       child: Scaffold(
+          backgroundColor: isMobile ? Colors.black : null,
           // workaround for https://github.com/rustdesk/rustdesk/issues/3131
           floatingActionButtonLocation: keyboardIsVisible
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
-          floatingActionButton: !showActionButton
-              ? null
-              : FloatingActionButton(
-                  mini: !keyboardIsVisible,
-                  child: Icon(
-                    (keyboardIsVisible || _showGestureHelp)
-                        ? Icons.expand_more
-                        : Icons.expand_less,
-                    color: Colors.white,
-                  ),
-                  backgroundColor: MyTheme.accent,
-                  onPressed: () {
-                    setState(() {
-                      if (keyboardIsVisible) {
-                        _showEdit = false;
-                        gFFI.invokeMethod("enable_soft_keyboard", false);
-                        _mobileFocusNode.unfocus();
-                        _physicalFocusNode.requestFocus();
-                      } else if (_showGestureHelp) {
-                        _showGestureHelp = false;
-                      } else {
-                        _showBar = !_showBar;
-                      }
-                    });
-                  }),
+          floatingActionButton: isMobile
+              ? (keyboardVisibilityController.isVisible && !_showEdit
+                  ? null
+                  : _sessionDock())
+              : !showActionButton
+                  ? null
+                  : FloatingActionButton(
+                      mini: !keyboardIsVisible,
+                      child: Icon(
+                        (keyboardIsVisible || _showGestureHelp)
+                            ? Icons.expand_more
+                            : Icons.expand_less,
+                        color: Colors.white,
+                      ),
+                      backgroundColor: MyTheme.accent,
+                      onPressed: () {
+                        setState(() {
+                          if (keyboardIsVisible) {
+                            _showEdit = false;
+                            gFFI.invokeMethod("enable_soft_keyboard", false);
+                            _mobileFocusNode.unfocus();
+                            _physicalFocusNode.requestFocus();
+                          } else if (_showGestureHelp) {
+                            _showGestureHelp = false;
+                          } else {
+                            _showBar = !_showBar;
+                          }
+                        });
+                      }),
           bottomNavigationBar: Obx(() => Stack(
                 alignment: Alignment.bottomCenter,
                 children: [
@@ -548,46 +1021,83 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       : Offstage(),
                 ],
               )),
-          body: Obx(
-            () => getRawPointerAndKeyBody(Overlay(
-              initialEntries: [
-                OverlayEntry(builder: (context) {
-                  return Container(
-                    color: kColorCanvas,
-                    child: isWebDesktop
-                        ? getBodyForDesktopWithListener()
-                        : SafeArea(
-                            child:
-                                OrientationBuilder(builder: (ctx, orientation) {
-                              if (_currentOrientation != orientation) {
-                                Timer(const Duration(milliseconds: 200), () {
-                                  gFFI.dialogManager
-                                      .resetMobileActionsOverlay(ffi: gFFI);
-                                  _currentOrientation = orientation;
-                                  gFFI.canvasModel.updateViewStyle();
-                                });
-                              }
-                              return Container(
-                                color: MyTheme.canvasColor,
-                                child: inputModel.isPhysicalMouse.value
-                                    ? getBodyForMobile()
-                                    : RawTouchGestureDetectorRegion(
-                                        child: getBodyForMobile(),
-                                        ffi: gFFI,
-                                      ),
-                              );
-                            }),
-                          ),
-                  );
-                })
-              ],
-            )),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              Obx(() => getRawPointerAndKeyBody(
+                  Overlay.wrap(child: _buildSessionCanvas()))),
+              if (isMobile && _showEdit && _canSendSessionIme)
+                _sessionImeEditor(),
+              if (isMobile) _sessionInputOverlays(keyboardIsVisible),
+            ],
           )),
     );
   }
 
+  Widget _buildSessionCanvas() {
+    if (isWebDesktop) {
+      return Container(
+          color: kColorCanvas, child: getBodyForDesktopWithListener());
+    }
+    final viewport = OrientationBuilder(builder: (ctx, orientation) {
+      if (_currentOrientation != orientation) {
+        _currentOrientation = orientation;
+        Timer(const Duration(milliseconds: 200), () {
+          if (!mounted || _currentOrientation != orientation) return;
+          gFFI.dialogManager.resetMobileActionsOverlay(ffi: gFFI);
+          gFFI.canvasModel.updateViewStyle();
+        });
+      }
+      return Obx(() => inputModel.isPhysicalMouse.value
+          ? getBodyForMobile()
+          : RawTouchGestureDetectorRegion(
+              child: getBodyForMobile(), ffi: gFFI));
+    });
+    final canvas = ColoredBox(
+      color: isMobile ? Colors.black : kColorCanvas,
+      child: SafeArea(
+        child: isMobile
+            ? LayoutBuilder(builder: (context, constraints) {
+                _scheduleSessionViewportUpdate();
+                return SizedBox.expand(
+                    key: _sessionViewportKey, child: viewport);
+              })
+            : viewport,
+      ),
+    );
+    // Selecting a new remote caret invalidates the local committed suffix.
+    if (isMobile) {
+      return Listener(
+        onPointerDown: (_) {
+          if (_showEdit) _resetSessionIme();
+        },
+        child: canvas,
+      );
+    }
+    return canvas;
+  }
+
   bool _handleLocalKeyEvent(KeyEvent event) => handleMobileLocalKeyEvent(event,
-      remoteFocused: _physicalFocusNode.hasPrimaryFocus, inputModel: inputModel);
+      remoteFocused: _physicalFocusNode.hasPrimaryFocus ||
+          (isMobile && _mobileFocusNode.hasPrimaryFocus),
+      inputModel: inputModel);
+
+  Widget _sessionImeEditor() => Positioned(
+        width: 0,
+        height: 0,
+        top: 0,
+        left: 0,
+        child: TextFormField(
+          autofocus: true,
+          focusNode: _mobileFocusNode,
+          controller: _textController,
+          autocorrect: false,
+          textInputAction: TextInputAction.newline,
+          keyboardType: TextInputType.multiline,
+          maxLines: null,
+          enableIMEPersonalizedLearning: false,
+        ),
+      );
 
   Widget getRawPointerAndKeyBody(Widget child) {
     final ffiModel = Provider.of<FfiModel>(context);
@@ -711,7 +1221,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget getBodyForMobile() {
     return Container(
-        color: MyTheme.canvasColor,
+        color: isMobile ? Colors.black : MyTheme.canvasColor,
         child: Stack(children: () {
           final paints = [
             ImagePaint(ffiModel: gFFI.ffiModel),
@@ -720,53 +1230,55 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
               right: 10,
               child: QualityMonitor(gFFI.qualityMonitorModel),
             ),
-            Obx(() {
-              final chatKeyboardRequested =
-                  gFFI.chatModel.softKeyboardRequested.value;
-              return KeyHelpTools(
-                  keyboardIsVisible: keyboardVisibilityController.isVisible &&
-                      (_showEdit || chatKeyboardRequested),
-                  showGestureHelp: _showGestureHelp);
-            }),
-            SizedBox(
-              width: 0,
-              height: 0,
-              child: !_showEdit
-                  ? Container()
-                  : TextFormField(
-                      textInputAction: TextInputAction.newline,
-                      autocorrect: false,
-                      // Flutter 3.16.9 Android.
-                      // `enableSuggestions` causes secure keyboard to be shown.
-                      // https://github.com/flutter/flutter/issues/139143
-                      // https://github.com/flutter/flutter/issues/146540
-                      // enableSuggestions: false,
-                      autofocus: true,
-                      focusNode: _mobileFocusNode,
-                      maxLines: null,
-                      controller: _textController,
-                      // trick way to make backspace work always
-                      keyboardType: TextInputType.multiline,
-                      // `onChanged` may be called depending on the input method if this widget is wrapped in
-                      // `Focus(onKeyEvent: ..., child: ...)`
-                      // For `Backspace` button in the soft keyboard:
-                      // en/fr input method:
-                      //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
-                      //      2. The button will trigger `onKeyEvent` if the text field is empty.
-                      // ko/zh/ja input method: the button will trigger `onKeyEvent`
-                      //                     and the event will not popup if `KeyEventResult.handled` is returned.
-                      onChanged: handleSoftKeyboardInput,
-                    ).workaroundFreezeLinuxMint(),
-            ),
+            if (!isMobile)
+              Obx(() {
+                final chatKeyboardRequested =
+                    gFFI.chatModel.softKeyboardRequested.value;
+                return KeyHelpTools(
+                    keyboardIsVisible: keyboardVisibilityController.isVisible &&
+                        (_showEdit || chatKeyboardRequested),
+                    showGestureHelp: _showGestureHelp);
+              }),
+            if (!isMobile)
+              SizedBox(
+                width: 0,
+                height: 0,
+                child: !_showEdit
+                    ? Container()
+                    : TextFormField(
+                        textInputAction: TextInputAction.newline,
+                        autocorrect: false,
+                        // Flutter 3.16.9 Android.
+                        // `enableSuggestions` causes secure keyboard to be shown.
+                        // https://github.com/flutter/flutter/issues/139143
+                        // https://github.com/flutter/flutter/issues/146540
+                        // enableSuggestions: false,
+                        autofocus: true,
+                        focusNode: _mobileFocusNode,
+                        maxLines: null,
+                        controller: _textController,
+                        // trick way to make backspace work always
+                        keyboardType: TextInputType.multiline,
+                        // `onChanged` may be called depending on the input method if this widget is wrapped in
+                        // `Focus(onKeyEvent: ..., child: ...)`
+                        // For `Backspace` button in the soft keyboard:
+                        // en/fr input method:
+                        //      1. The button will not trigger `onKeyEvent` if the text field is not empty.
+                        //      2. The button will trigger `onKeyEvent` if the text field is empty.
+                        // ko/zh/ja input method: the button will trigger `onKeyEvent`
+                        //                     and the event will not popup if `KeyEventResult.handled` is returned.
+                        onChanged: handleSoftKeyboardInput,
+                      ).workaroundFreezeLinuxMint(),
+              ),
           ];
           if (showCursorPaint) {
             paints.add(CursorPaint(widget.id));
           }
-          if (gFFI.ffiModel.touchMode) {
+          if (gFFI.ffiModel.touchMode && !isMobile) {
             paints.add(FloatingMouse(
               ffi: gFFI,
             ));
-          } else {
+          } else if (!gFFI.ffiModel.touchMode && !_showSessionKeyboard) {
             paints.add(FloatingMouseWidgets(
               ffi: gFFI,
             ));
@@ -906,7 +1418,14 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   onPressedTextChat(String id, {bool requestSoftKeyboard = true}) {
     if (gFFI.chatModel.chatWindowOverlayEntry == null) {
-      setState(() => _showEdit = false);
+      setState(() {
+        _showEdit = false;
+        if (isMobile) {
+          _showSessionKeyboard = false;
+          _timer?.cancel();
+          _iosKeyboardWorkaroundTimer?.cancel();
+        }
+      });
     }
     gFFI.chatModel.changeCurrentKey(MessageKey(id, ChatModel.clientModeID));
     gFFI.chatModel.toggleChatOverlay(requestSoftKeyboard: requestSoftKeyboard);

@@ -830,5 +830,18 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Copy P2P diagnostics", "複製 P2P 診斷"),
         ("Connect to a peer first, then try again in a minute.", "請先連線至遠端裝置，一分鐘後再試。"),
         ("Record P2P diagnostics", "記錄 P2P 診斷"),
+        ("Virtual mouse", "虛擬滑鼠"),
+        ("Gesture guide", "手勢指南"),
+        ("Input keyboard", "輸入鍵盤"),
+        ("Local keyboard", "本地鍵盤"),
+        ("Hide virtual mouse", "隱藏虛擬滑鼠"),
+        ("Touchscreen mode", "觸摸模式"),
+        ("Pointer mode", "指標模式"),
+        ("Shortcuts", "快捷鍵"),
+        ("Left button", "左鍵"),
+        ("Right button", "右鍵"),
+        ("Exit keyboard", "退出鍵盤"),
+        ("Middle mouse button", "中鍵"),
+        ("Drag", "拖動"),
     ].iter().cloned().collect();
 }

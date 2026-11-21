@@ -831,5 +831,18 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Copy P2P diagnostics", ""),
         ("Connect to a peer first, then try again in a minute.", ""),
         ("Record P2P diagnostics", ""),
+        ("Virtual mouse", ""),
+        ("Gesture guide", ""),
+        ("Input keyboard", ""),
+        ("Local keyboard", ""),
+        ("Hide virtual mouse", ""),
+        ("Touchscreen mode", ""),
+        ("Pointer mode", ""),
+        ("Shortcuts", ""),
+        ("Left button", ""),
+        ("Right button", ""),
+        ("Exit keyboard", ""),
+        ("Middle mouse button", ""),
+        ("Drag", ""),
     ].iter().cloned().collect();
 }

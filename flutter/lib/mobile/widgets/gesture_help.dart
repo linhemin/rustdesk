@@ -105,8 +105,8 @@ class _GestureHelpState extends State<GestureHelp> {
                         fontSize: 15,
                         iconSize: 18,
                         labels: [
-                          translate("Mouse mode"),
-                          translate("Touch mode")
+                          translate(isMobile ? "Pointer mode" : "Mouse mode"),
+                          translate(isMobile ? "Touchscreen mode" : "Touch mode")
                         ],
                         icons: [Icons.mouse, Icons.touch_app],
                         onToggle: (index) {

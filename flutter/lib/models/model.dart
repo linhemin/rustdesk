@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter_hbb/mobile/image_ready_samples.dart';
+import 'package:flutter_hbb/mobile/session_viewport.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -2307,6 +2308,9 @@ class CanvasModel with ChangeNotifier {
   Timer? _timerMobileRestoreCanvasOffset;
   Offset? _offsetBeforeMobileSoftKeyboard;
   double? _scaleBeforeMobileSoftKeyboard;
+  Size? _mobileSessionViewport;
+  bool _mobileSessionKeyboardOpen = false;
+  Offset? _mobileSessionKeyboardAnchor;
 
   // `isMobileCanvasChanged` is used to avoid canvas reset when changing the input method
   // after showing the soft keyboard.
@@ -2371,6 +2375,8 @@ class CanvasModel with ChangeNotifier {
       isDesktop ? windowBorderWidth + kDragToResizeAreaPadding.bottom : 0;
 
   Size getSize() {
+    final sessionViewport = _mobileSessionViewport;
+    if (sessionViewport != null) return sessionViewport;
     final mediaData = MediaQueryData.fromView(ui.window);
     final size = mediaData.size;
     // If minimized, w or h may be negative here.
@@ -2409,6 +2415,7 @@ class CanvasModel with ChangeNotifier {
 
   // mobile only
   double getAdjustY() {
+    if (_mobileSessionViewport != null) return 0;
     final bottom =
         parent.target?.cursorModel.keyHelpToolsRectToAdjustCanvas?.bottom ?? 0;
     return max(bottom - MediaQueryData.fromView(ui.window).padding.top, 0);
@@ -2486,7 +2493,11 @@ class CanvasModel with ChangeNotifier {
     _x = (size.width - displayWidth * _scale) / 2;
     _y = (size.height - displayHeight * _scale) / 2;
     if (isMobile) {
-      _moveToCenterCursor();
+      if (_mobileSessionKeyboardOpen) {
+        _constrainMobileSessionCanvas(focus: _mobileSessionKeyboardAnchor);
+      } else {
+        _moveToCenterCursor();
+      }
     }
   }
 
@@ -2745,6 +2756,7 @@ class CanvasModel with ChangeNotifier {
   panX(double dx) {
     _x += dx;
     if (isMobile) {
+      _constrainMobileSessionCanvas();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2762,6 +2774,7 @@ class CanvasModel with ChangeNotifier {
   panY(double dy) {
     _y += dy;
     if (isMobile) {
+      _constrainMobileSessionCanvas();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2784,6 +2797,7 @@ class CanvasModel with ChangeNotifier {
     // _y_2 = focalPoint.dy - adjust - (focalPoint.dy - _y_1 - adjust) / s1 * s2
     _y = focalPoint.dy - adjust - (focalPoint.dy - _y - adjust) / s * _scale;
     if (isMobile) {
+      _constrainMobileSessionCanvas();
       isMobileCanvasChanged = true;
     }
     notifyListeners();
@@ -2811,6 +2825,9 @@ class CanvasModel with ChangeNotifier {
     _timerMobileRestoreCanvasOffset?.cancel();
     _offsetBeforeMobileSoftKeyboard = null;
     _scaleBeforeMobileSoftKeyboard = null;
+    _mobileSessionViewport = null;
+    _mobileSessionKeyboardOpen = false;
+    _mobileSessionKeyboardAnchor = null;
   }
 
   updateScrollPercent() {
@@ -2837,6 +2854,50 @@ class CanvasModel with ChangeNotifier {
       _resetCanvasOffset(getDisplayWidth(), getDisplayHeight());
       notifyListeners();
     });
+  }
+
+  void updateMobileSessionViewport(Size visible, {required bool keyboardOpen}) {
+    if (visible.isEmpty ||
+        (_mobileSessionViewport == visible &&
+            _mobileSessionKeyboardOpen == keyboardOpen)) {
+      return;
+    }
+    if (keyboardOpen && !_mobileSessionKeyboardOpen) {
+      saveMobileOffsetBeforeSoftKeyboard();
+      final cursor = parent.target?.cursorModel;
+      if (cursor != null) {
+        _mobileSessionKeyboardAnchor = Offset(cursor.x, cursor.y);
+      }
+    } else if (!keyboardOpen && _mobileSessionKeyboardOpen) {
+      final before = _offsetBeforeMobileSoftKeyboard;
+      if (before != null) {
+        _x = before.dx;
+        _y = before.dy;
+      }
+      _scale = _scaleBeforeMobileSoftKeyboard ?? _scale;
+      _offsetBeforeMobileSoftKeyboard = null;
+      _scaleBeforeMobileSoftKeyboard = null;
+      _mobileSessionKeyboardAnchor = null;
+    }
+    _mobileSessionKeyboardOpen = keyboardOpen;
+    _mobileSessionViewport = visible;
+    _size = visible;
+    _constrainMobileSessionCanvas(focus: _mobileSessionKeyboardAnchor);
+    notifyListeners();
+  }
+
+  void _constrainMobileSessionCanvas({Offset? focus}) {
+    final viewport = _mobileSessionViewport;
+    if (viewport == null) return;
+    final image = Size(getDisplayWidth() * _scale, getDisplayHeight() * _scale);
+    final current = Offset(_x, _y);
+    final input = focus == null ? null : focus * _scale;
+    final offset =
+        input != null && (Offset.zero & image).contains(input)
+            ? revealSessionInput(current, input, image, viewport)
+            : clampSessionCanvas(current, image, viewport);
+    _x = offset.dx;
+    _y = offset.dy;
   }
 
   void saveMobileOffsetBeforeSoftKeyboard() {
