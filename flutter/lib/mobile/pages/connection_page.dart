@@ -4,6 +4,7 @@ import 'package:auto_size_text_field/auto_size_text_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
@@ -86,14 +87,26 @@ class _ConnectionPageState extends State<ConnectionPage> {
             delegate: SliverChildListDelegate([
           if (!bind.isCustomClient() && !isIOS)
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
-          _buildRemoteIDTextField(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 24, 8, 20),
+            child: WorkspaceHeading(
+              title: translate('Connection'),
+              subtitle: translate('Control Remote Desktop'),
+              trailing: const WorkspaceIcon(icon: Icons.devices_rounded),
+            ),
+          ),
+          WorkspacePanel(
+            padding: const EdgeInsets.all(12),
+            child: _buildRemoteIDTextField(),
+          ),
+          const SizedBox(height: 20),
         ])),
         SliverFillRemaining(
           hasScrollBody: true,
           child: PeerTabPage(),
         )
       ],
-    ).marginOnly(top: 2, left: 10, right: 10);
+    ).marginOnly(left: 16, right: 16);
   }
 
   /// Callback for the connect button.

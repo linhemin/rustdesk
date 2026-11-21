@@ -1,10 +1,7 @@
 import SwiftUI
 import UIKit
 
-// MARK: - 设计令牌
-//
-// 数值全部来自对 APK 资源（resources.arsc / drawable AXML）与真机会话截图
-// （1080×2348，px/pt ≈ 2.77）的逐项测量，换算到 393×852pt 基准。
+// MARK: - Session design tokens
 
 extension Color {
     init(awesun argb: UInt32) {
@@ -17,32 +14,30 @@ extension Color {
 }
 
 enum AwesunPalette {
-    // 会话主界面（真机截图取样）
-    static let padFill = Color(awesun: 0xFF1A232A)
-    static let padFillPressed = Color(awesun: 0xFF2A3742)
-    static let padStroke = Color(awesun: 0xFF3A424A)
-    static let dpadFill = Color(awesun: 0xFF232C34)
-    static let mint = Color(awesun: 0xFFBEF2E2)
-    static let hudFill = Color(awesun: 0xFF131313)
-    static let hudLabel = Color(awesun: 0xFFB9B9B9)
+    static let padFill = Color(awesun: 0xFF1A2436)
+    static let padFillPressed = Color(awesun: 0xFF303E54)
+    static let padStroke = Color(awesun: 0xFF465670)
+    static let dpadFill = Color(awesun: 0xFF243149)
+    static let mint = Color(awesun: 0xFFC7D2FE)
+    static let hudFill = Color(awesun: 0xFF101725)
+    static let hudLabel = Color(awesun: 0xFF9AA9BF)
     static let hudValue = Color(awesun: 0xFFFFFFFF)
-    static let hudGreen = Color(awesun: 0xFF59B761)
-    static let pairFill = Color(awesun: 0xFF161D25)
-    static let pairStroke = Color(awesun: 0x59788C9B)
+    static let hudGreen = Color(awesun: 0xFF4FD1A1)
+    static let pairFill = Color(awesun: 0xFF1A2436)
+    static let pairStroke = Color(awesun: 0xFF465670)
     static let glyph = Color(awesun: 0xFFF4FAFF)
 
-    // APK 资源实测
-    static let brandBlue = Color(awesun: 0xFF3773F5)
-    static let brandRed = Color(awesun: 0xFFDD3A5F)
+    static let brandBlue = Color(awesun: 0xFF4263EB)
+    static let brandRed = Color(awesun: 0xFFEF6685)
     static let kbBackground = Color(awesun: 0xFFA9B8C1)
     static let kbKey = Color.white
     static let kbKeyOn = Color(awesun: 0xE6000000)
     static let kbKeyText = Color(awesun: 0xFF4A4A4A)
     static let kbSecondText = Color(awesun: 0xFF9A9A9A)
-    static let sheetFill = Color(awesun: 0xD9000000)
+    static let sheetFill = Color(awesun: 0xF5101725)
     static let textPrimary = Color.white
-    static let textSecondary = Color(awesun: 0xFFC9CDD4)
-    static let textTertiary = Color(awesun: 0xFFA8A9AD)
+    static let textSecondary = Color(awesun: 0xFFD3DCEC)
+    static let textTertiary = Color(awesun: 0xFF9AA9BF)
     static let hairline = Color(awesun: 0x33FFFFFF)
     static let ripple = Color(awesun: 0xFFB2B2B2).opacity(100.0 / 255.0)
     static let mouseFill = Color.white.opacity(0.61)
@@ -53,12 +48,12 @@ enum AwesunMetrics {
     static let kbRowHeight: CGFloat = 33
     static let kbRowGap: CGFloat = 7
     static let kbKeyGap: CGFloat = 5
-    static let kbKeyRadius: CGFloat = 5
+    static let kbKeyRadius: CGFloat = 8
     static let kbPadH: CGFloat = 2.5
     static let kbPadV: CGFloat = 5
 
     // 面板
-    static let sheetRadius: CGFloat = 16
+    static let sheetRadius: CGFloat = 24
     static let sheetHPad: CGFloat = 20
     static let sheetTopPad: CGFloat = 18
     static let sheetBottomPad: CGFloat = 26
