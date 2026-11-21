@@ -221,6 +221,31 @@ impl<'a> StaticRefresh<'a> {
         {
             return Ok(());
         }
+        self.encode_cached(yuv, now, ms, encoder, frame_controller)
+    }
+
+    pub(super) fn try_encode_fixed(
+        &mut self,
+        yuv: &[u8],
+        now: Instant,
+        ms: i64,
+        encoder: &mut Encoder,
+        frame_controller: &mut VideoFrameController,
+    ) -> ResultType<()> {
+        if self.source_ready && self.repeat_failures < MAX_REPEAT_FAILURES {
+            self.encode_cached(yuv, now, ms, encoder, frame_controller)?;
+        }
+        Ok(())
+    }
+
+    fn encode_cached(
+        &mut self,
+        yuv: &[u8],
+        now: Instant,
+        ms: i64,
+        encoder: &mut Encoder,
+        frame_controller: &mut VideoFrameController,
+    ) -> ResultType<()> {
         let frame = if yuv.is_empty() {
             None
         } else {
@@ -249,12 +274,12 @@ impl<'a> StaticRefresh<'a> {
             }
             let mut vf = match result {
                 Ok(vf) if vf.union.is_none() => {
-                    self.repeat_no_outputs += 1;
+                    self.repeat_no_outputs = self.repeat_no_outputs.saturating_add(1);
                     return Ok(());
                 }
                 Ok(vf) => vf,
                 Err(error) => {
-                    self.repeat_no_outputs += 1;
+                    self.repeat_no_outputs = self.repeat_no_outputs.saturating_add(1);
                     self.repeat_failures += 1;
                     if error.is::<scrap::VpxNoOutput>() {
                         hbb_common::throttled_log!(
@@ -273,7 +298,7 @@ impl<'a> StaticRefresh<'a> {
                     return Ok(());
                 }
             };
-            self.repeat_output_counter += 1;
+            self.repeat_output_counter = self.repeat_output_counter.saturating_add(1);
             self.repeat_failures = 0;
             vf.display = self.display_idx as _;
             let mut msg = Message::new();

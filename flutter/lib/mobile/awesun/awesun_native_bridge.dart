@@ -15,9 +15,11 @@ class AwesunNativeBridge {
     required this.onClose,
     required this.onCommand,
     required this.onVirtualMove,
-    required this.onVirtualPosition,
     required this.onVirtualClick,
     required this.onVirtualDrag,
+    required this.onVirtualScroll,
+    this.onPointerVisibility,
+    this.onVideoTexture,
   });
 
   final InputModel inputModel;
@@ -27,9 +29,11 @@ class AwesunNativeBridge {
   final VoidCallback onClose;
   final Future<Object?> Function(String, Map<Object?, Object?>) onCommand;
   final void Function(Offset) onVirtualMove;
-  final void Function(Offset) onVirtualPosition;
-  final void Function(MouseButtons) onVirtualClick;
-  final void Function(bool) onVirtualDrag;
+  final void Function(MouseButtons, Offset?) onVirtualClick;
+  final void Function(bool, Offset?) onVirtualDrag;
+  final void Function(int, Offset) onVirtualScroll;
+  final ValueChanged<bool>? onPointerVisibility;
+  final void Function(int?)? onVideoTexture;
 
   static const _channel = MethodChannel('awesun/session');
   static AwesunNativeBridge? _owner;
@@ -72,6 +76,24 @@ class AwesunNativeBridge {
   Future<String> savePhoto(Uint8List png) async =>
       await _channel.invokeMethod<String>('savePhoto', png) ?? 'saveFailed';
 
+  Future<String> saveTexturePhoto() async =>
+      await _channel.invokeMethod<String>('saveTexturePhoto') ?? 'saveFailed';
+
+  Future<bool> configureVideoTexture(bool enabled) async =>
+      await _channel.invokeMethod<bool>('setVideoTexture', {'enabled': enabled}) ??
+      false;
+
+  Future<void> setMouseViewport(Rect area) =>
+      _channel.invokeMethod<void>('setMouseViewport', {
+        'x': area.left,
+        'y': area.top,
+        'width': area.width,
+        'height': area.height,
+      });
+
+  Future<void> updatePerformance(Map<String, Object?> status) =>
+      _channel.invokeMethod<void>('setPerformanceStatus', status);
+
   Future<void> updatePresentation({
     required bool obscured,
     required double keyboardInset,
@@ -98,27 +120,35 @@ class AwesunNativeBridge {
     if (call.method == 'command' && args['id'] is String) {
       return onCommand(args['id'] as String, args);
     }
+    if (call.method == 'nativeVideoTexture') {
+      final id = args['id'];
+      onVideoTexture?.call(id is int ? id : null);
+      return null;
+    }
+    if (call.method == 'virtualPointerVisible') {
+      onPointerVisibility?.call(args['visible'] == true);
+      return null;
+    }
     if (call.method == 'virtualDrag' && args['down'] == false) {
-      onVirtualDrag(false);
+      onVirtualDrag(false, null);
       return null;
     }
     if (!canSendInput()) return null;
 
+    final point = _point(args);
     switch (call.method) {
-      case 'virtualPosition':
-        final point = canvasPoint(Offset(_toDouble(args['x']), _toDouble(args['y'])));
-        if (point != null) onVirtualPosition(point);
       case 'virtualMove':
-        onVirtualMove(Offset(_toDouble(args['dx']), _toDouble(args['dy'])));
+        if (point != null) onVirtualMove(point);
       case 'virtualDrag':
-        if (args['down'] == true) onVirtualDrag(true);
+        if (args['down'] == true && point != null) onVirtualDrag(true, point);
       case 'virtualClick':
         final button = switch (args['button']) {
+          'left' => MouseButtons.left,
           'right' => MouseButtons.right,
           'middle' => MouseButtons.wheel,
-          _ => MouseButtons.left,
+          _ => null,
         };
-        onVirtualClick(button);
+        if (button != null) onVirtualClick(button, point);
       case 'tapAt':
         final point =
             canvasPoint(Offset(_toDouble(args['x']), _toDouble(args['y'])));
@@ -138,7 +168,12 @@ class AwesunNativeBridge {
         await inputModel.sendMobileRelativeMouseMove(
             _toDouble(args['dx']), _toDouble(args['dy']));
       case 'scroll':
-        await inputModel.scroll(_toDouble(args['dy']).round());
+        final steps = _toDouble(args['dy']).round();
+        if (point != null) {
+          onVirtualScroll(steps, point);
+        } else {
+          await inputModel.scroll(steps);
+        }
       case 'key':
         final name = args['name'];
         if (name is String && name.isNotEmpty) {
@@ -146,6 +181,15 @@ class AwesunNativeBridge {
             inputModel.inputKey(name, down: args['down'] == true, press: false);
           }
         }
+    }
+    return null;
+  }
+
+  Offset? _point(Map<dynamic, dynamic> args) {
+    final x = args['x'];
+    final y = args['y'];
+    if (x is num && x.isFinite && y is num && y.isFinite) {
+      return Offset(x.toDouble(), y.toDouble());
     }
     return null;
   }

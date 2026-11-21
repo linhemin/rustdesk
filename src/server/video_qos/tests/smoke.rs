@@ -65,3 +65,27 @@ fn smoke_capacity_with_short_stalls() {
         }
     }
 }
+
+#[test]
+fn fixed_screen_target_requires_agreement_and_survives_adaptation() {
+    let mut qos = VideoQoS::default();
+    qos.on_connection_open(1);
+    qos.set_fixed_screen_fps(1, 60);
+    assert_eq!(qos.fixed_target(), Some(60));
+    assert_eq!(qos.spf(), Duration::from_secs_f32(1.0 / 60.0));
+
+    qos.user_custom_fps(1, 12);
+    qos.user_delay_response_elapsed(1, 4000);
+    assert_eq!(qos.fps(), 60);
+
+    qos.on_connection_open(2);
+    assert_eq!(qos.fixed_target(), None);
+    qos.set_fixed_screen_fps(2, 90);
+    assert_eq!(qos.fixed_target(), Some(60));
+    qos.set_fixed_screen_fps(1, 500);
+    assert_eq!(qos.fixed_target(), Some(60));
+    qos.set_fixed_screen_fps(1, -1);
+    assert_eq!(qos.fixed_target(), None);
+    qos.on_connection_close(1);
+    assert_eq!(qos.fps(), 90);
+}

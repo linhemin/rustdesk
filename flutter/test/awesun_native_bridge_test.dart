@@ -78,9 +78,10 @@ void main() {
         return ['Copy P2P diagnostics', 'Refresh'];
       },
       onVirtualMove: (delta) => virtual.add(delta),
-      onVirtualPosition: (position) => virtual.add(position),
-      onVirtualClick: (button) => virtual.add(button),
-      onVirtualDrag: (down) => virtual.add(down),
+      onVirtualClick: (button, point) => virtual.add((button, point)),
+      onVirtualDrag: (down, point) => virtual.add((down, point)),
+      onVirtualScroll: (steps, point) => virtual.add((steps, point)),
+      onPointerVisibility: (visible) => virtual.add(visible),
     );
     addTearDown(bridge.dispose);
 
@@ -95,14 +96,29 @@ void main() {
       ('relative', const Offset(2, -3)),
     ]);
 
-    await send(const MethodCall('virtualDrag', {'down': true}));
-    await send(const MethodCall('virtualMove', {'dx': 4, 'dy': -1}));
-    await send(const MethodCall('virtualPosition', {'x': 16, 'y': 38}));
+    const point = Offset(73, 91);
+    await send(const MethodCall('virtualPointerVisible', {'visible': true}));
+    await send(const MethodCall('virtualDrag', {'down': true, 'x': 73, 'y': 91}));
+    await send(const MethodCall('virtualMove', {'x': 75, 'y': 93}));
+    await send(const MethodCall('virtualDrag', {'down': false}));
+    await send(const MethodCall('virtualClick', {'button': 'left', 'x': 73, 'y': 91}));
+    await send(const MethodCall('virtualClick', {'button': 'right', 'x': 73, 'y': 91}));
+    await send(const MethodCall('scroll', {'dy': -2, 'x': 73, 'y': 91}));
+    await send(const MethodCall('virtualClick', {'button': 'invalid'}));
     allowed = false;
     await send(const MethodCall('virtualDrag', {'down': false}));
     await send(const MethodCall('virtualClick', {'button': 'middle'}));
     await send(right);
-    expect(virtual, [true, const Offset(4, -1), const Offset(10, 20), false]);
+    expect(virtual, [
+      true,
+      (true, point),
+      const Offset(75, 93),
+      (false, null),
+      (MouseButtons.left, point),
+      (MouseButtons.right, point),
+      (-2, point),
+      (false, null),
+    ]);
     expect(input.events, hasLength(3));
     expect(await send(const MethodCall('command', {'id': 'menu'})),
         ['Copy P2P diagnostics', 'Refresh']);

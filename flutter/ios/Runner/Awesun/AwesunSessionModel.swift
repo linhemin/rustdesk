@@ -36,11 +36,16 @@ final class AwesunSessionModel: ObservableObject {
     @Published var displayLocked = false
     @Published var mouseVisible = false
     @Published var mouseCollapsed = false
-    @Published var mouseAnchor: CGPoint = .zero
-    @Published var collapsedMouseAnchor: CGPoint = .zero
+    @Published var mouseAnchor: CGPoint?
+    @Published var mouseViewport: CGRect?
+    @Published var pressedMouseRegion: AwesunMouseRegion?
+    @Published var wheelIndicator: Double?
+    @Published var lockPlacement = AwesunDockPlacement(fraction: 0.10)
+    @Published var mousePlacement = AwesunDockPlacement(fraction: 0.47)
     @Published var wheelOpen = false
     @Published private(set) var dragging = false
     @Published var keyboardOpen = false
+    private var restoreSystemKeyboard = false
     @Published var modifiers: Set<String> = []
     @Published var pressedKeycap = ""
     @Published var inputEcho = ""
@@ -48,7 +53,9 @@ final class AwesunSessionModel: ObservableObject {
     @Published var sheet: AwesunSheetKind?
     @Published var actions: [String] = []
     @Published var displayOptions: [AwesunDisplayOption] = []
+    @Published private(set) var performance = AwesunPerformanceStatus()
     @Published var accessoryKeys = AwesunKeyboardLayout.savedAccessoryKeys()
+    @Published var accessoryShortcuts = AwesunKeyboardShortcut.saved()
     @Published var displayCount = 0
     @Published var selectedDisplay = 0
     @Published var qualityVisible = false
@@ -144,7 +151,25 @@ final class AwesunSessionModel: ObservableObject {
     }
 
     func closeSheet() {
+        let reopen = restoreSystemKeyboard
+        restoreSystemKeyboard = false
         sheet = nil
+        if reopen { systemKeyboard() }
+    }
+
+    func closeObscuredPanels() {
+        restoreSystemKeyboard = false
+        closePanel()
+    }
+
+    var isKeyboardPanel: Bool {
+        sheet == .keyboardMore || sheet == .keyboardLayout || sheet == .shortcuts
+    }
+
+    func openKeyboardPanel(_ panel: AwesunSheetKind) {
+        restoreSystemKeyboard = keyboardInset > 0
+        sheet = panel
+        if restoreSystemKeyboard { systemKeyboard(false) }
     }
 
     func closePanel() {
@@ -160,8 +185,7 @@ final class AwesunSessionModel: ObservableObject {
         case "kbd":
             systemKeyboard()
         case "keys":
-            systemKeyboard(false)
-            keyboardOpen = true
+            openKeyboardPanel(.keyboardMore)
         case "mode": sheet = .mode
         case "lock": sheet = .lock
         case "guide": sheet = .guide
@@ -194,7 +218,7 @@ final class AwesunSessionModel: ObservableObject {
 
     func selectDisplayOption(_ index: Int) {
         if let option = displayOptions.first(where: { $0.id == index }) {
-            if option.group == "显示选项" {
+            if option.group == "显示选项" || option.group == "虚拟显示器" {
                 if let current = displayOptions.firstIndex(where: { $0.id == index }) {
                     displayOptions[current].selected.toggle()
                 }
@@ -207,9 +231,24 @@ final class AwesunSessionModel: ObservableObject {
         AwesunBridge.shared.command("displayAction", ["index": index])
     }
 
-    func openAdvancedDisplay() {
-        closePanel()
-        AwesunBridge.shared.command("displayAdvanced")
+    func updatePerformance(_ values: [String: Any]) {
+        performance = AwesunPerformanceStatus(
+            supported: values["supported"] as? Bool == true,
+            enabled: values["enabled"] as? Bool == true,
+            target: values["target"] as? Int ?? 60,
+            effective: values["effective"] as? Int,
+            gpuEncode: values["gpuEncode"] as? Bool,
+            gpuDecode: values["gpuDecode"] as? Bool == true,
+            measuredFps: values["fps"] as? String
+        )
+    }
+
+    func setPerformance(_ enabled: Bool) {
+        AwesunBridge.shared.command("performance", ["enabled": enabled])
+    }
+
+    func setPerformanceTarget(_ fps: Int) {
+        AwesunBridge.shared.command("performanceTarget", ["fps": fps])
     }
 
     private func takeScreenshot() {
@@ -271,6 +310,7 @@ final class AwesunSessionModel: ObservableObject {
         mouseVisible = shown
         mouseCollapsed = false
         wheelOpen = false
+        AwesunBridge.shared.pointerVisible(shown)
         refreshMouseIdleTimer()
     }
 
@@ -279,13 +319,14 @@ final class AwesunSessionModel: ObservableObject {
         pauseMouseIdleTimer()
         mouseCollapsed = true
         wheelOpen = false
+        AwesunBridge.shared.pointerVisible(false)
     }
 
     func expandMouse(at point: CGPoint) {
         mouseAnchor = point
         mouseCollapsed = false
         wheelOpen = false
-        AwesunBridge.shared.virtualPosition(point)
+        AwesunBridge.shared.pointerVisible(true)
         refreshMouseIdleTimer()
     }
 
@@ -293,6 +334,15 @@ final class AwesunSessionModel: ObservableObject {
         endDrag()
         wheelOpen = true
         refreshMouseIdleTimer()
+    }
+
+    func closeWheelOrMouse() {
+        if wheelOpen {
+            wheelOpen = false
+            refreshMouseIdleTimer()
+        } else {
+            collapseMouse()
+        }
     }
 
     func pauseMouseIdleTimer() {
@@ -316,23 +366,23 @@ final class AwesunSessionModel: ObservableObject {
 
     func moveVirtualPointer(to point: CGPoint) {
         mouseAnchor = point
-        AwesunBridge.shared.virtualPosition(point)
+        AwesunBridge.shared.virtualMove(to: point)
     }
 
-    func click(_ button: String = "left") {
+    func click(_ button: String = "left", at point: CGPoint? = nil) {
         refreshMouseIdleTimer()
         haptic()
-        AwesunBridge.shared.virtualClick(button)
+        AwesunBridge.shared.virtualClick(button, at: point)
     }
 
-    func scroll(_ steps: Int) {
-        AwesunBridge.shared.scroll(steps)
+    func scroll(_ steps: Int, at point: CGPoint? = nil) {
+        AwesunBridge.shared.scroll(steps, at: point)
     }
 
-    func beginDrag() {
+    func beginDrag(at point: CGPoint) {
         guard !dragging else { return }
         dragging = true
-        AwesunBridge.shared.virtualDrag(true)
+        AwesunBridge.shared.virtualDrag(true, at: point)
     }
 
     func endDrag() {
@@ -392,6 +442,33 @@ final class AwesunSessionModel: ObservableObject {
         }
     }
 
+    func customShortcut(for id: String) -> AwesunKeyboardShortcut? {
+        accessoryShortcuts.first { $0.id == id }
+    }
+
+    func addAccessoryShortcut(modifiers: Set<String>, key: String) {
+        guard let keyInfo = AwesunKeyboardLayout.keyByCode[key], !modifiers.isEmpty else { return }
+        let ordered = AwesunKeyboardShortcut.modifierOptions.filter { modifiers.contains($0.1) }
+        let labels = ordered.map { $0.0 } + [AwesunKeyboardLayout.title(for: keyInfo)]
+        let secure = key == "VK_DELETE" && modifiers == Set(["ctrl", "alt"])
+        if let existing = accessoryShortcuts.first(where: { $0.labels == labels }) {
+            if !accessoryKeys.contains(existing.id) { accessoryKeys.append(existing.id) }
+        } else {
+            let chord = AwesunKeyboardShortcut(labels: labels,
+                key: secure ? "secure-attention" : key,
+                modifiers: ordered.map { $0.1 }, storageID: "chord-" + UUID().uuidString)
+            accessoryShortcuts.append(chord)
+            accessoryKeys.append(chord.id)
+        }
+        saveAccessoryKeys()
+    }
+
+    func removeAccessoryKey(_ id: String) {
+        accessoryKeys.removeAll { $0 == id }
+        accessoryShortcuts.removeAll { $0.id == id }
+        saveAccessoryKeys()
+    }
+
     func toggleAccessoryKey(_ vk: String) {
         if accessoryKeys.contains(vk) {
             accessoryKeys.removeAll { $0 == vk }
@@ -409,6 +486,9 @@ final class AwesunSessionModel: ObservableObject {
     }
 
     private func saveAccessoryKeys() {
+        if let data = try? JSONEncoder().encode(accessoryShortcuts) {
+            UserDefaults.standard.set(data, forKey: AwesunKeyboardShortcut.storageKey)
+        }
         UserDefaults.standard.set(accessoryKeys, forKey: AwesunKeyboardLayout.accessoryStorage)
     }
 
@@ -458,4 +538,14 @@ struct AwesunDisplayOption: Identifiable {
         self.title = title
         self.selected = values["selected"] as? Bool == true
     }
+}
+
+struct AwesunPerformanceStatus {
+    var supported = false
+    var enabled = false
+    var target = 60
+    var effective: Int?
+    var gpuEncode: Bool?
+    var gpuDecode = false
+    var measuredFps: String?
 }

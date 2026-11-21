@@ -1483,6 +1483,7 @@ class FfiModel with ChangeNotifier {
       }
       Map<String, dynamic> features = json.decode(evt['features']);
       _pi.features.privacyMode = features['privacy_mode'] == true;
+      _pi.features.fixedScreenFps = features['fixed_screen_fps'] == true;
       if (!isCache) {
         handleResolutions(peerId, evt["resolutions"]);
       }
@@ -4024,6 +4025,8 @@ class QualityMonitorData {
   String? fps;
   String? delay;
   String? targetBitrate;
+  int? fixedScreenFps;
+  bool? gpuTextureEncode;
   String? codecFormat;
   String? chroma;
 }
@@ -4118,6 +4121,12 @@ class QualityMonitorModel with ChangeNotifier {
       if (evt.containsKey('target_bitrate') &&
           (evt['target_bitrate'] as String).isNotEmpty) {
         _data.targetBitrate = evt['target_bitrate'];
+      }
+      final fixedFps = int.tryParse(evt['fixed_screen_fps'] as String? ?? '');
+      if (fixedFps != null) _data.fixedScreenFps = fixedFps;
+      final textureEncode = evt['gpu_texture_encode'];
+      if (textureEncode == 'true' || textureEncode == 'false') {
+        _data.gpuTextureEncode = textureEncode == 'true';
       }
       if (evt.containsKey('codec_format') &&
           (evt['codec_format'] as String).isNotEmpty) {
@@ -4663,6 +4672,7 @@ class Resolution {
 
 class Features {
   bool privacyMode = false;
+  bool fixedScreenFps = false;
 }
 
 const kInvalidDisplayIndex = -1;

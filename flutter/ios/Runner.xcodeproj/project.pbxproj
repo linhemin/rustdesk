@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A7E5A7E5C016000000000000 /* AwesunVideoTexture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E5A7E5C015000000000000 /* AwesunVideoTexture.swift */; };
 		A7E5A7E5C002000000000000 /* AwesunTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E5A7E5C001000000000000 /* AwesunTokens.swift */; };
 		A7E5A7E5C004000000000000 /* AwesunGlyphs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E5A7E5C003000000000000 /* AwesunGlyphs.swift */; };
 		A7E5A7E5C006000000000000 /* AwesunBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7E5A7E5C005000000000000 /* AwesunBridge.swift */; };
@@ -39,6 +40,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A7E5A7E5C015000000000000 /* AwesunVideoTexture.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Awesun/AwesunVideoTexture.swift; sourceTree = "<group>"; };
 		A7E5A7E5C001000000000000 /* AwesunTokens.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Awesun/AwesunTokens.swift; sourceTree = "<group>"; };
 		A7E5A7E5C003000000000000 /* AwesunGlyphs.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Awesun/AwesunGlyphs.swift; sourceTree = "<group>"; };
 		A7E5A7E5C005000000000000 /* AwesunBridge.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = Awesun/AwesunBridge.swift; sourceTree = "<group>"; };
@@ -130,6 +132,7 @@
 				A7E5A7E5C00B000000000000 /* AwesunKeyboardView.swift */,
 				A7E5A7E5C00D000000000000 /* AwesunSheetsView.swift */,
 				A7E5A7E5C00F000000000000 /* AwesunSessionOverlay.swift */,
+				A7E5A7E5C015000000000000 /* AwesunVideoTexture.swift */,
 				5CE7AD002EB4000000A1B2C3 /* SceneDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
@@ -314,6 +317,7 @@
 				A7E5A7E5C00C000000000000 /* AwesunKeyboardView.swift in Sources */,
 				A7E5A7E5C00E000000000000 /* AwesunSheetsView.swift in Sources */,
 				A7E5A7E5C010000000000000 /* AwesunSessionOverlay.swift in Sources */,
+				A7E5A7E5C016000000000000 /* AwesunVideoTexture.swift in Sources */,
 				5CE7AD012EB4000000A1B2C3 /* SceneDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);

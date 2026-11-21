@@ -748,7 +748,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     while sp.ok() {
         #[cfg(windows)]
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
-        check_qos(
+        let fixed_pacing = check_qos(
             &mut encoder,
             &mut quality,
             &mut spf,
@@ -756,7 +756,7 @@ fn run(vs: VideoService) -> ResultType<()> {
             &mut send_counter,
             &mut second_instant,
             &sp.name(),
-        )?;
+        )? && vs.source.is_monitor();
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but
         // not yet produced its first packet, restarting the warm-up forever. Defer until it has;
         // one that never does is still switched away from by max_fail_times in handle_one_frame.
@@ -815,7 +815,8 @@ fn run(vs: VideoService) -> ResultType<()> {
 
         let time = now - start;
         let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
-        let res = match c.frame(spf) {
+        let capture_timeout = if fixed_pacing { Duration::ZERO } else { spf };
+        let res = match c.frame(capture_timeout) {
             Ok(frame) => {
                 repeat_encode_counter = 0;
                 if frame.valid() {
@@ -930,7 +931,11 @@ fn run(vs: VideoService) -> ResultType<()> {
                         }
                     }
                 }
-                if !encoder.latency_free() && yuv.len() > 0 {
+                if fixed_pacing {
+                    static_refresh.try_encode_fixed(
+                        &yuv, now, ms, &mut encoder, &mut frame_controller,
+                    )?;
+                } else if !encoder.latency_free() && !yuv.is_empty() {
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
                         repeat_encode_counter += 1;
@@ -953,15 +958,17 @@ fn run(vs: VideoService) -> ResultType<()> {
                         send_counter += 1;
                     }
                 }
-                static_refresh.try_encode(
-                    &yuv,
-                    spf,
-                    quality,
-                    now,
-                    ms,
-                    &mut encoder,
-                    &mut frame_controller,
-                )?;
+                if !fixed_pacing {
+                    static_refresh.try_encode(
+                        &yuv,
+                        spf,
+                        quality,
+                        now,
+                        ms,
+                        &mut encoder,
+                        &mut frame_controller,
+                    )?;
+                }
             }
             Err(err) => {
                 #[cfg(windows)]
@@ -1007,13 +1014,14 @@ fn run(vs: VideoService) -> ResultType<()> {
         }
 
         let mut fetched_conn_ids = HashSet::new();
-        let timeout_millis = 3_000u64;
+        let timeout_millis = if fixed_pacing { spf.as_millis().max(1) as u64 } else { 3_000 };
         let wait_begin = Instant::now();
         while wait_begin.elapsed().as_millis() < timeout_millis as _ {
             if vs.source.is_monitor() {
                 check_privacy_mode_changed(&sp, display_idx, &c)?;
             }
-            frame_controller.try_wait_next(&mut fetched_conn_ids, 300);
+            let wait = if fixed_pacing { timeout_millis } else { 300 };
+            frame_controller.try_wait_next(&mut fetched_conn_ids, wait);
             // break if all connections have received current frame
             if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
                 break;
@@ -1470,8 +1478,10 @@ fn check_qos(
     send_counter: &mut usize,
     second_instant: &mut Instant,
     name: &str,
-) -> ResultType<()> {
+) -> ResultType<bool> {
     let mut video_qos = VIDEO_QOS.lock().unwrap();
+    let fixed_pacing = video_qos.fixed_target().is_some();
+    video_qos.set_gpu_texture_encode(name, encoder.input_texture());
     *spf = video_qos.spf();
     if *ratio != video_qos.ratio() {
         *ratio = video_qos.ratio();
@@ -1496,7 +1506,7 @@ fn check_qos(
         *send_counter = 0;
     }
     drop(video_qos);
-    Ok(())
+    Ok(fixed_pacing)
 }
 
 pub fn set_take_screenshot(source: VideoSource, display_idx: usize, sid: String, tx: Sender) {

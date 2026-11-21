@@ -104,6 +104,7 @@ message Features {
   bool privacy_mode = 1;
   bool terminal = 2;
   bool port_forward_mux = 3;
+  bool fixed_screen_fps = 4;
 }
 
 message CodecAbility {
@@ -700,6 +701,8 @@ message OptionMessage {
   BoolOption disable_camera = 17;
   BoolOption terminal_persistent = 18;
   BoolOption show_my_cursor = 19;
+  // 0 is unchanged, -1 restores automatic pacing, 15..120 locks the target.
+  int32 fixed_screen_fps = 20;
 }
 
 message TestDelay {
@@ -711,6 +714,8 @@ message TestDelay {
   uint32 delivered_video_kbps = 5;
   uint32 delivered_video_fps = 6;
   uint32 queued_video_percent = 7;
+  uint32 fixed_screen_fps = 8;
+  bool gpu_texture_encode = 9;
 }
 
 message PublicKey {

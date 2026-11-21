@@ -22,9 +22,9 @@ struct AwesunKeyboardGlyph: View {
     var body: some View {
         VStack(spacing: 2.2) {
             ForEach([5, 4], id: \.self) { count in
-                HStack(spacing: 2.2) {
+                HStack(spacing: 2.0) {
                     ForEach(0..<count, id: \.self) { _ in
-                        Circle().frame(width: 3.4, height: 3.4)
+                        Circle().frame(width: 3.0, height: 3.0)
                     }
                 }
             }

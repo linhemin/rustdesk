@@ -363,66 +363,158 @@ struct AwesunSwitch: View {
 struct AwesunDisplayPanel: View {
     @ObservedObject var model: AwesunSessionModel
     let height: CGFloat
+    @State private var advanced = false
 
     var body: some View {
         AwesunSheetShell(title: "显示设置", onClose: model.closeSheet) {
+            HStack(spacing: 6) {
+                tab("画面", icon: "display", value: false)
+                tab("分辨率与高级", icon: "slider.horizontal.3", value: true)
+            }
+            .padding(4)
+            .background(Color.white.opacity(0.06))
+            .cornerRadius(10)
+            .padding(.vertical, 8)
             ScrollView {
-                VStack(alignment: .leading, spacing: 15) {
+                VStack(alignment: .leading, spacing: 14) {
                     if model.displayOptions.isEmpty {
-                        ProgressView().tint(.white)
-                            .frame(maxWidth: .infinity, minHeight: 48)
+                        ProgressView().tint(.white).frame(maxWidth: .infinity, minHeight: 44)
                     }
-                    ForEach(["画面比例", "画质", "编码", "显示选项"], id: \.self) { group in
-                        let options = model.displayOptions.filter { $0.group == group }
-                        if !options.isEmpty {
-                            Text(group)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(AwesunPalette.textSecondary)
-                            if group == "显示选项" {
-                                VStack(spacing: 1) {
-                                    ForEach(options) { item in
-                                        Toggle(item.title, isOn: Binding(
-                                            get: { item.selected },
-                                            set: { _ in model.selectDisplayOption(item.id) }
-                                        ))
-                                        .font(.system(size: 14))
-                                        .tint(AwesunPalette.brandRed)
-                                        .padding(.vertical, 5)
-                                    }
-                                }
-                                .padding(.horizontal, 10)
-                                .background(Color.white.opacity(0.07))
-                                .cornerRadius(10)
-                            } else {
-                                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 7) {
-                                    ForEach(options) { item in
-                                        Button { model.selectDisplayOption(item.id) } label: {
-                                            Text(item.title)
-                                                .lineLimit(2)
-                                                .minimumScaleFactor(0.7)
-                                                .multilineTextAlignment(.center)
-                                                .frame(maxWidth: .infinity, minHeight: 38)
-                                                .background(item.selected
-                                                            ? AwesunPalette.brandRed
-                                                            : Color.white.opacity(0.10))
-                                                .cornerRadius(8)
-                                        }
-                                        .accessibilityAddTraits(item.selected ? .isSelected : [])
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Button(action: model.openAdvancedDisplay) {
-                        AwesunActionRow(icon: "slider.horizontal.3", title: "分辨率与高级设置")
+                    if advanced {
+                        optionGroup("远端分辨率", columns: 2)
+                        optionGroup("自定义缩放")
+                        optionGroup("自定义画质")
+                        optionGroup("显示选项", toggleRows: true)
+                        optionGroup("虚拟显示器", columns: 2)
+                    } else {
+                        performanceCard
+                        optionGroup("画面比例")
+                        optionGroup("画质")
+                        optionGroup("编码")
                     }
                 }
+                .padding(.bottom, 2)
             }
             .frame(maxHeight: height)
             .foregroundColor(.white)
-            .padding(.top, 12)
             .buttonStyle(.plain)
         }
+    }
+
+    private func tab(_ label: String, icon: String, value: Bool) -> some View {
+        Button {
+            advanced = value
+        } label: {
+            Label(label, systemImage: icon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(advanced == value ? .white : AwesunPalette.textSecondary)
+                .frame(maxWidth: .infinity, minHeight: 30)
+                .background(advanced == value ? Color.white.opacity(0.12) : .clear)
+                .cornerRadius(7)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(advanced == value ? .isSelected : [])
+    }
+
+    private var performanceCard: some View {
+        let status = model.performance
+        return VStack(alignment: .leading, spacing: 9) {
+            Toggle(isOn: Binding(get: { status.enabled }, set: model.setPerformance)) {
+                HStack(spacing: 8) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(AwesunPalette.brandRed)
+                    Text("高性能模式").font(.system(size: 13, weight: .semibold))
+                }
+            }
+            .tint(AwesunPalette.brandRed)
+            .disabled(!status.supported)
+            if !status.supported {
+                Text("需要支持固定帧率的 Windows 主机")
+                    .font(.system(size: 11)).foregroundColor(AwesunPalette.textSecondary)
+            } else {
+                HStack(spacing: 5) {
+                    Text("目标帧率").font(.system(size: 11)).foregroundColor(AwesunPalette.textSecondary)
+                    ForEach([30, 60, 90, 120], id: \.self) { fps in
+                        Button { model.setPerformanceTarget(fps) } label: {
+                            chip(fps == status.target, String(fps))
+                        }
+                        .accessibilityLabel("目标帧率 \(fps)")
+                    }
+                }
+                if status.enabled {
+                    Text(status.effective.map { $0 > 0 ? "主机锁定 \($0) FPS" : "主机暂用自适应" }
+                         ?? "正在确认主机设置")
+                        .font(.system(size: 11, weight: .medium))
+                    HStack(spacing: 11) {
+                        metric("实测", status.measuredFps.map { "\($0) FPS" } ?? "—")
+                        metric("Windows", status.gpuEncode.map { $0 ? "GPU 纹理" : "兼容路径" } ?? "检测中")
+                        metric("iPhone", status.gpuDecode ? "GPU 纹理" : "兼容路径")
+                    }
+                }
+            }
+        }
+        .padding(11)
+        .background(Color(awesun: 0xFF211920))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(AwesunPalette.brandRed.opacity(0.22)))
+        .cornerRadius(10)
+    }
+
+    private func metric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).foregroundColor(AwesunPalette.textSecondary)
+            Text(value).fontWeight(.medium)
+        }
+        .font(.system(size: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func optionGroup(_ group: String, columns: Int = 3, toggleRows: Bool = false) -> some View {
+        let values = model.displayOptions.filter { $0.group == group }
+        if !values.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(group)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(AwesunPalette.textSecondary)
+                if toggleRows {
+                    VStack(spacing: 1) {
+                        ForEach(values) { item in
+                            Toggle(item.title, isOn: Binding(
+                                get: { item.selected }, set: { _ in model.selectDisplayOption(item.id) }))
+                                .font(.system(size: 12))
+                                .tint(AwesunPalette.brandRed)
+                                .padding(.vertical, 3)
+                        }
+                    }
+                    .padding(.horizontal, 9)
+                    .background(Color.white.opacity(0.07))
+                    .cornerRadius(8)
+                } else {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: columns), spacing: 5) {
+                        ForEach(values) { item in
+                            Button { model.selectDisplayOption(item.id) } label: {
+                                chip(item.selected, item.title)
+                            }
+                            .accessibilityAddTraits(item.selected ? .isSelected : [])
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func chip(_ selected: Bool, _ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: selected ? .semibold : .regular))
+            .lineLimit(2)
+            .minimumScaleFactor(0.85)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, minHeight: 33)
+            .padding(.horizontal, 2)
+            .foregroundColor(.white)
+            .background(selected ? AwesunPalette.brandRed.opacity(0.82) : Color.white.opacity(0.085))
+            .cornerRadius(7)
     }
 }
 

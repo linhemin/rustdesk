@@ -15,10 +15,10 @@ struct AwesunSessionView: View {
                     .frame(height: AwesunControlLayout.keyboardHeight(in: size))
                     .frame(maxHeight: .infinity, alignment: .bottom)
             } else {
-                controls
                 if model.mouseVisible {
                     AwesunVirtualMouseView(model: model, screenSize: size)
                 }
+                controls
             }
 
             if let toast = model.toast {
@@ -35,14 +35,18 @@ struct AwesunSessionView: View {
 
     private var controls: some View {
         ZStack {
-            control(model.displayLocked ? "lock.fill" : "lock.open", label: "锁定显示") {
+            AwesunDockButton(placement: $model.lockPlacement, size: size,
+                             label: model.displayLocked ? "解除锁定" : "锁定显示",
+                             tap: {
                 if model.displayLocked {
                     model.setDisplayLocked(false)
                 } else {
                     model.sheet = .lock
                 }
+            }) {
+                Image(systemName: model.displayLocked ? "lock.fill" : "lock.open")
+                    .resizable().scaledToFit()
             }
-            .position(AwesunControlLayout.lock(in: size))
             control("keyboard", label: "键盘") { model.systemKeyboard() }
                 .position(AwesunControlLayout.rail(0, in: size))
             control("gamecontroller", label: "游戏键盘") { model.sheet = .gamepad }
@@ -66,13 +70,11 @@ struct AwesunSessionView: View {
                 } else if accent {
                     AwesunWheelGlyph()
                 } else {
-                    Image(systemName: symbol).font(.system(size: 24, weight: .medium))
+                    Image(systemName: symbol).resizable().scaledToFit()
                 }
             }
                 .foregroundColor(accent ? AwesunPalette.brandRed : .white)
-                .frame(width: 40, height: 40)
-                .background(Circle().fill(Color.black.opacity(0.78)))
-                .contentShape(Circle())
+                .modifier(AwesunFloatingChrome())
         }
         .buttonStyle(AwesunPressStyle())
         .accessibilityLabel(Text(label))
@@ -80,12 +82,16 @@ struct AwesunSessionView: View {
 
     private var keyboardAccessory: some View {
         HStack(spacing: 4) {
-            accessoryButton("自定义", width: 50) { model.sheet = .keyboardLayout }
-            accessoryButton("快捷键", width: 50) { model.sheet = .shortcuts }
+            accessoryButton("自定义", width: 50) { model.openKeyboardPanel(.keyboardLayout) }
+            accessoryButton("快捷键", width: 50) { model.openKeyboardPanel(.shortcuts) }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
                     ForEach(model.accessoryKeys, id: \.self) { code in
-                        if let key = AwesunKeyboardLayout.keyByCode[code] {
+                        if let shortcut = model.customShortcut(for: code) {
+                            accessoryButton(shortcut.title, width: 80) {
+                                model.sendShortcut(shortcut)
+                            }
+                        } else if let key = AwesunKeyboardLayout.keyByCode[code] {
                             accessoryButton(AwesunKeyboardLayout.title(for: key),
                                 selected: model.modifiers.contains(key.label), width: 38) {
                                 model.sendAccessoryKey(key)
@@ -94,7 +100,7 @@ struct AwesunSessionView: View {
                     }
                 }
             }
-            accessoryButton("•••", width: 34) { model.sheet = .keyboardMore }
+            accessoryButton("•••", width: 34) { model.openKeyboardPanel(.keyboardMore) }
             accessoryButton("✕", width: 33) { model.systemKeyboard(false) }
         }
         .padding(4)
@@ -119,7 +125,8 @@ struct AwesunSessionView: View {
 
     @ViewBuilder
     private var sheetLayer: some View {
-        if model.functionsOpen || model.sheet != nil {
+        if model.functionsOpen || (model.sheet != nil &&
+            !(model.isKeyboardPanel && model.keyboardInset > 0)) {
             ZStack(alignment: .bottom) {
                 Color.black.opacity(0.35).onTapGesture { model.closePanel() }
                 Group {
@@ -199,269 +206,199 @@ enum AwesunControlLayout {
         min(391, size.height * 0.65)
     }
 
-    static func lock(in size: CGSize) -> CGPoint {
-        CGPoint(x: size.width - 34, y: max(41, size.height * 0.099))
-    }
+    static let controlRadius: CGFloat = 20
+    static let controlEdge: CGFloat = 14
+    static let glyphSize: CGFloat = 24
 
     static func rail(_ index: Int, in size: CGSize) -> CGPoint {
-        let bottom = min(size.height - 29, size.height * 0.933)
-        let spacing = min(49, size.height * 0.057)
-        return CGPoint(x: size.width - 34, y: bottom - CGFloat(2 - index) * spacing)
+        let bottom = min(size.height - controlEdge - controlRadius, size.height * 0.933)
+        let spacing: CGFloat = 48
+        return CGPoint(x: size.width - controlEdge - controlRadius,
+                       y: bottom - CGFloat(2 - index) * spacing)
     }
 
-    static func mouseCenter(_ anchor: CGPoint, in size: CGSize) -> CGPoint {
-        let pad: CGFloat = 1
-        let start = anchor == .zero
-            ? CGPoint(x: size.width * 0.587, y: size.height * 0.469)
-            : anchor
-        return CGPoint(x: min(max(pad, start.x), max(pad, size.width - pad)),
-                       y: min(max(pad, start.y), max(pad, size.height - pad)))
+    static func dockCenter(_ placement: AwesunDockPlacement, in size: CGSize) -> CGPoint {
+        let edge = controlEdge + controlRadius
+        let bottom = placement.right ? rail(0, in: size).y - 48 : size.height - edge
+        return CGPoint(x: placement.right ? size.width - edge : edge,
+                       y: max(edge, min(bottom, placement.fraction * size.height)))
     }
 
-    static func dockCenter(_ model: AwesunSessionModel, in size: CGSize) -> CGPoint {
-        let anchor = model.collapsedMouseAnchor == .zero
-            ? mouseCenter(model.mouseAnchor, in: size)
-            : model.collapsedMouseAnchor
-        let end = max(51, rail(0, in: size).y - 49)
-        return CGPoint(x: size.width - 29, y: min(end, max(50, anchor.y)))
+    static func pointer(_ anchor: CGPoint?, in size: CGSize, viewport: CGRect?) -> CGPoint {
+        let start = anchor ?? CGPoint(x: size.width * 0.64 - 94, y: size.height * 0.56 - 72)
+        let screen = CGRect(origin: .zero, size: size)
+        let visible = viewport.map { $0.intersection(screen) } ?? screen
+        let bounds = visible.isNull || visible.isEmpty ? screen : visible
+        return CGPoint(x: min(max(start.x, bounds.minX), max(bounds.minX, bounds.maxX - 1)),
+                       y: min(max(start.y, bounds.minY), max(bounds.minY, bounds.maxY - 1)))
+    }
+
+    static func mouseCenter(for pointer: CGPoint, in size: CGSize) -> CGPoint {
+        let horizontal: CGFloat = 94
+        let vertical: CGFloat = 72
+        let pad = arcRadius + arcWidth / 2
+        let x = pointer.x + horizontal <= size.width - pad
+            ? pointer.x + horizontal : pointer.x - horizontal
+        let y = pointer.y + vertical <= size.height - wheelOffset - 20
+            ? pointer.y + vertical : pointer.y - vertical
+        return CGPoint(x: x, y: y)
     }
 
     static func circle(_ point: CGPoint, at center: CGPoint, radius: CGFloat) -> Bool {
         hypot(point.x - center.x, point.y - center.y) <= radius
     }
 
-    static func mouseHit(_ point: CGPoint, model: AwesunSessionModel, size: CGSize) -> Bool {
-        let center = mouseCenter(model.mouseAnchor, in: size)
-        if model.mouseCollapsed {
-            return circle(point, at: dockCenter(model, in: size), radius: 20)
-        }
+    static func mouseRegion(_ point: CGPoint, model: AwesunSessionModel,
+                            size: CGSize) -> AwesunMouseRegion? {
+        guard model.mouseVisible && !model.mouseCollapsed else { return nil }
+        let pointer = pointer(model.mouseAnchor, in: size, viewport: model.mouseViewport)
+        let center = mouseCenter(for: pointer, in: size)
         let local = CGPoint(x: point.x - center.x, y: point.y - center.y)
+        if circle(local, at: CGPoint(x: closeOffset.width, y: closeOffset.height), radius: 16) {
+            return .close
+        }
         if model.wheelOpen {
-            return abs(hypot(local.x, local.y) - ringRadius) <= ringThickness / 2 ||
-                circle(local, at: CGPoint(x: closeOffset.width, y: closeOffset.height), radius: 13)
+            return abs(hypot(local.x, local.y) - ringRadius) <= ringThickness / 2 ? .ring : nil
         }
-        if circle(local, at: .zero, radius: hub) ||
-            circle(local, at: CGPoint(x: 0, y: -wheelOffset), radius: wheelRadius) ||
-            circle(local, at: CGPoint(x: 0, y: wheelOffset), radius: wheelRadius) ||
-            circle(local, at: CGPoint(x: closeOffset.width, y: closeOffset.height), radius: 13) {
-            return true
-        }
+        if circle(local, at: .zero, radius: hub) { return .hub }
+        if circle(local, at: CGPoint(x: 0, y: -wheelOffset), radius: 20) { return .wheelTop }
+        if circle(local, at: CGPoint(x: 0, y: wheelOffset), radius: 20) { return .wheelBottom }
+
         let half = mouseSize / 2
-        let rect = CGRect(x: 0, y: 0, width: mouseSize, height: mouseSize)
+        let rect = CGRect(origin: .zero, size: CGSize(width: mouseSize, height: mouseSize))
         let p = CGPoint(x: local.x + half, y: local.y + half)
-        return [-180.0, 0.0].contains { angle in
-            AwesunArcBand(centerDeg: angle, spanDeg: arcSpan, radius: arcRadius,
-                          thickness: arcWidth).path(in: rect).contains(p)
+        for side in [AwesunMouseRegion.left, .right] {
+            if band(side).path(in: rect).contains(p) { return side }
         }
+        return nil
     }
+
+    static func band(_ side: AwesunMouseRegion) -> AwesunArcBand {
+        AwesunArcBand(centerDeg: side == .left ? 180 : 0, spanDeg: arcSpan,
+                      radius: arcRadius, thickness: arcWidth)
+    }
+}
+
+enum AwesunMouseRegion: Equatable {
+    case hub, left, right, wheelTop, wheelBottom, ring, close
 }
 
 struct AwesunVirtualMouseView: View {
     @ObservedObject var model: AwesunSessionModel
     let screenSize: CGSize
-    @State private var lastTranslation: CGSize = .zero
-    @GestureState private var hubDragging = false
 
     var body: some View {
-        let center = model.mouseCollapsed
-            ? AwesunControlLayout.dockCenter(model, in: screenSize)
-            : AwesunControlLayout.mouseCenter(model.mouseAnchor, in: screenSize)
-        ZStack {
-            if model.mouseCollapsed {
-                Button {
-                    model.haptic(.light)
-                    model.expandMouse(at: AwesunControlLayout.mouseCenter(model.mouseAnchor, in: screenSize))
-                } label: {
-                    Image(AwesunIcons.mouse)
-                        .renderingMode(.template)
-                        .resizable().scaledToFit()
-                        .foregroundColor(.white)
-                        .frame(width: 22, height: 22)
-                        .frame(width: 40, height: 40)
-                        .background(Circle().fill(.black.opacity(0.78)))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("展开虚拟鼠标")
-            } else {
+        let pointer = AwesunControlLayout.pointer(
+            model.mouseAnchor, in: screenSize, viewport: model.mouseViewport)
+        let center = AwesunControlLayout.mouseCenter(for: pointer, in: screenSize)
+        if model.mouseCollapsed {
+            AwesunDockButton(placement: $model.mousePlacement, size: screenSize,
+                             label: "展开虚拟鼠标",
+                             tap: { model.expandMouse(at: pointer) }) {
+                Image(AwesunIcons.mouse).renderingMode(.template).resizable().scaledToFit()
+            }
+        } else {
+            ZStack {
                 if model.wheelOpen {
-                    AwesunScrollRing(model: model)
+                    scrollRing(at: pointer)
                 } else {
-                    arc(center: -180, secondary: true)
-                    arc(center: 0, secondary: false)
-                    hub
-                    smallButton(offset: AwesunControlLayout.wheelOffset, label: "滚轮向下", lines: 5) {
-                        model.scroll(-1)
-                        model.refreshMouseIdleTimer()
-                    }
+                    arc(.left).accessibilityLabel("鼠标左键")
+                        .accessibilityAction { model.click("left", at: pointer) }
+                    arc(.right).accessibilityLabel("鼠标右键")
+                        .accessibilityAction { model.click("right", at: pointer) }
+                    Circle()
+                        .fill(model.pressedMouseRegion == .hub || model.dragging
+                              ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
+                        .overlay(Circle().strokeBorder(.black.opacity(0.68), lineWidth: 2))
+                        .frame(width: AwesunControlLayout.hub * 2, height: AwesunControlLayout.hub * 2)
+                        .accessibilityLabel("移动光标")
+                    smallButton(.wheelTop).offset(y: -AwesunControlLayout.wheelOffset)
+                        .accessibilityLabel("长按打开圆形滚轮")
+                        .accessibilityAction { model.openWheel() }
+                    smallButton(.wheelBottom).offset(y: AwesunControlLayout.wheelOffset)
+                        .accessibilityLabel("打开圆形滚轮")
+                        .accessibilityAction { model.openWheel() }
                 }
-                AwesunWheelTrigger(model: model, center: center)
-                    .offset(y: -AwesunControlLayout.wheelOffset)
-                Button {
-                    if model.wheelOpen {
-                        model.wheelOpen = false
-                        model.refreshMouseIdleTimer()
-                    } else {
-                        model.collapseMouse()
-                    }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.55))
-                        .frame(width: 26, height: 26)
-                        .background(Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .offset(AwesunControlLayout.closeOffset)
-                .accessibilityLabel(model.wheelOpen ? "退出圆形滚轮" : "收起虚拟鼠标")
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.55))
+                    .frame(width: 26, height: 26)
+                    .background(Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1))
+                    .accessibilityLabel(model.wheelOpen ? "退出圆形滚轮" : "收起虚拟鼠标")
+                    .accessibilityAction { model.closeWheelOrMouse() }
+                    .offset(AwesunControlLayout.closeOffset)
             }
-        }
-        .frame(width: AwesunControlLayout.mouseSize, height: AwesunControlLayout.mouseSize)
-        .position(center)
-        .animation(.easeOut(duration: 0.18), value: model.mouseCollapsed)
-        .onAppear {
-            if !model.mouseCollapsed { syncPointer() }
-            model.refreshMouseIdleTimer()
-        }
-        .onDisappear {
-            model.endDrag()
-            model.mouseGesture(false)
-            model.pauseMouseIdleTimer()
+            .frame(width: AwesunControlLayout.mouseSize, height: AwesunControlLayout.mouseSize)
+            .position(center)
+            .allowsHitTesting(false)
+
+            AwesunPointerGlyph()
+                .fill(.white)
+                .overlay(AwesunPointerGlyph().stroke(.black.opacity(0.9), lineWidth: 1.4))
+                .shadow(color: .black.opacity(0.55), radius: 1, x: 0, y: 1)
+                .frame(width: 15, height: 21)
+                .position(x: pointer.x + 7.5, y: pointer.y + 10.5)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
         }
     }
 
-    private func arc(center: Double, secondary: Bool) -> some View {
-        let band = AwesunArcBand(centerDeg: center, spanDeg: AwesunControlLayout.arcSpan,
-                                 radius: AwesunControlLayout.arcRadius,
-                                 thickness: AwesunControlLayout.arcWidth)
-        return AwesunMouseBand(model: model, band: band, secondary: secondary,
-                               sync: syncPointer, move: move)
+    private func scrollRing(at pointer: CGPoint) -> some View {
+        AwesunAnnulus()
+            .fill(.white.opacity(0.27), style: FillStyle(eoFill: true))
+            .overlay(AwesunAnnulus().stroke(.black.opacity(0.68), lineWidth: 2))
+            .overlay {
+                if let angle = model.wheelIndicator {
+                    Circle().fill(Color(awesun: 0xFFF4BA58))
+                        .frame(width: 23, height: 23)
+                        .blur(radius: 2)
+                        .offset(x: AwesunControlLayout.ringRadius * cos(angle),
+                                y: AwesunControlLayout.ringRadius * sin(angle))
+                }
+            }
+            .accessibilityLabel("圆形滚轮")
+            .accessibilityAdjustableAction { direction in
+                if direction == .increment { model.scroll(-1, at: pointer) }
+                if direction == .decrement { model.scroll(1, at: pointer) }
+            }
     }
 
-    private var hub: some View {
+    private func arc(_ side: AwesunMouseRegion) -> some View {
+        let band = AwesunControlLayout.band(side)
+        return band.fill(model.pressedMouseRegion == side
+                         ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
+            .overlay(band.stroke(.black.opacity(0.72), lineWidth: 2))
+    }
+
+    private func smallButton(_ region: AwesunMouseRegion) -> some View {
         Circle()
-            .fill(model.dragging || hubDragging ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
-            .overlay(Circle().strokeBorder(Color.black.opacity(0.68), lineWidth: 2))
-            .frame(width: AwesunControlLayout.hub * 2, height: AwesunControlLayout.hub * 2)
-            .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 5, coordinateSpace: .named("awesunControls"))
-                    .updating($hubDragging) { _, state, _ in state = true }
-                    .onChanged { value in
-                        move(CGSize(width: value.translation.width - lastTranslation.width,
-                                    height: value.translation.height - lastTranslation.height))
-                        lastTranslation = value.translation
-                    }
-                    .onEnded { _ in lastTranslation = .zero }
-            )
-            .simultaneousGesture(
-                TapGesture(count: 2).onEnded { model.collapseMouse() }
-                    .exclusively(before: TapGesture().onEnded {
-                        syncPointer()
-                        model.click()
-                    })
-            )
-            .onChange(of: hubDragging) { value in
-                model.mouseGesture(value)
-                if !value { lastTranslation = .zero }
-            }
-            .accessibilityLabel("移动光标")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { syncPointer(); model.click() }
-    }
-
-    private func syncPointer() {
-        model.moveVirtualPointer(to: AwesunControlLayout.mouseCenter(model.mouseAnchor, in: screenSize))
-    }
-
-    private func move(_ delta: CGSize) {
-        let current = AwesunControlLayout.mouseCenter(model.mouseAnchor, in: screenSize)
-        let next = CGPoint(x: current.x + delta.width, y: current.y + delta.height)
-        model.moveVirtualPointer(to: AwesunControlLayout.mouseCenter(next, in: screenSize))
-    }
-
-    private func smallButton(offset: CGFloat, label: String, lines: Int,
-                             action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Circle()
-                .fill(AwesunPalette.mouseFill)
-                .overlay(Circle().strokeBorder(Color.black.opacity(0.68), lineWidth: 2))
-                .overlay {
+            .fill(model.pressedMouseRegion == region ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
+            .overlay(Circle().strokeBorder(.black.opacity(0.68), lineWidth: 2))
+            .overlay {
+                if region == .wheelBottom {
                     VStack(spacing: 2) {
-                        ForEach(0..<lines, id: \.self) { _ in
+                        ForEach(0..<5, id: \.self) { _ in
                             Capsule().fill(.black.opacity(0.30)).frame(width: 13, height: 1.5)
                         }
                     }
                 }
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-        }
-        .offset(y: offset)
-        .buttonStyle(.plain)
-        .accessibilityLabel(Text(label))
+            }
+            .frame(width: 28, height: 28)
     }
 }
 
-struct AwesunMouseBand: View {
-    @ObservedObject var model: AwesunSessionModel
-    let band: AwesunArcBand
-    let secondary: Bool
-    let sync: () -> Void
-    let move: (CGSize) -> Void
-
-    @GestureState private var down = false
-    @State private var lastTranslation: CGSize = .zero
-    @State private var didDrag = false
-
-    var body: some View {
-        band.fill(down ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
-            .overlay(band.stroke(Color.black.opacity(0.72), lineWidth: 2))
-            .frame(width: AwesunControlLayout.mouseSize, height: AwesunControlLayout.mouseSize)
-            .contentShape(band)
-            .gesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .named("awesunControls"))
-                    .updating($down) { _, state, _ in state = true }
-                    .onChanged { value in
-                        guard !secondary else { return }
-                        let translation = value.translation
-                        if !didDrag {
-                            guard hypot(translation.width, translation.height) >= 5 else { return }
-                            didDrag = true
-                            sync()
-                            model.beginDrag()
-                        }
-                        move(CGSize(width: translation.width - lastTranslation.width,
-                                    height: translation.height - lastTranslation.height))
-                        lastTranslation = translation
-                    }
-                    .onEnded { value in
-                        let distance = hypot(value.translation.width, value.translation.height)
-                        if didDrag {
-                            model.endDrag()
-                        } else if distance < 5 {
-                            sync()
-                            model.click(secondary ? "right" : "left")
-                        }
-                        reset()
-                    }
-            )
-            .onChange(of: down) { value in
-                model.mouseGesture(value)
-                if !value {
-                    if didDrag { model.endDrag() }
-                    reset()
-                }
-            }
-            .onDisappear { reset(); model.endDrag() }
-            .accessibilityLabel(secondary ? "鼠标右键" : "鼠标左键及拖动")
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { sync(); model.click(secondary ? "right" : "left") }
-    }
-
-    private func reset() {
-        lastTranslation = .zero
-        didDrag = false
+struct AwesunPointerGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: .zero)
+            path.addLine(to: CGPoint(x: rect.width, y: rect.height * 0.62))
+            path.addLine(to: CGPoint(x: rect.width * 0.60, y: rect.height * 0.66))
+            path.addLine(to: CGPoint(x: rect.width * 0.79, y: rect.height * 0.92))
+            path.addLine(to: CGPoint(x: rect.width * 0.57, y: rect.height))
+            path.addLine(to: CGPoint(x: rect.width * 0.39, y: rect.height * 0.73))
+            path.addLine(to: CGPoint(x: rect.width * 0.12, y: rect.height * 0.89))
+            path.closeSubpath()
+        }
     }
 }
 
@@ -475,74 +412,6 @@ struct AwesunAnnulus: Shape {
         var path = Path(ellipseIn: circle(radius + half))
         path.addEllipse(in: circle(radius - half))
         return path
-    }
-}
-
-struct AwesunScrollRing: View {
-    @ObservedObject var model: AwesunSessionModel
-    @State private var last: Double?
-    @State private var remainder = 0.0
-    @State private var indicator: Double?
-    @GestureState private var scrolling = false
-    private let step = Double.pi / 12
-
-    var body: some View {
-        let center = AwesunControlLayout.mouseSize / 2
-        AwesunAnnulus()
-            .fill(Color.white.opacity(0.27), style: FillStyle(eoFill: true))
-            .overlay(AwesunAnnulus().stroke(Color.black.opacity(0.68), lineWidth: 2))
-            .overlay {
-                if let angle = indicator {
-                    Circle().fill(Color(awesun: 0xFFF4BA58))
-                        .frame(width: 23, height: 23)
-                        .blur(radius: 2)
-                        .offset(x: AwesunControlLayout.ringRadius * cos(angle),
-                                y: AwesunControlLayout.ringRadius * sin(angle))
-                        .allowsHitTesting(false)
-                }
-            }
-            .frame(width: center * 2, height: center * 2)
-            .contentShape(AwesunAnnulus(), eoFill: true)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($scrolling) { _, state, _ in state = true }
-                    .onChanged { value in
-                        let dx = value.location.x - center
-                        let dy = value.location.y - center
-                        guard hypot(dx, dy) > AwesunControlLayout.ringRadius / 2 else {
-                            last = nil
-                            return
-                        }
-                        let angle = atan2(dy, dx)
-                        if let previous = last {
-                            let delta = angle - previous
-                            remainder += atan2(sin(delta), cos(delta))
-                            let ticks = Int(remainder / step)
-                            if ticks != 0 {
-                                model.scroll(-ticks)
-                                remainder -= Double(ticks) * step
-                            }
-                        }
-                        last = angle
-                        indicator = angle
-                    }
-                    .onEnded { _ in reset() }
-            )
-            .onChange(of: scrolling) { value in
-                model.mouseGesture(value)
-                if !value { reset() }
-            }
-            .accessibilityLabel("圆形滚轮")
-            .accessibilityAdjustableAction { direction in
-                if direction == .increment { model.scroll(-1) }
-                if direction == .decrement { model.scroll(1) }
-            }
-    }
-
-    private func reset() {
-        last = nil
-        remainder = 0
-        indicator = nil
     }
 }
 
@@ -566,79 +435,55 @@ struct AwesunPressStyle: ButtonStyle {
     }
 }
 
-struct AwesunWheelTrigger: View {
-    @ObservedObject var model: AwesunSessionModel
-    let center: CGPoint
-    @GestureState private var contact = false
-    @State private var started = false
-    @State private var holding = false
-    @State private var timer: Task<Void, Never>?
-    @State private var lastAngle: Double?
-    @State private var angularRemainder = 0.0
-    private let tickAngle = Double.pi / 12
+struct AwesunDockPlacement {
+    var right = true
+    var fraction: CGFloat
+}
+
+struct AwesunFloatingChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content.frame(width: AwesunControlLayout.glyphSize, height: AwesunControlLayout.glyphSize)
+            .frame(width: AwesunControlLayout.controlRadius * 2,
+                   height: AwesunControlLayout.controlRadius * 2)
+            .background(Circle().fill(Color.black.opacity(0.78)))
+            .contentShape(Circle())
+    }
+}
+
+struct AwesunDockButton<Glyph: View>: View {
+    @Binding var placement: AwesunDockPlacement
+    let size: CGSize
+    let label: String
+    let tap: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+    @GestureState private var drag: CGSize = .zero
 
     var body: some View {
-        Circle()
-            .fill(AwesunPalette.mouseFill)
-            .overlay(Circle().strokeBorder(Color.black.opacity(0.68), lineWidth: 2))
-            .frame(width: 28, height: 28)
-            .opacity(model.wheelOpen ? 0.001 : 1)
-            .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .named("awesunControls"))
-                    .updating($contact) { _, state, _ in state = true }
-                    .onChanged { value in
-                        if !started {
-                            started = true
-                            model.mouseGesture(true)
-                            timer = Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 220_000_000)
-                                guard !Task.isCancelled else { return }
-                                holding = true
-                                model.haptic(.light)
-                                model.openWheel()
-                            }
-                        }
-                        if holding {
-                            let delta = CGPoint(x: value.location.x - center.x,
-                                                y: value.location.y - center.y)
-                            guard hypot(delta.x, delta.y) > 30 else { lastAngle = nil; return }
-                            let angle = atan2(Double(delta.y), Double(delta.x))
-                            if let previous = lastAngle {
-                                angularRemainder += atan2(sin(angle - previous), cos(angle - previous))
-                                let ticks = Int(angularRemainder / tickAngle)
-                                if ticks != 0 {
-                                    model.scroll(-ticks)
-                                    angularRemainder -= Double(ticks) * tickAngle
-                                }
-                            }
-                            lastAngle = angle
-                        } else if hypot(value.translation.width, value.translation.height) > 12 {
-                            timer?.cancel()
+        let anchor = AwesunControlLayout.dockCenter(placement, in: size)
+        let button = CGPoint(x: anchor.x + drag.width, y: anchor.y + drag.height)
+        glyph()
+            .foregroundColor(.white)
+            .modifier(AwesunFloatingChrome())
+            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("awesunControls"))
+                .updating($drag) { value, state, _ in state = value.translation }
+                .onEnded { value in
+                    if hypot(value.translation.width, value.translation.height) < 7 {
+                        tap()
+                    } else {
+                        let x = anchor.x + value.translation.width
+                        let y = anchor.y + value.translation.height
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            placement = AwesunDockPlacement(
+                                right: x >= size.width / 2,
+                                fraction: min(1, max(0, y / max(1, size.height))))
                         }
                     }
-                    .onEnded { value in
-                        if !holding && hypot(value.translation.width, value.translation.height) < 8 {
-                            model.scroll(1)
-                        }
-                        finish()
-                    }
-            )
-            .allowsHitTesting(!model.wheelOpen || holding)
-            .onChange(of: contact) { value in if !value { finish() } }
-            .onDisappear { finish() }
-            .accessibilityLabel("长按打开圆形滚轮")
+                })
+            .accessibilityLabel(Text(label))
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction { model.openWheel() }
-    }
-
-    private func finish() {
-        timer?.cancel()
-        timer = nil
-        started = false
-        holding = false
-        lastAngle = nil
-        angularRemainder = 0
-        model.mouseGesture(false)
+            .accessibilityAction { tap() }
+            .accessibilityAction(named: Text("移到左侧")) { placement.right = false }
+            .accessibilityAction(named: Text("移到右侧")) { placement.right = true }
+            .position(button)
     }
 }

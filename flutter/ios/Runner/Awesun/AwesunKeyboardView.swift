@@ -189,11 +189,21 @@ struct AwesunKeyboardView: View {
     }
 }
 
-struct AwesunKeyboardShortcut: Identifiable {
+struct AwesunKeyboardShortcut: Identifiable, Codable {
     let labels: [String]
     let key: String
     let modifiers: [String]
-    var id: String { labels.joined(separator: "+") }
+    var storageID: String? = nil
+    var title: String { labels.joined(separator: "+") }
+    var id: String { storageID ?? title }
+
+    static let modifierOptions = [("Ctrl", "ctrl"), ("Shift", "shift"), ("Alt", "alt"), ("Win", "meta")]
+    static let storageKey = "awesun.keyboard.chords.v1"
+
+    static func saved() -> [Self] {
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return [] }
+        return (try? JSONDecoder().decode([Self].self, from: data)) ?? []
+    }
 
     static let common = [
         Self(labels: ["Ctrl", "Alt", "Del"], key: "secure-attention", modifiers: []),
@@ -219,7 +229,10 @@ extension AwesunKeyboardLayout {
     static func savedAccessoryKeys() -> [String] {
         let stored = UserDefaults.standard.stringArray(forKey: accessoryStorage) ?? defaultAccessory
         var used = Set<String>()
-        return stored.filter { keyByCode[$0] != nil && used.insert($0).inserted }
+        let chordIDs = Set(AwesunKeyboardShortcut.saved().map(\.id))
+        return stored.filter {
+            (keyByCode[$0] != nil || chordIDs.contains($0)) && used.insert($0).inserted
+        }
     }
 
     static func modifierName(for key: String) -> String? {
@@ -245,7 +258,29 @@ struct AwesunKeyboardPanel: View {
     @ObservedObject var model: AwesunSessionModel
     let editing: Bool
     let maxHeight: CGFloat
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 7), count: 5)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 5)
+    @State private var category = "常用"
+    @State private var editingChord = false
+    @State private var chordModifiers: Set<String> = []
+    @State private var chordKey = "VK_DELETE"
+
+    private var keys: [AwesunKeySpec] {
+        switch category {
+        case "字母数字": return AwesunKeyboardLayout.selectableKeys.filter {
+            $0.label.count == 1 && $0.label.first?.isLetter == true ||
+            $0.label.first?.isNumber == true
+        }
+        case "功能": return AwesunKeyboardLayout.selectableKeys.filter {
+            $0.label.dropFirst().allSatisfy(\.isNumber) && $0.label.hasPrefix("F") && $0.label.count > 1
+        }
+        case "全部": return AwesunKeyboardLayout.selectableKeys
+        default: return ["VK_CONTROL", "VK_SHIFT", "VK_MENU", "VK_LWIN",
+                         "MOUSE_LEFT", "MOUSE_MIDDLE", "MOUSE_RIGHT", "VK_BACK",
+                         "VK_DELETE", "VK_ENTER", "VK_SPACE", "VK_ESCAPE", "VK_TAB",
+                         "VK_UP", "VK_LEFT", "VK_DOWN", "VK_RIGHT", "VK_HOME", "VK_END",
+                         "VK_PRIOR", "VK_NEXT"].compactMap { AwesunKeyboardLayout.keyByCode[$0] }
+        }
+    }
 
     var body: some View {
         AwesunSheetShell(title: editing ? "自定义键盘栏" : "更多按键", onClose: model.closeSheet) {
@@ -256,13 +291,15 @@ struct AwesunKeyboardPanel: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(AwesunPalette.textSecondary)
                         ForEach(model.accessoryKeys, id: \.self) { code in
-                            if let key = AwesunKeyboardLayout.keyByCode[code] {
+                            let title = model.customShortcut(for: code)?.title ??
+                                AwesunKeyboardLayout.keyByCode[code].map(AwesunKeyboardLayout.title)
+                            if let title = title {
                                 HStack(spacing: 17) {
-                                    Text(AwesunKeyboardLayout.title(for: key))
+                                    Text(title)
                                     Spacer()
                                     reorder("chevron.up", "上移", code, -1)
                                     reorder("chevron.down", "下移", code, 1)
-                                    Button { model.toggleAccessoryKey(code) } label: {
+                                    Button { model.removeAccessoryKey(code) } label: {
                                         Image(systemName: "minus.circle.fill")
                                             .foregroundColor(AwesunPalette.brandRed)
                                     }
@@ -277,9 +314,29 @@ struct AwesunKeyboardPanel: View {
                             .foregroundColor(AwesunPalette.textSecondary)
                     }
                     .padding(.bottom, 8)
+                    if editingChord { chordEditor }
+                    else {
+                        Button { editingChord = true } label: {
+                            AwesunActionRow(icon: "command", title: "添加组合键")
+                        }
+                        .padding(.bottom, 8)
+                    }
                 }
+                HStack(spacing: 5) {
+                    ForEach(["常用", "字母数字", "功能", "全部"], id: \.self) { tab in
+                        Button {
+                            category = tab
+                        } label: {
+                            Text(tab).font(.system(size: 12, weight: .semibold))
+                                .frame(maxWidth: .infinity, minHeight: 34)
+                                .background(category == tab ? AwesunPalette.brandRed : Color.white.opacity(0.08))
+                                .cornerRadius(7)
+                        }
+                    }
+                }
+                .padding(.bottom, 8)
                 LazyVGrid(columns: columns, spacing: 7) {
-                    ForEach(AwesunKeyboardLayout.selectableKeys) { key in
+                    ForEach(keys) { key in
                         let selected = editing && model.accessoryKeys.contains(key.vk)
                         Button {
                             if editing {
@@ -305,6 +362,52 @@ struct AwesunKeyboardPanel: View {
             .foregroundColor(.white)
             .buttonStyle(.plain)
         }
+    }
+
+    private var chordEditor: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("添加组合键").font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 6) {
+                ForEach(AwesunKeyboardShortcut.modifierOptions.indices, id: \.self) { index in
+                    let modifier = AwesunKeyboardShortcut.modifierOptions[index]
+                    Button {
+                        if chordModifiers.contains(modifier.1) { chordModifiers.remove(modifier.1) }
+                        else { chordModifiers.insert(modifier.1) }
+                    } label: {
+                        Text(modifier.0).font(.system(size: 12, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 30)
+                            .background(chordModifiers.contains(modifier.1) ? AwesunPalette.brandRed : Color.white.opacity(0.10))
+                            .cornerRadius(6)
+                    }
+                }
+            }
+            HStack {
+                Menu {
+                    ForEach(AwesunKeyboardLayout.selectableKeys.filter {
+                        !$0.isModifier && !$0.vk.hasPrefix("MOUSE_") && $0.vk != "VK_LWIN"
+                    }) { key in
+                        Button(AwesunKeyboardLayout.title(for: key)) { chordKey = key.vk }
+                    }
+                } label: {
+                    Label(AwesunKeyboardLayout.keyByCode[chordKey].map(AwesunKeyboardLayout.title) ?? "选择按键",
+                          systemImage: "chevron.up.chevron.down")
+                }
+                Spacer()
+                Button("取消") { editingChord = false }
+                Button("添加") {
+                    model.addAccessoryShortcut(modifiers: chordModifiers, key: chordKey)
+                    editingChord = false
+                    chordModifiers = []
+                }
+                .foregroundColor(AwesunPalette.brandRed)
+                .disabled(chordModifiers.isEmpty)
+            }
+            .font(.system(size: 13))
+            .frame(minHeight: 36)
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(9)
     }
 
     private func reorder(_ icon: String, _ title: String, _ code: String,

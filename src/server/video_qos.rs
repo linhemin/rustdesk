@@ -262,6 +262,7 @@ impl UserDelay {
 struct UserData {
     auto_adjust_fps: Option<u32>, // reserve for compatibility
     custom_fps: Option<u32>,
+    fixed_screen_fps: Option<u32>,
     quality: Option<(i64, Quality)>, // (time, quality)
     delay: UserDelay,
     record: bool,
@@ -287,6 +288,7 @@ impl UserData {
 struct DisplayData {
     send_counter: usize, // Number of times encode during period
     support_changing_quality: bool,
+    gpu_texture_encode: bool,
 }
 
 // Main QoS controller structure
@@ -349,6 +351,9 @@ impl VideoQoS {
 
     // Get current FPS within valid range
     pub fn fps(&self) -> u32 {
+        if let Some(target) = self.fixed_target() {
+            return target;
+        }
         let fps = self.fps;
         if fps >= MIN_FPS && fps <= MAX_FPS {
             fps
@@ -414,6 +419,34 @@ impl VideoQoS {
         // The stream follows the remaining viewers at once; a departed viewer's
         // start-up guard left with its entry.
         self.adjust_fps();
+    }
+
+    pub fn set_fixed_screen_fps(&mut self, id: i32, request: i32) {
+        let target = match request {
+            -1 => None,
+            15..=120 => Some(request as u32),
+            _ => return,
+        };
+        if let Some(user) = self.users.get_mut(&id) {
+            user.fixed_screen_fps = target;
+            self.adjust_fps();
+        }
+    }
+
+    pub fn fixed_target(&self) -> Option<u32> {
+        let mut users = self.users.values();
+        let initial = users.next()?.fixed_screen_fps?;
+        users.try_fold(initial, |lowest, user| user.fixed_screen_fps.map(|fps| fps.min(lowest)))
+    }
+
+    pub fn set_gpu_texture_encode(&mut self, name: &str, enabled: bool) {
+        if let Some(display) = self.displays.get_mut(name) {
+            display.gpu_texture_encode = enabled;
+        }
+    }
+
+    pub fn gpu_texture_encode(&self) -> bool {
+        !self.displays.is_empty() && self.displays.values().all(|display| display.gpu_texture_encode)
     }
 
     pub fn user_custom_fps(&mut self, id: i32, fps: u32) {

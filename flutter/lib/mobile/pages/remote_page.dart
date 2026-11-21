@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
@@ -25,6 +26,7 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
+import '../../utils/scale.dart';
 import '../awesun/awesun_native_bridge.dart';
 import '../ios_p2p_diagnostics.dart';
 import '../session_ime.dart';
@@ -97,8 +99,8 @@ class RemotePage extends StatefulWidget {
 }
 
 class _NativePointerBatch {
-  _NativePointerBatch(this.position);
-  Offset position;
+  _NativePointerBatch(this.target);
+  Offset target;
 }
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
@@ -135,9 +137,17 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   List<Future<void> Function()> _nativeDisplayActions = const [];
   _NativePointerBatch? _nativePointerBatch;
   bool _savingNativeScreenshot = false;
+  int? _nativeVideoTexture;
+  bool _nativeFixedFps = false;
+  bool _nativePerformanceBusy = false;
+  int _nativePerformanceTarget = 60;
+  Map<String, Object?> _lastNativePerformance = const {};
   ({bool obscured, double inset})? _nativePresentation;
   bool _nativeSessionRequested = false;
   bool _nativeSessionActive = false;
+  bool _nativePointerVisible = false;
+  Rect? _nativeMouseViewport;
+  bool _nativeMouseViewportScheduled = false;
   int _nativeSessionRevision = 0;
   late final _nativeSession = AwesunNativeBridge(
     inputModel: inputModel,
@@ -152,15 +162,33 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       if (mounted) clientClose(sessionId, gFFI);
     },
     onCommand: _nativeCommand,
-    onVirtualMove: _moveSessionMouse,
-    onVirtualPosition: _moveNativePointer,
-    onVirtualClick: (button) {
-      _nativePointerBatch = null;
-      _queueVirtualMouse(() => _clickSessionMouse(button));
+    onVirtualMove: _moveNativePointer,
+    onVideoTexture: (id) {
+      if (mounted && _nativeSessionActive && _nativeVideoTexture != id) {
+        setState(() => _nativeVideoTexture = id);
+        _syncNativePerformance();
+      }
     },
-    onVirtualDrag: (down) {
+    onPointerVisibility: (visible) {
+      if (mounted && _nativePointerVisible != visible) {
+        setState(() => _nativePointerVisible = visible);
+      }
+    },
+    onVirtualClick: (button, point) {
       _nativePointerBatch = null;
-      down ? _holdVirtualMouse() : _releaseVirtualMouse();
+      _queueVirtualMouse(() => _clickSessionMouse(button, nativePoint: point));
+    },
+    onVirtualDrag: (down, point) {
+      _nativePointerBatch = null;
+      down ? _holdVirtualMouse(nativePoint: point) : _releaseVirtualMouse();
+    },
+    onVirtualScroll: (steps, point) {
+      _nativePointerBatch = null;
+      _queueVirtualMouse(() async {
+        if (await _moveToNativePointer(point) && mounted && _canSendSessionInput) {
+          await inputModel.scroll(steps);
+        }
+      });
     },
   );
 
@@ -246,6 +274,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
           everAll([model.pi.isSet, model.waitForFirstImage], (_) {
         unawaited(_syncNativeSession());
       });
+      gFFI.qualityMonitorModel.addListener(_syncNativePerformance);
       gFFI.dialogManager.openDialog.addListener(_syncNativePresentation);
       gFFI.chatModel.chatWindowOpen.addListener(_syncNativePresentation);
       unawaited(_syncNativeSession());
@@ -256,6 +285,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Future<void> dispose() async {
     _nativeSessionReadiness?.dispose();
     if (isIOS) {
+      gFFI.qualityMonitorModel.removeListener(_syncNativePerformance);
       gFFI.dialogManager.openDialog.removeListener(_syncNativePresentation);
       gFFI.chatModel.chatWindowOpen.removeListener(_syncNativePresentation);
       if (_nativeSessionRevision != 0) _nativeSession.dispose();
@@ -752,8 +782,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _clickSessionMouse(MouseButtons button) async {
-    if (mounted && _canSendSessionInput && await _ensureVisibleCursor()) {
+  Future<void> _clickSessionMouse(MouseButtons button, {Offset? nativePoint}) async {
+    if (mounted && _canSendSessionInput &&
+        await (nativePoint == null ? _ensureVisibleCursor() : _moveToNativePointer(nativePoint))) {
       if (mounted && _canSendSessionInput) {
         if (isMobile && _showEdit) _resetSessionIme();
         await inputModel.tap(button);
@@ -797,40 +828,37 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       });
 
   void _moveNativePointer(Offset point) {
-    if (!point.isFinite) return;
     final pending = _nativePointerBatch;
     if (pending != null) {
-      pending.position = point;
+      pending.target = point;
       return;
     }
     final batch = _NativePointerBatch(point);
     _nativePointerBatch = batch;
     _queueVirtualMouse(() async {
       if (identical(_nativePointerBatch, batch)) _nativePointerBatch = null;
-      final next = batch.position;
-      if (!mounted || !_nativeSessionActive || !_canSendSessionInput) return;
-      final canvas = gFFI.canvasModel;
-      final view = canvas.size;
-      final frame = Rect.fromLTWH(
-        canvas.x, canvas.y + canvas.getAdjustY(),
-        canvas.getDisplayWidth() * canvas.scale,
-        canvas.getDisplayHeight() * canvas.scale,
-      ).intersect(Offset.zero & view);
-      if (frame.width < 1 || frame.height < 1) return;
-      final x = next.dx.clamp(frame.left, frame.right - 0.5).toDouble();
-      final y = next.dy.clamp(frame.top, frame.bottom - 0.5).toDouble();
-      await gFFI.cursorModel.move(x, y);
+      await _moveToNativePointer(batch.target);
     });
   }
 
-  void _holdVirtualMouse() => _queueVirtualMouse(() async {
-        if (_virtualMouseDown ||
-            !mounted ||
-            !_canSendSessionInput ||
-            !await _ensureVisibleCursor()) {
-          return;
-        }
-        if (!mounted || !_canSendSessionInput) return;
+  Future<bool> _moveToNativePointer(Offset point) async {
+    if (!mounted || !_nativeSessionActive || !_canSendSessionInput) return false;
+    final box = _sessionViewportKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return false;
+    final local = box.globalToLocal(point);
+    final cursor = gFFI.cursorModel;
+    if (cursor.getRemotePosInRect(local) == null) return false;
+    cursor.moveLocal(local.dx, local.dy, adjust: gFFI.canvasModel.getAdjustY());
+    await cursor.syncCursorPosition();
+    return true;
+  }
+
+  void _holdVirtualMouse({Offset? nativePoint}) => _queueVirtualMouse(() async {
+        if (_virtualMouseDown || !mounted || !_canSendSessionInput) return;
+        final ready = await (nativePoint == null
+            ? _ensureVisibleCursor()
+            : _moveToNativePointer(nativePoint));
+        if (!ready || !mounted || !_canSendSessionInput) return;
         await inputModel.tapDown(MouseButtons.left);
         _virtualMouseDown = true;
       });
@@ -892,10 +920,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (mounted &&
         revision == _nativeSessionRevision &&
         active != _nativeSessionActive) {
-      setState(() => _nativeSessionActive = active);
+      setState(() {
+        _nativeSessionActive = active;
+        if (!active) {
+          _nativeVideoTexture = null;
+          _nativePointerVisible = false;
+        }
+      });
       _nativePresentation = null;
+      _nativeMouseViewport = null;
+      _lastNativePerformance = const {};
       _syncNativePresentation();
       await gFFI.canvasModel.setMobileHeightFit(active);
+      if (active && mounted) {
+        if (_nativeFixedFps) await _nativeSession.configureVideoTexture(true);
+        _syncNativePerformance();
+      }
     }
   }
 
@@ -905,7 +945,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       obscured: gFFI.dialogManager.openDialog.value ||
           gFFI.chatModel.chatWindowOpen.value ||
           ModalRoute.isCurrentOf(context) == false,
-      inset: _showEdit ? MediaQuery.viewInsetsOf(context).bottom : 0.0,
+      inset: MediaQuery.viewInsetsOf(context).bottom,
     );
     if (_nativePresentation == next) return;
     _nativePresentation = next;
@@ -929,14 +969,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         }
       case 'display':
         return _nativeDisplayMenu();
+      case 'performance':
+        await _setNativePerformance(arguments['enabled'] == true);
+      case 'performanceTarget':
+        final fps = arguments['fps'];
+        if (fps is int && const [30, 60, 90, 120].contains(fps)) {
+          _nativePerformanceTarget = fps;
+          if (_nativeFixedFps) {
+            await bind.sessionSetCustomFps(sessionId: sessionId, fps: fps);
+          }
+          _syncNativePerformance();
+        }
       case 'displayAction':
         final index = arguments['index'];
         if (index is int && index >= 0 && index < _nativeDisplayActions.length) {
           await _nativeDisplayActions[index]();
         }
-      case 'displayAdvanced':
-        showOptions(context, widget.id, gFFI.dialogManager,
-            clearHeightFitOnScale: true);
       case 'chat':
         _sessionAction(SessionAction.chat);
       case 'keyboard':
@@ -1062,7 +1110,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       'touch': model.touchMode,
       'sound': !_nativeOption('disable-audio'),
       'canSound': model.permissions['audio'] != false,
-      'screenshot': gFFI.imageModel.image != null,
+      'screenshot': _nativeVideoTexture != null || gFFI.imageModel.image != null,
       'displays': _nativeCanSwitchDisplay(model) ? model.pi.displays.length : 0,
       'selectedDisplay': model.pi.currentDisplay,
       'quality': _nativeOption('show-quality-monitor'),
@@ -1077,6 +1125,49 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return model.pi.displays.length > 1 &&
         model.pi.currentDisplay != kAllDisplayValue &&
         (state.isEmpty || allowDisplaySwitchInPrivacyMode(model.pi, state.value));
+  }
+
+  void _syncNativePerformance() {
+    if (!mounted || !_nativeSessionActive) return;
+    final stats = gFFI.qualityMonitorModel.data;
+    final valid = gFFI.ffiModel.pi.features.fixedScreenFps;
+    final enabled = _nativeFixedFps;
+    final host = stats.fixedScreenFps;
+    final next = <String, Object?>{
+      'supported': valid,
+      'enabled': enabled,
+      'target': _nativePerformanceTarget,
+      'effective': host,
+      'gpuEncode': stats.gpuTextureEncode,
+      'gpuDecode': _nativeVideoTexture != null,
+      'fps': stats.fps,
+    };
+    if (mapEquals(next, _lastNativePerformance)) return;
+    _lastNativePerformance = next;
+    unawaited(_nativeSession.updatePerformance(next));
+  }
+
+  Future<void> _setNativePerformance(bool enabled) async {
+    if (_nativePerformanceBusy || enabled == _nativeFixedFps ||
+        !gFFI.ffiModel.pi.features.fixedScreenFps) return;
+    _nativePerformanceBusy = true;
+    try {
+      if (enabled) await _nativeSession.configureVideoTexture(true);
+      if (!mounted) return;
+      await bind.sessionToggleOption(sessionId: sessionId, value: 'fixed-screen-fps');
+      _nativeFixedFps = _nativeOption('fixed-screen-fps');
+      if (_nativeFixedFps) {
+        if (_nativePerformanceTarget != 60) {
+          await bind.sessionSetCustomFps(sessionId: sessionId, fps: _nativePerformanceTarget);
+        }
+      } else {
+        await _nativeSession.configureVideoTexture(false);
+        if (mounted) setState(() => _nativeVideoTexture = null);
+      }
+      _syncNativePerformance();
+    } finally {
+      _nativePerformanceBusy = false;
+    }
   }
 
   Future<List<Map<String, Object?>>> _nativeDisplayMenu() async {
@@ -1102,7 +1193,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (!mounted) return const [];
     final codecs = await toolbarCodec(context, widget.id, gFFI);
     if (!mounted) return const [];
+    final remoteCursor = await toolbarCursor(context, widget.id, gFFI);
+    if (!mounted) return const [];
     final toggles = await toolbarDisplayToggle(context, widget.id, gFFI);
+    if (!mounted) return const [];
+    final scale = await getSessionCustomScalePercent(sessionId);
     if (!mounted) return const [];
     for (final item in scales) {
       if (item.value == kRemoteViewStyleCustom) continue;
@@ -1120,12 +1215,13 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         if (title is! Text || title.data == null || item.onChanged == null) {
           continue;
         }
+        if (group.$1 == '画质' && item.value == kRemoteImageQualityCustom) continue;
         add(group.$1, title.data!, item.value == item.groupValue, () async {
           item.onChanged?.call(item.value);
         });
       }
     }
-    for (final item in toggles) {
+    for (final item in [...remoteCursor, ...toggles]) {
       final title = item.child;
       if (title is! Text || title.data == null || item.onChanged == null) {
         continue;
@@ -1134,16 +1230,101 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
         item.onChanged?.call(!item.value);
       });
     }
+    final peer = gFFI.ffiModel.pi;
+    final viewMode = scales.isEmpty ? null : scales.first.groupValue;
+    for (final percent in [75, 100, 125, 150, 200]) {
+      add('自定义缩放', '$percent%', !canvas.mobileHeightFit &&
+          viewMode == kRemoteViewStyleCustom && scale == percent, () async {
+        await canvas.setMobileHeightFit(false);
+        await bind.sessionSetFlutterOption(sessionId: sessionId,
+            k: kCustomScalePercentKey, v: percent.toString());
+        await bind.sessionSetViewStyle(sessionId: sessionId, value: kRemoteViewStyleCustom);
+        await canvas.updateViewStyle();
+      });
+    }
+
+    final previousQuality = await bind.sessionGetOption(sessionId: sessionId, arg: 'custom-image-quality');
+    if (!mounted) return const [];
+    final currentQuality = qualities.isEmpty ? null : qualities.first.groupValue;
+    for (final percent in [40, 60, 80, 100]) {
+      add('自定义画质', '$percent%', currentQuality == kRemoteImageQualityCustom &&
+          int.tryParse(previousQuality ?? '') == percent, () async {
+        await bind.sessionSetImageQuality(sessionId: sessionId, value: kRemoteImageQualityCustom);
+        await bind.sessionSetCustomImageQuality(sessionId: sessionId, value: percent);
+      });
+    }
+
+    final display = peer.tryGetDisplayIfNotAllDisplay(display: peer.currentDisplay);
+    final displayIndex = peer.currentDisplay;
+    if (_canSendSessionInput && display != null && peer.resolutions.length > 1) {
+      for (final resolution in peer.resolutions) {
+        final width = resolution.width;
+        final height = resolution.height;
+        add('远端分辨率', '$width × $height',
+            display.width == width && display.height == height, () async {
+          if (!_canSendSessionInput || peer.currentDisplay != displayIndex ||
+              !peer.resolutions.any((mode) => mode.width == width && mode.height == height)) {
+            return;
+          }
+          await bind.sessionChangeResolution(sessionId: sessionId,
+              display: displayIndex, width: width, height: height);
+        });
+      }
+    }
+
+    final privacy = PrivacyModeState.find(widget.id);
+    if (gFFI.ffiModel.pi.features.privacyMode && _canSendSessionInput ||
+        privacy.isNotEmpty) {
+      for (final item in toolbarPrivacyMode(privacy, context, widget.id, gFFI)) {
+        final title = item.child;
+        if (title is Text && title.data != null && item.onChanged != null) {
+          add('显示选项', title.data!, item.value, () async {
+            item.onChanged?.call(!item.value);
+          });
+        }
+      }
+    }
+
+    if (showVirtualDisplayMenu(gFFI) && privacy.isEmpty) {
+      if (peer.isRustDeskIdd) {
+        for (var index = 1; index <= kMaxVirtualDisplayCount; index++) {
+          final present = peer.RustDeskVirtualDisplays.contains(index);
+          add('虚拟显示器', '显示器 $index', present, () async {
+            if (!PrivacyModeState.find(widget.id).isNotEmpty) {
+              await bind.sessionToggleVirtualDisplay(sessionId: sessionId,
+                  index: index, on: !peer.RustDeskVirtualDisplays.contains(index));
+            }
+          });
+        }
+      } else if (peer.isAmyuniIdd) {
+        for (final enabled in [true, false]) {
+          add('虚拟显示器', enabled ? '添加' : '移除', false, () async {
+            if (privacy.isEmpty && (enabled ? peer.amyuniVirtualDisplayCount < 4 : peer.amyuniVirtualDisplayCount > 0)) {
+              await bind.sessionToggleVirtualDisplay(sessionId: sessionId, index: 0, on: enabled);
+            }
+          });
+        }
+      }
+      add('虚拟显示器', '移除全部', false, () async {
+        if (privacy.isEmpty) {
+          await bind.sessionToggleVirtualDisplay(sessionId: sessionId,
+              index: kAllVirtualDisplay, on: false);
+        }
+      });
+    }
     _nativeDisplayActions = commands;
+    _syncNativePerformance();
     return choices;
   }
 
   Future<String> _saveNativeScreenshot() async {
     if (_savingNativeScreenshot) return 'pending';
-    final frame = gFFI.imageModel.image?.clone();
-    if (frame == null) return 'noFrame';
+    final nativeTexture = _nativeVideoTexture;
+    final frame = nativeTexture == null ? gFFI.imageModel.image?.clone() : null;
+    if (frame == null && nativeTexture == null) return 'noFrame';
     _savingNativeScreenshot = true;
     try {
+      if (frame == null) return await _nativeSession.saveTexturePhoto();
       final png = await frame.toByteData(format: ui.ImageByteFormat.png);
       if (png == null) return 'encodeFailed';
       return await _nativeSession.savePhoto(
@@ -1152,7 +1333,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       debugPrint('Remote frame screenshot failed: ${error.runtimeType}');
       return 'saveFailed';
     } finally {
-      frame.dispose();
+      frame?.dispose();
       _savingNativeScreenshot = false;
     }
   }
@@ -1602,12 +1783,53 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       !gFFI.canvasModel.cursorEmbedded &&
       !gFFI.inputModel.relativeMouseMode.value;
 
+  void _scheduleNativeMouseViewport() {
+    if (!_nativeSessionActive || _nativeMouseViewportScheduled) return;
+    _nativeMouseViewportScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _nativeMouseViewportScheduled = false;
+      if (!mounted || !_nativeSessionActive) return;
+      final box = _sessionViewportKey.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.attached || !box.hasSize) return;
+      final canvas = gFFI.canvasModel;
+      final local = Rect.fromLTWH(
+        canvas.x,
+        canvas.y + canvas.getAdjustY(),
+        canvas.getDisplayWidth() * canvas.scale,
+        canvas.getDisplayHeight() * canvas.scale,
+      ).intersect(Offset.zero & box.size);
+      if (local.isEmpty) return;
+      final global = box.localToGlobal(local.topLeft) & local.size;
+      if (_nativeMouseViewport == global) return;
+      _nativeMouseViewport = global;
+      unawaited(_nativeSession.setMouseViewport(global));
+    });
+  }
+
   Widget getBodyForMobile() {
     return Container(
         color: isMobile ? Colors.black : MyTheme.canvasColor,
         child: Stack(children: () {
           final paints = [
-            ImagePaint(ffiModel: gFFI.ffiModel),
+            if (_nativeSessionActive)
+              Consumer<CanvasModel>(builder: (context, canvas, _) {
+                _scheduleNativeMouseViewport();
+                return const SizedBox.expand();
+              }),
+            if (_nativeVideoTexture != null)
+              Consumer<CanvasModel>(builder: (context, canvas, _) {
+                final texture = _nativeVideoTexture;
+                if (texture == null) return const SizedBox.shrink();
+                return Positioned(
+                  left: canvas.x,
+                  top: canvas.y + canvas.getAdjustY(),
+                  width: canvas.getDisplayWidth() * canvas.scale,
+                  height: canvas.getDisplayHeight() * canvas.scale,
+                  child: Texture(textureId: texture, filterQuality: FilterQuality.low),
+                );
+              })
+            else
+              ImagePaint(ffiModel: gFFI.ffiModel),
             Positioned(
               top: 10,
               right: 10,
@@ -1654,7 +1876,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                       ).workaroundFreezeLinuxMint(),
               ),
           ];
-          if (showCursorPaint) {
+          if (showCursorPaint && !_nativePointerVisible) {
             paints.add(CursorPaint(widget.id));
           }
           if (!_nativeSessionActive && gFFI.ffiModel.touchMode && !isMobile) {
@@ -2219,8 +2441,8 @@ class CursorPaint extends StatelessWidget {
   }
 }
 
-void showOptions(BuildContext context, String id, OverlayDialogManager dialogManager,
-    {bool clearHeightFitOnScale = false}) async {
+void showOptions(
+    BuildContext context, String id, OverlayDialogManager dialogManager) async {
   var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
   final image = gFFI.ffiModel.getConnectionImageText(peerId: id);
@@ -2315,10 +2537,7 @@ void showOptions(BuildContext context, String id, OverlayDialogManager dialogMan
             e.value,
             viewStyle.value,
             e.onChanged != null
-                ? (v) async {
-                    if (v != null && clearHeightFitOnScale) {
-                      await gFFI.canvasModel.setMobileHeightFit(false);
-                    }
+                ? (v) {
                     e.onChanged?.call(v);
                     if (v != null) viewStyle.value = v;
                   }

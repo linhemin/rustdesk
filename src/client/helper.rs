@@ -11,6 +11,8 @@ pub struct QualityStatus {
     pub target_bitrate: Option<i32>,
     pub codec_format: Option<CodecFormat>,
     pub chroma: Option<String>,
+    pub fixed_screen_fps: Option<u32>,
+    pub gpu_texture_encode: Option<bool>,
 }
 
 #[inline]

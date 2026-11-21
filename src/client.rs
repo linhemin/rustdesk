@@ -110,6 +110,9 @@ pub mod io_loop;
 mod video_delivery;
 pub mod screenshot;
 
+#[cfg(all(target_os = "ios", feature = "flutter"))]
+mod ios_texture;
+
 pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
 // Empirical restart reconnect grace window.
@@ -3215,6 +3218,7 @@ pub struct LoginConfigHandler {
     pub save_ab_password_to_recent: bool, // true: connected with ab password
     pub other_server: Option<(String, String, String)>,
     pub custom_fps: Arc<Mutex<Option<usize>>>,
+    pub fixed_screen_fps: Option<i32>,
     pub adapter_luid: Option<i64>,
     pub mark_unsupported: Vec<CodecFormat>,
     pub selected_windows_session_id: Option<u32>,
@@ -3621,6 +3625,15 @@ impl LoginConfigHandler {
             option.block_input = BoolOption::Yes.into();
         } else if name == "unblock-input" {
             option.block_input = BoolOption::No.into();
+        } else if name == keys::OPTION_FIXED_SCREEN_FPS {
+            if !self.features.as_ref().is_some_and(|features| features.fixed_screen_fps)
+                || self.conn_type != ConnType::DEFAULT_CONN
+            {
+                return None;
+            }
+            self.fixed_screen_fps = self.fixed_screen_fps.is_none().then_some(60);
+            option.fixed_screen_fps = self.fixed_screen_fps.unwrap_or(-1);
+            option.supported_decoding = Some(self.get_supported_decoding()).into();
         } else if name == "show-quality-monitor" {
             config.show_quality_monitor.v = !config.show_quality_monitor.v;
         } else if name == "allow_swap_key" {
@@ -3679,7 +3692,7 @@ impl LoginConfigHandler {
             crate::clipboard::try_empty_clipboard_files(crate::clipboard::ClipboardSide::Client, 0);
         }
 
-        if !name.contains("block-input") {
+        if !name.contains("block-input") && name != keys::OPTION_FIXED_SCREEN_FPS {
             self.save_config(config);
         }
         let mut misc = Misc::new();
@@ -3772,17 +3785,23 @@ impl LoginConfigHandler {
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
+        msg.fixed_screen_fps = self.fixed_screen_fps.unwrap_or_default();
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
 
     pub fn get_supported_decoding(&self) -> SupportedDecoding {
-        Decoder::supported_decodings(
+        let decoding = Decoder::supported_decodings(
             Some(&self.id),
             use_texture_render(),
             self.adapter_luid,
             &self.mark_unsupported,
-        )
+        );
+        #[cfg(all(target_os = "ios", feature = "flutter"))]
+        if self.fixed_screen_fps.is_some() {
+            return ios_texture::prefer_native(decoding, &self.supported_encoding, &self.mark_unsupported);
+        }
+        decoding
     }
 
     /// Parse the image quality option.
@@ -3832,6 +3851,8 @@ impl LoginConfigHandler {
             self.config.disable_audio.v
         } else if name == "disable-clipboard" {
             self.config.disable_clipboard.v
+        } else if name == keys::OPTION_FIXED_SCREEN_FPS {
+            self.fixed_screen_fps.is_some()
         } else if name == "show-quality-monitor" {
             self.config.show_quality_monitor.v
         } else if name == "allow_swap_key" {
@@ -3933,6 +3954,17 @@ impl LoginConfigHandler {
     /// * `save_config` - Save the config.
     pub fn set_custom_fps(&mut self, fps: i32, save_config: bool) -> Message {
         let mut misc = Misc::new();
+        if self.fixed_screen_fps.is_some() {
+            let target = fps.clamp(15, 120);
+            self.fixed_screen_fps = Some(target);
+            misc.set_option(OptionMessage {
+                fixed_screen_fps: target,
+                ..Default::default()
+            });
+            let mut msg = Message::new();
+            msg.set_misc(misc);
+            return msg;
+        }
         misc.set_option(OptionMessage {
             custom_fps: fps,
             ..Default::default()
@@ -4239,12 +4271,7 @@ impl LoginConfigHandler {
     }
 
     pub fn update_supported_decodings(&self) -> Message {
-        let decoding = scrap::codec::Decoder::supported_decodings(
-            Some(&self.id),
-            use_texture_render(),
-            self.adapter_luid,
-            &self.mark_unsupported,
-        );
+        let decoding = self.get_supported_decoding();
         let mut misc = Misc::new();
         misc.set_option(OptionMessage {
             supported_decoding: hbb_common::protobuf::MessageField::some(decoding),
@@ -4381,6 +4408,32 @@ pub fn start_video_thread<F, T>(
                         let display = vf.display as usize;
                         let start = std::time::Instant::now();
                         let format = CodecFormat::from(&vf);
+                        #[cfg(all(target_os = "ios", feature = "flutter"))]
+                        if session.lc.read().unwrap().fixed_screen_fps.is_some()
+                            && matches!(format, CodecFormat::H264 | CodecFormat::H265)
+                        {
+                            match ios_texture::decode(&vf) {
+                                ios_texture::DecodeStatus::Frame => {
+                                    *chroma.write().unwrap() = Some(Chroma::I420);
+                                    let mut rgb = ImageRgb::new(ImageFormat::ARGB, crate::get_dst_align_rgba());
+                                    video_callback(display, &mut rgb, std::ptr::null_mut(), false);
+                                    fps_calculate(&mut skip_beginning, &fps, false,
+                                        start.elapsed(), &mut count, &mut duration);
+                                }
+                                ios_texture::DecodeStatus::Pending => {}
+                                ios_texture::DecodeStatus::Failed => {
+                                    let mut lc = session.lc.write().unwrap();
+                                    if !lc.mark_unsupported.contains(&format) {
+                                        lc.mark_unsupported.push(format);
+                                        let capabilities = lc.update_supported_decodings();
+                                        drop(lc);
+                                        session.send(Data::Message(capabilities));
+                                        session.refresh_video(display as _);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if video_handler.is_none() {
                             let mut handler = VideoHandler::new(format, display);
                             let record_state = session.lc.read().unwrap().record_state;

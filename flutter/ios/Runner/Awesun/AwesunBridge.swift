@@ -19,20 +19,39 @@ final class AwesunBridge {
         channel?.invokeMethod("command", arguments: values, result: completion)
     }
 
-    func virtualClick(_ button: String) {
-        channel?.invokeMethod("virtualClick", arguments: ["button": button])
+    func virtualClick(_ button: String, at point: CGPoint?) {
+        var args: [String: Any] = ["button": button]
+        if let point = point {
+            args["x"] = Double(point.x)
+            args["y"] = Double(point.y)
+        }
+        channel?.invokeMethod("virtualClick", arguments: args)
     }
 
-    func virtualPosition(_ point: CGPoint) {
-        channel?.invokeMethod("virtualPosition", arguments: ["x": Double(point.x), "y": Double(point.y)])
+    func virtualMove(to point: CGPoint) {
+        channel?.invokeMethod("virtualMove", arguments: ["x": Double(point.x), "y": Double(point.y)])
     }
 
-    func virtualDrag(_ down: Bool) {
-        channel?.invokeMethod("virtualDrag", arguments: ["down": down])
+    func virtualDrag(_ down: Bool, at point: CGPoint? = nil) {
+        var args: [String: Any] = ["down": down]
+        if let point = point {
+            args["x"] = Double(point.x)
+            args["y"] = Double(point.y)
+        }
+        channel?.invokeMethod("virtualDrag", arguments: args)
     }
 
-    func scroll(_ steps: Int) {
-        channel?.invokeMethod("scroll", arguments: ["dy": steps])
+    func scroll(_ steps: Int, at point: CGPoint?) {
+        var args: [String: Any] = ["dy": steps]
+        if let point = point {
+            args["x"] = Double(point.x)
+            args["y"] = Double(point.y)
+        }
+        channel?.invokeMethod("scroll", arguments: args)
+    }
+
+    func pointerVisible(_ visible: Bool) {
+        channel?.invokeMethod("virtualPointerVisible", arguments: ["visible": visible])
     }
 
     func key(_ name: String, down: Bool) {

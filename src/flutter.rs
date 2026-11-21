@@ -729,6 +729,8 @@ impl InvokeUiSession for FlutterHandler {
                     &status.codec_format.map_or(NULL, |it| it.to_string()),
                 ),
                 ("chroma", &status.chroma.map_or(NULL, |it| it.to_string())),
+                ("fixed_screen_fps", &status.fixed_screen_fps.map_or(NULL, |it| it.to_string())),
+                ("gpu_texture_encode", &status.gpu_texture_encode.map_or(NULL, |it| it.to_string())),
             ],
             &[],
         );
@@ -897,6 +899,7 @@ impl InvokeUiSession for FlutterHandler {
         let mut features: HashMap<&str, bool> = Default::default();
         for ref f in pi.features.iter() {
             features.insert("privacy_mode", f.privacy_mode);
+            features.insert("fixed_screen_fps", f.fixed_screen_fps);
         }
         // compatible with 1.1.9
         if get_version_number(&pi.version) < get_version_number("1.2.0") {
