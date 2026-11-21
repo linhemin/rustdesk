@@ -88,7 +88,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             child: IndexedStack(index: current == 2 ? 1 : 0, children: [
           ConnectionPage(
               devicesOnly: current == 1,
-              onOpenDevices: () => select(1),
               notices: current == 0
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -786,55 +785,57 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
     if (usesWorkspaceStyle) {
       final theme = Theme.of(context);
-      return Padding(
-          padding: EdgeInsets.fromLTRB(8, marginTop, 8, 4),
-          child: Material(
+      final message = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (title.isNotEmpty)
+              Text(translate(title), style: theme.textTheme.labelLarge),
+            if (content.isNotEmpty)
+              Text(translate(content), style: theme.textTheme.bodySmall),
+          ]);
+      final actions = Wrap(children: [
+        if (btnText.isNotEmpty)
+          TextButton(onPressed: onPressed, child: Text(translate(btnText))),
+        if (help != null && link != null)
+          TextButton(
+              onPressed: () => launchUrl(Uri.parse(link)),
+              child: Text(translate(help))),
+        if (closeButton == true)
+          IconButton(
+              tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+              icon: const Icon(Icons.close_rounded, size: 16),
+              onPressed: closeCard),
+      ]);
+      return Container(
+          margin: const EdgeInsets.only(top: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
               color: theme.cardColor,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: BorderSide(color: theme.dividerColor)),
-              child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(
-                            title == 'Permissions'
-                                ? Icons.verified_user_outlined
-                                : Icons.info_outline_rounded,
-                            size: 20,
-                            color: theme.colorScheme.primary),
-                        const SizedBox(width: 10),
-                        Expanded(
-                            child: Column(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: theme.dividerColor)),
+          child: LayoutBuilder(
+              builder: (_, bounds) => Row(children: [
+                    Icon(
+                        title == 'Permissions'
+                            ? Icons.verified_user_outlined
+                            : Icons.info_outline_rounded,
+                        size: 17,
+                        color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                        child: bounds.maxWidth < 390
+                            ? Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                              if (title.isNotEmpty)
-                                Text(translate(title),
-                                    style: theme.textTheme.titleMedium),
-                              if (content.isNotEmpty)
-                                Text(translate(content),
-                                    style: theme.textTheme.bodyMedium),
-                              if (btnText.isNotEmpty || help != null)
-                                Wrap(children: [
-                                  if (btnText.isNotEmpty)
-                                    TextButton(
-                                        onPressed: onPressed,
-                                        child: Text(translate(btnText))),
-                                  if (help != null && link != null)
-                                    TextButton(
-                                        onPressed: () =>
-                                            launchUrl(Uri.parse(link)),
-                                        child: Text(translate(help))),
-                                ]),
-                            ])),
-                        if (closeButton == true)
-                          IconButton(
-                              tooltip: MaterialLocalizations.of(context)
-                                  .closeButtonTooltip,
-                              icon: const Icon(Icons.close_rounded, size: 17),
-                              onPressed: closeCard),
-                      ]))));
+                                children: [message, actions])
+                            : Row(children: [
+                                Expanded(child: message),
+                                ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                        maxWidth: bounds.maxWidth * .45),
+                                    child: actions),
+                              ])),
+                  ])));
     }
     return Stack(
       children: [

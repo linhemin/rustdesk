@@ -682,7 +682,8 @@ class _PeerTabPageState extends State<PeerTabPage>
         offstage: model.currentTabCachedPeers.isEmpty,
         child: _createMultiSelection(),
       ),
-      _createPeerViewTypeSwitch(context),
+      if (ConnectionPeerList.of(context)?.onConnect == null)
+        _createPeerViewTypeSwitch(context),
       Offstage(
         offstage: model.currentTab == PeerTabIndex.recent.index,
         child: PeerSortDropdown(),
@@ -996,20 +997,6 @@ class PeerSortDropdown extends StatefulWidget {
 }
 
 class _PeerSortDropdownState extends State<PeerSortDropdown> {
-  _PeerSortDropdownState() {
-    if (!PeerSortType.values.contains(peerSort.value)) {
-      _loadLocalOptions();
-    }
-  }
-
-  void _loadLocalOptions() {
-    peerSort.value = PeerSortType.remoteId;
-    bind.setLocalFlutterOption(
-      k: kOptionPeerSorting,
-      v: peerSort.value,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final style = TextStyle(

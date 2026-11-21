@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/peer_tab_page.dart';
+import 'package:flutter_hbb/common/widgets/peers_view.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/mobile/pages/connection_page.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -8,6 +10,18 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
+  final options = <String, String>{};
+
+  @override
+  String getLocalFlutterOption({required String k, dynamic hint}) =>
+      options[k] ?? '';
+
+  @override
+  Future<void> setLocalFlutterOption(
+      {required String k, required String v, dynamic hint}) async {
+    options[k] = v;
+  }
+
   @override
   String translate(
           {required String name, required String locale, dynamic hint}) =>
@@ -18,6 +32,13 @@ void main() {
   setUpAll(() {
     isTest = true;
     platformFFI.setBindingForTesting(_Binding());
+  });
+
+  test('a fresh directory has a saved sort order before opening Favorites', () {
+    expect(bind.getLocalFlutterOption(k: kOptionPeerSorting), isEmpty);
+    expect(peerSort.value, PeerSortType.remoteId);
+    expect(bind.getLocalFlutterOption(k: kOptionPeerSorting),
+        PeerSortType.remoteId);
   });
 
   testWidgets('iPhone device search opens when tapped near the target edge',

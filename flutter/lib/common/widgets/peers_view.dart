@@ -56,10 +56,13 @@ class PeersModelName {
 final peerSearchText = "".obs;
 
 /// for peer sort, global obs value
-RxString? _peerSort;
-RxString get peerSort {
-  _peerSort ??= bind.getLocalFlutterOption(k: kOptionPeerSorting).obs;
-  return _peerSort!;
+final RxString peerSort = _loadPeerSort().obs;
+
+String _loadPeerSort() {
+  final value = bind.getLocalFlutterOption(k: kOptionPeerSorting);
+  if (PeerSortType.values.contains(value)) return value;
+  bind.setLocalFlutterOption(k: kOptionPeerSorting, v: PeerSortType.remoteId);
+  return PeerSortType.remoteId;
 }
 
 // list for listener
@@ -235,15 +238,17 @@ class _PeersViewState extends State<_PeersView>
       return FutureBuilder<List<Peer>>(
         builder: (context, snapshot) {
           if (snapshot.hasData) {
+            final compact = ConnectionPeerList.of(context)?.onConnect != null;
             var peers = snapshot.data!;
             if (peers.length > 1000) peers = peers.sublist(0, 1000);
             gFFI.peerTabModel.setCurrentTabCachedPeers(peers);
+            Widget trackedPeer(Peer peer) => VisibilityDetector(
+                  key: ValueKey(_cardId(peer.id)),
+                  onVisibilityChanged: onVisibilityChanged,
+                  child: widget.peerCardBuilder(peer),
+                );
             buildOnePeer(Peer peer, bool isPortrait) {
-              final visibilityChild = VisibilityDetector(
-                key: ValueKey(_cardId(peer.id)),
-                onVisibilityChanged: onVisibilityChanged,
-                child: widget.peerCardBuilder(peer),
-              );
+              final visibilityChild = trackedPeer(peer);
               // `Provider.of<PeerTabModel>(context)` will causes infinete loop.
               // Because `gFFI.peerTabModel.setCurrentTabCachedPeers(peers)` will trigger `notifyListeners()`.
               //
@@ -296,6 +301,14 @@ class _PeersViewState extends State<_PeersView>
               _curPeers.clear();
               _curPeers.addAll(peers.map((e) => e.id));
               _queryOnlines(true);
+            }
+            if (compact) {
+              return ListView.separated(
+                  controller: _scrollController,
+                  itemCount: peers.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 3),
+                  itemBuilder: (_, index) =>
+                      SizedBox(height: 48, child: trackedPeer(peers[index])));
             }
             return child;
           } else {
@@ -363,15 +376,6 @@ class _PeersViewState extends State<_PeersView>
       String searchText, String sortedBy, List<Peer> peers) async {
     if (widget.peerFilter != null) {
       peers = peers.where((peer) => widget.peerFilter!(peer)).toList();
-    }
-
-    // fallback to id sorting
-    if (!PeerSortType.values.contains(sortedBy)) {
-      sortedBy = PeerSortType.remoteId;
-      bind.setLocalFlutterOption(
-        k: kOptionPeerSorting,
-        v: sortedBy,
-      );
     }
 
     if (widget.peers.loadEvent != LoadEvent.recent) {

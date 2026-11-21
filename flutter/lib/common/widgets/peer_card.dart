@@ -25,6 +25,19 @@ enum PeerUiType { grid, tile, list }
 
 final peerCardUiType = PeerUiType.grid.obs;
 
+class ConnectionPeerList extends InheritedWidget {
+  const ConnectionPeerList({super.key, this.onConnect, required super.child});
+
+  final void Function(Peer, PeerTabIndex)? onConnect;
+
+  static ConnectionPeerList? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<ConnectionPeerList>();
+
+  @override
+  bool updateShouldNotify(ConnectionPeerList oldWidget) =>
+      onConnect != oldWidget.onConnect;
+}
+
 bool? hideUsernameOnCard;
 
 class _PeerCard extends StatefulWidget {
@@ -56,8 +69,112 @@ class _PeerCardState extends State<_PeerCard>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    final onConnect = ConnectionPeerList.of(context)?.onConnect;
+    if (onConnect != null) return _connectionRow(onConnect);
     return Obx(() =>
         stateGlobal.isPortrait.isTrue ? _buildPortrait() : _buildLandscape());
+  }
+
+  Widget _connectionRow(void Function(Peer, PeerTabIndex) onConnect) {
+    final peer = widget.peer;
+    final theme = Theme.of(context);
+    final model = Provider.of<PeerTabModel>(context);
+    hideUsernameOnCard ??=
+        bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
+    final host = [
+      if (hideUsernameOnCard != true && peer.username.isNotEmpty) peer.username,
+      if (peer.hostname.isNotEmpty) peer.hostname,
+    ].join('@');
+    final id = formatID(peer.id);
+    final name = peer.alias.isNotEmpty
+        ? peer.alias
+        : host.isNotEmpty
+            ? host
+            : id;
+    final details = [
+      if (name != id) id,
+      if (host.isNotEmpty && name != host) host,
+      if (_showNote(peer)) peer.note,
+    ];
+    final selected = model.multiSelectionMode && model.isPeerSelected(peer.id);
+    void activate() {
+      if (model.multiSelectionMode) {
+        model.select(peer);
+      } else {
+        onConnect(peer, widget.tab);
+      }
+    }
+
+    void openMenu(Offset position) {
+      _menuPos = RelativeRect.fromLTRB(
+          position.dx, position.dy, position.dx, position.dy);
+      _showPeerMenu(peer.id);
+    }
+
+    return Material(
+        color:
+            selected ? theme.colorScheme.secondaryContainer : theme.cardColor,
+        borderRadius: BorderRadius.circular(10),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+            onTap: activate,
+            onDoubleTap: model.multiSelectionMode ? null : activate,
+            onSecondaryTapDown: (details) => openMenu(details.globalPosition),
+            child: Padding(
+                padding: const EdgeInsetsDirectional.only(start: 10, end: 4),
+                child: Row(children: [
+                  Container(
+                      width: 32,
+                      height: 32,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8)),
+                      child: Icon(_deviceIcon(peer),
+                          size: 19,
+                          color: theme.colorScheme.primary,
+                          semanticLabel: peer.platform)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: Tooltip(
+                    message: [name, ...details, ...peer.tags].join(' · '),
+                    child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall),
+                          if (details.isNotEmpty)
+                            Text(details.join(' · '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: theme.hintColor)),
+                        ]),
+                  )),
+                  if (_shouldBuildPasswordIcon(peer))
+                    const Icon(Icons.key_rounded, size: 14),
+                  getOnline(7, peer.online),
+                  Text(translate(peer.online ? 'Online' : 'Offline'),
+                      style: theme.textTheme.labelSmall),
+                  const SizedBox(width: 8),
+                  if (model.multiSelectionMode)
+                    checkBoxOrActionMoreLandscape(peer, isTile: true)
+                  else
+                    Builder(
+                        builder: (menuContext) => IconButton(
+                            tooltip: translate('More'),
+                            icon:
+                                const Icon(Icons.more_horiz_rounded, size: 20),
+                            onPressed: () {
+                              final box =
+                                  menuContext.findRenderObject() as RenderBox;
+                              openMenu(box.localToGlobal(
+                                  box.size.bottomLeft(Offset.zero)));
+                            })),
+                ]))));
   }
 
   Widget gestureDetector({required Widget child}) {
@@ -259,13 +376,6 @@ class _PeerCardState extends State<_PeerCard>
       if (name.isNotEmpty) formatID(peer.id),
       if (host.isNotEmpty && host != name) host,
     ];
-    final icon = switch (peer.platform) {
-      kPeerPlatformMacOS => Icons.desktop_mac_outlined,
-      kPeerPlatformWindows => Icons.laptop_windows_outlined,
-      kPeerPlatformAndroid => Icons.phone_android_rounded,
-      kPeerPlatformLinux => Icons.dns_outlined,
-      _ => Icons.devices_outlined,
-    };
     return Row(children: [
       Container(
         width: 44,
@@ -274,7 +384,7 @@ class _PeerCardState extends State<_PeerCard>
         decoration: BoxDecoration(
             color: theme.colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(13)),
-        child: Icon(icon,
+        child: Icon(_deviceIcon(peer),
             color: theme.colorScheme.primary,
             size: 24,
             semanticLabel: peer.platform),
@@ -330,6 +440,14 @@ class _PeerCardState extends State<_PeerCard>
       checkBoxOrActionMorePortrait(peer),
     ]);
   }
+
+  IconData _deviceIcon(Peer peer) => switch (peer.platform) {
+        kPeerPlatformMacOS => Icons.desktop_mac_outlined,
+        kPeerPlatformWindows => Icons.laptop_windows_outlined,
+        kPeerPlatformAndroid => Icons.phone_android_rounded,
+        kPeerPlatformLinux => Icons.dns_outlined,
+        _ => Icons.devices_outlined,
+      };
 
   Widget _buildPeerTile(
       BuildContext context, Peer peer, Rx<BoxDecoration?>? deco) {

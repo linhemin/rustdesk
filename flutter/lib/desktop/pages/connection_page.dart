@@ -14,9 +14,11 @@ import 'package:get/get.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
+import 'package:flutter_hbb/models/peer_tab_model.dart';
 
 import '../../common.dart';
 import '../../common/formatter/id_formatter.dart';
+import '../../common/widgets/peer_card.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../common/widgets/autocomplete.dart';
 import '../../models/platform_model.dart';
@@ -190,12 +192,10 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage(
-      {Key? key, this.devicesOnly = false, this.notices, this.onOpenDevices})
+  const ConnectionPage({Key? key, this.devicesOnly = false, this.notices})
       : super(key: key);
   final bool devicesOnly;
   final Widget? notices;
-  final VoidCallback? onOpenDevices;
 
   @override
   State<ConnectionPage> createState() => _ConnectionPageState();
@@ -224,6 +224,12 @@ class _ConnectionPageState extends State<ConnectionPage>
         isTerminal: _mode == 2,
         isViewCamera: _mode == 3,
       );
+
+  void _connectSelectedPeer(Peer peer, PeerTabIndex tab) =>
+      connectInPeerTab(context, peer, tab,
+          isFileTransfer: _mode == 1,
+          isTerminal: _mode == 2,
+          isViewCamera: _mode == 3);
 
   bool isWindowMinimized = false;
 
@@ -353,21 +359,15 @@ class _ConnectionPageState extends State<ConnectionPage>
                           const SizedBox(height: 10),
                           _buildRemoteIDTextField(context),
                           if (widget.notices != null) widget.notices!,
-                          Align(
-                              alignment: AlignmentDirectional.centerStart,
-                              child: TextButton.icon(
-                                  onPressed: widget.onOpenDevices,
-                                  icon: const Icon(Icons.devices_rounded,
-                                      size: 18),
-                                  label:
-                                      Text(translate('Accessible devices')))),
                         ]),
                   )),
         SliverFillRemaining(
             hasScrollBody: true,
             child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: PeerTabPage())),
+                padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+                child: ConnectionPeerList(
+                    onConnect: widget.devicesOnly ? null : _connectSelectedPeer,
+                    child: const PeerTabPage()))),
       ]);
     }
     return Column(
