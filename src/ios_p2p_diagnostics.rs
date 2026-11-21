@@ -160,7 +160,7 @@ fn save(path: &Path, contents: &str, seq: u64) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "ios")]
-pub(crate) use recorder::{disable, record_fallback, Observation};
+pub(crate) use recorder::{disable, record_fallback, record_milestone, Observation};
 
 #[cfg(target_os = "ios")]
 mod recorder {
@@ -456,6 +456,13 @@ mod recorder {
         if let Some(mut observation) = Observation::new(true, "relay-fallback") {
             observation.set_stage(reason);
             observation.result = "fallback";
+        }
+    }
+
+    pub(crate) fn record_milestone(phase: &'static str, stage: &'static str) {
+        if let Some(mut observation) = Observation::new(true, phase) {
+            observation.set_stage(stage);
+            observation.result = "observed";
         }
     }
 

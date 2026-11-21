@@ -4,7 +4,7 @@ use hbb_common::{
     bail,
     bytes::{BufMut, Bytes, BytesMut},
     config::Config,
-    futures_util::{sink::SinkExt, stream::StreamExt},
+    futures_util::{future::BoxFuture, sink::SinkExt, stream::StreamExt, FutureExt},
     log,
     sodiumoxide::{crypto::secretbox, randombytes},
     tcp::{FramedStream, KxTranscript},
@@ -823,27 +823,32 @@ impl Attempt {
     }
 }
 
-async fn ice_has_no_authenticated_traffic(pc: &WebRTCStream) -> bool {
+fn ice_needs_confirmed_path(io: Option<[u32; 6]>, direct_selected: bool) -> bool {
+    matches!(io, Some([_, _, _, _, _, 0])) && !direct_selected
+}
+
+async fn ice_has_no_confirmed_path(pc: &WebRTCStream) -> bool {
     let (io, pair) = tokio::join!(
         pc.direct_punch_io(),
         timeout(Duration::from_millis(250), pc.is_relayed()),
     );
-    // Accepted ICE requests and matched responses can precede nomination and DTLS.
-    matches!(io, Some([_, _, 0, _, _, 0])) && matches!(pair, Ok(None | Some(true)))
+    // An inbound Binding request can be one-way. A matched reply or a selected
+    // direct pair is enough to keep waiting for nomination and DTLS.
+    pair.is_ok_and(|selected| ice_needs_confirmed_path(io, selected == Some(false)))
 }
 
 async fn wait_lite_connected(pc: &mut WebRTCStream) -> ResultType<()> {
     let probe = pc.clone();
     let idle = async {
         tokio::time::sleep(LITE_IDLE_WINDOW).await;
-        if !ice_has_no_authenticated_traffic(&probe).await {
+        if !ice_has_no_confirmed_path(&probe).await {
             pending::<()>().await;
         }
     };
     tokio::select! {
         biased;
         connected = pc.wait_connected(LITE_TIMEOUT) => connected,
-        _ = idle => bail!("No authenticated ICE traffic during the lightweight window"),
+        _ = idle => bail!("No matched ICE reply or selected direct pair during the lightweight window"),
     }
 }
 
@@ -857,7 +862,7 @@ async fn wait_full_connected(
         let reported = status.wait_for(|status|
             status.full.is_some_and(|sample| sample.empty_pool)
                 || status.full_peer.is_some_and(|sample| sample.empty_pool)).await.is_ok();
-        if !reported || !ice_has_no_authenticated_traffic(&probe).await {
+        if !reported || !ice_has_no_confirmed_path(&probe).await {
             pending::<()>().await;
         }
     };
@@ -1255,6 +1260,14 @@ mod tests {
     }
 
     #[test]
+    fn one_way_requests_do_not_extend_punching_but_a_confirmed_path_does() {
+        assert!(ice_needs_confirmed_path(Some([28, 24, 24, 24, 0, 0]), false));
+        assert!(!ice_needs_confirmed_path(Some([28, 24, 24, 24, 0, 1]), false));
+        assert!(!ice_needs_confirmed_path(Some([28, 24, 24, 24, 0, 0]), true));
+        assert!(!ice_needs_confirmed_path(None, false));
+    }
+
+    #[test]
     fn only_failed_lite_connectivity_checks_escalate_to_full_once() {
         use OfferMode::*;
         let mut retries = RetrySchedule::default();
@@ -1631,6 +1644,7 @@ async fn run(
     let mut last_lite_step = None;
     let mut next_attempt = Instant::now() + Duration::from_secs(1);
     let mut direct: Option<Direct> = None;
+    let mut direct_write: Option<BoxFuture<'static, (bool, ResultType<()>)>> = None;
     let mut first_relay_data = None;
     let mut seq = Sequence::default();
     let mut message: Option<BytesMut> = None;
@@ -1798,15 +1812,48 @@ async fn run(
                         }
                     }
                 } else {
-                    relay_pending(&relay, &mut direct, &mut seq, &path, Some("direct receive ended")).await?;
+                    let reason = match from_direct {
+                        None => "direct data channel ended",
+                        Some(Err(err)) if err.kind() == std::io::ErrorKind::InvalidData => {
+                            "direct data channel rejected a frame"
+                        }
+                        Some(Err(err)) if err.to_string().starts_with("WebRTC connection closed:") => {
+                            "direct peer connection closed"
+                        }
+                        _ => "direct data channel read failed",
+                    };
+                    relay_pending(&relay, &mut direct, &mut seq, &path, Some(reason)).await?;
                 }
             }
             payload = from_app.recv(), if message.is_none() => {
                 let Some(payload) = payload else { break };
                 message = Some(payload);
             }
+            (last, result) = async {
+                match direct_write.as_mut() {
+                    Some(write) => write.await,
+                    None => pending().await,
+                }
+            } => {
+                direct_write = None;
+                if let Err(err) = result {
+                    let reason = if err.downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::TimedOut)
+                    {
+                        "direct data channel write timed out"
+                    } else {
+                        "direct data channel write failed"
+                    };
+                    relay_pending(&relay, &mut direct, &mut seq, &path, Some(reason)).await?;
+                } else if last {
+                    if let Some(route) = direct.as_mut() {
+                        route.first_sent.get_or_insert_with(Instant::now);
+                    }
+                }
+            }
             _ = std::future::ready(()),
-                if !switching && message.is_some() && seq.sent - seq.acked < MAX_IN_FLIGHT =>
+                if !switching && direct_write.is_none() && message.is_some()
+                    && seq.sent - seq.acked < MAX_IN_FLIGHT =>
             {
                 let payload = message.as_mut().expect("pending application message");
                 let length = payload.len().min(FRAGMENT);
@@ -1819,13 +1866,11 @@ async fn run(
                 if !seq.can_send_direct(bytes.len()) {
                     relay_pending(&relay, &mut direct, &mut seq, &path, Some("direct send queue full")).await?;
                 }
-                if let Some(route) = direct.as_mut() {
+                if let Some(route) = direct.as_ref() {
                     seq.track(bytes.clone());
-                    if route.rtc.0.send_raw(bytes.to_vec()).await.is_err() {
-                        relay_pending(&relay, &mut direct, &mut seq, &path, Some("direct send failed")).await?;
-                    } else if last {
-                        route.first_sent.get_or_insert_with(Instant::now);
-                    }
+                    let mut rtc = route.rtc.0.clone();
+                    // Keep polling inbound SCTP and relay acknowledgements under send backpressure.
+                    direct_write = Some(async move { (last, rtc.send_bytes(bytes).await) }.boxed());
                 } else {
                     first_relay_data.get_or_insert_with(Instant::now);
                     relay.send(bytes).await?;
@@ -1954,10 +1999,15 @@ async fn run(
             if direct.active && !direct.reported {
                 if let (Some(start), Some(tx), Some(rx)) = (first_relay_data, direct.first_sent, direct.first_received) {
                     direct.reported = true;
+                    #[cfg(target_os = "ios")]
+                    crate::ios_p2p_diagnostics::record_milestone("direct-data", "sent and received complete application messages");
                     log::info!("RustDesk direct application data observed; relayDataToSendMs={} relayDataToReceiveMs={}",
                         tx.saturating_duration_since(start).as_millis(), rx.saturating_duration_since(start).as_millis());
                 }
             }
+        } else {
+            // The old data channel is closed. Its unacknowledged frames have been replayed.
+            direct_write = None;
         }
     }
     Ok(())
