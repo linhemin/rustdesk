@@ -15,7 +15,7 @@ final class AppleWorkspaceNavigationFactory: NSObject, FlutterPlatformViewFactor
         self.messenger = messenger
     }
 
-    func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
+    func createArgsCodec() -> (FlutterMessageCodec & NSObjectProtocol)? {
         FlutterStandardMessageCodec.sharedInstance()
     }
 
