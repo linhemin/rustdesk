@@ -1259,6 +1259,14 @@ impl RendezvousMediator {
         // connection this branch has already called relay-only. Do not gate the answerer on
         // nat_type to make the two agree.
         if relay_v4 {
+            if ph.udp_port > 0 {
+                hbb_common::throttled_log!(
+                    PUNCH_LOG_INTERVAL, info,
+                    "Ordinary UDP skipped (relay policy: {relay}, controller symmetric NAT: {}, controlled symmetric NAT: {})",
+                    ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC),
+                    Config::get_nat_type() == NatType::SYMMETRIC as i32
+                );
+            }
             let uuid = Uuid::new_v4().to_string();
             let mut meta = meta;
             meta.direct_retry_permitted = !relay
@@ -1655,13 +1663,22 @@ async fn udp_nat_listen(
     let socket_cloned = socket.clone();
     let func = async {
         socket.connect(peer_addr).await?;
+        if peer_addr.is_ipv4() {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP peer probing started");
+        }
         let init_packet = crate::punch_udp(socket.clone(), true).await?;
+        if peer_addr.is_ipv4() {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP received KCP SYN");
+        }
         let stream = crate::kcp_stream::KcpStream::accept(
             socket,
             Duration::from_millis(CONNECT_TIMEOUT as _),
             init_packet,
         )
         .await?;
+        if peer_addr.is_ipv4() {
+            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP KCP handshake completed");
+        }
         // The KCP session is up: from here it is a connection like any other and the connection
         // layer's own limits apply to it, so the place goes back for the next punch.
         drop(slot);

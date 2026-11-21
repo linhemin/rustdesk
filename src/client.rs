@@ -718,9 +718,13 @@ impl Client {
                 tokio::spawn(func);
                 (Some(socket), Some(udp_port))
             } else {
+                #[cfg(target_os = "ios")]
+                crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "cannot bind rendezvous socket");
                 (None, None)
             }
         } else {
+            #[cfg(target_os = "ios")]
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "disabled or relay policy");
             (None, None)
         };
         // Under force-relay a direct IPv6 path is not allowed, so don't bind the v6 socket;
@@ -1192,6 +1196,11 @@ impl Client {
             .map(|(socket, addr)| (Some(socket), Some(addr)))
             .unwrap_or((None, None));
         let udp_nat_port = udp.1.map(|x| *x.lock().unwrap()).unwrap_or(0);
+        #[cfg(target_os = "ios")]
+        if udp.0.is_some() {
+            let stage = if udp_nat_port != 0 { "mapping advertised" } else { "no public mapping" };
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", stage);
+        }
         let webrtc_sdp_offer = webrtc_offerer
             .as_ref()
             .and_then(|g| g.stream())
@@ -1338,8 +1347,15 @@ impl Client {
                                 if udp_nat_port > 0 && ph.is_udp {
                                     match socket.connect(peer_addr).await {
                                         Ok(()) => udp.0 = Some(socket),
-                                        Err(err) => log::debug!("UDP peer route unavailable: {err}"),
+                                        Err(err) => {
+                                            #[cfg(target_os = "ios")]
+                                            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "peer socket connect failed");
+                                            log::debug!("UDP peer route unavailable: {err}");
+                                        }
                                     }
+                                } else if udp_nat_port > 0 {
+                                    #[cfg(target_os = "ios")]
+                                    crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "no UDP endpoint in peer answer");
                                 }
                             }
                             if let Some(socket) = ipv6.0.take() {
@@ -1360,6 +1376,10 @@ impl Client {
                         }
                     }
                     Some(rendezvous_message::Union::RelayResponse(rr)) => {
+                        #[cfg(target_os = "ios")]
+                        if udp_nat_port > 0 {
+                            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "rendezvous returned relay instead of UDP");
+                        }
                         if !rr.refuse_reason.is_empty() {
                             bail!(rr.refuse_reason);
                         }
@@ -5795,18 +5815,34 @@ async fn udp_nat_connect(
     typ: &'static str,
     ms_timeout: u64,
 ) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    #[cfg(target_os = "ios")]
+    let record = |stage| {
+        if typ == "UDP" {
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", stage);
+        }
+    };
+    #[cfg(target_os = "ios")]
+    record("peer probing started");
     crate::punch_udp(socket.clone(), false)
         .await
         .map_err(|err| {
+            #[cfg(target_os = "ios")]
+            record("peer probe not acknowledged");
             log::debug!("{err}");
             anyhow!(err)
         })?;
+    #[cfg(target_os = "ios")]
+    record("peer probe acknowledged; entering KCP handshake");
     let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout))
         .await
         .map_err(|err| {
+            #[cfg(target_os = "ios")]
+            record("KCP handshake failed");
             log::debug!("Failed to connect KCP stream: {}", err);
             anyhow!(err)
         })?;
+    #[cfg(target_os = "ios")]
+    record("KCP handshake completed");
     Ok((res.1, Some(res.0), typ))
 }
 
