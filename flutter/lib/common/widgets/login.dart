@@ -738,7 +738,6 @@ Future<bool?> _openLoginDialog() async {
   final oidcAuth = _OidcAuthController();
   final curOP = oidcAuth.curOP;
   // Track hover state for the close icon
-  bool isCloseHovered = false;
 
   final loginOptions = [].obs;
   final loginOptionsError = Rxn<Object>();
@@ -947,43 +946,19 @@ Future<bool?> _openLoginDialog() async {
           );
         });
 
-    final title = Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          translate('Login'),
-        ).marginOnly(top: MyTheme.dialogPadding),
-        MouseRegion(
-          onEnter: (_) => setState(() => isCloseHovered = true),
-          onExit: (_) => setState(() => isCloseHovered = false),
-          child: InkWell(
-            child: Icon(
-              Icons.close,
-              size: 25,
-              // No need to handle the branch of null.
-              // Because we can ensure the color is not null when debug.
-              color: isCloseHovered
-                  ? Colors.white
-                  : Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.color
-                      ?.withOpacity(0.55),
-            ),
-            onTap: onDialogCancel,
-            hoverColor: Colors.red,
-            borderRadius: BorderRadius.circular(5),
-          ),
-        ).marginOnly(top: 10, right: 15),
-      ],
-    );
-    final titlePadding = EdgeInsets.fromLTRB(MyTheme.dialogPadding, 0, 0, 0);
+    final title = Row(children: [
+      Icon(Icons.account_circle_outlined, color: Theme.of(context).colorScheme.primary),
+      const SizedBox(width: 10),
+      Expanded(child: Text(translate('Login'))),
+      IconButton(tooltip: translate('Close'), onPressed: onDialogCancel,
+        icon: const Icon(Icons.close_rounded, size: 20)),
+    ]);
+    const titlePadding = EdgeInsetsDirectional.fromSTEB(MyTheme.dialogPadding, 12, 8, 0);
 
     return CustomAlertDialog(
       title: title,
       titlePadding: titlePadding,
-      contentBoxConstraints: BoxConstraints(minWidth: 400),
+      contentBoxConstraints: const BoxConstraints(minWidth: 320, maxWidth: 420),
       content: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [

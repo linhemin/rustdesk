@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:extended_text/extended_text.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/desktop/widgets/dragable_divider.dart';
+import 'package:flutter_hbb/desktop/widgets/file_transfer_workspace.dart';
 import 'package:percent_indicator/percent_indicator.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
@@ -167,7 +168,19 @@ class _FileManagerPageState extends State<FileManagerPage>
       OverlayEntry(builder: (_) {
         return willPopScope(Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-          body: Row(
+          body: isWindows || isMacOS
+              ? FileTransferWorkspace(
+                  local: dropArea(FileManagerView(
+                      model.localController, _ffi, _mouseFocusScope)),
+                  remote: dropArea(FileManagerView(
+                      model.remoteController, _ffi, _mouseFocusScope)),
+                  queue: statusList(),
+                  localLabel: translate('Local'),
+                  remoteLabel: translate('Remote'),
+                  queueLabel: translate('Status'),
+                  queueCount: Obx(() => Text('${jobController.jobTable.length}')),
+                )
+              : Row(
             children: [
               if (!isWeb)
                 Flexible(
@@ -203,7 +216,8 @@ class _FileManagerPageState extends State<FileManagerPage>
     return Container(
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.all(
+        border: Border.all(color: Theme.of(context).dividerColor),
+        borderRadius: const BorderRadius.all(
           Radius.circular(15.0),
         ),
       ),
@@ -478,10 +492,15 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   @override
   Widget build(BuildContext context) {
-    _handleColumnPorportions();
-    return Container(
-      margin: const EdgeInsets.all(16.0),
-      padding: const EdgeInsets.all(8.0),
+    return LayoutBuilder(builder: (context, bounds) {
+      final nativeWorkspace = isWindows || isMacOS;
+      final available = nativeWorkspace ? max(1.0, bounds.maxWidth - 40) : MediaQuery.sizeOf(context).width;
+      _handleColumnPorportions(available, nativeWorkspace: nativeWorkspace);
+      return Container(
+      margin: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Theme.of(context).cardColor,
+        border: Border.all(color: Theme.of(context).dividerColor), borderRadius: BorderRadius.circular(12)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -512,18 +531,18 @@ class _FileManagerViewState extends State<FileManagerView> {
           ),
         ],
       ),
-    );
+      );
+    });
   }
 
-  void _handleColumnPorportions() {
-    final windowWidthNow = MediaQuery.of(context).size.width;
+  void _handleColumnPorportions(double windowWidthNow, {required bool nativeWorkspace}) {
     if (_windowWidthPrev == null) {
       _windowWidthPrev = windowWidthNow;
-      final defaultColumnWidth = windowWidthNow * 0.115;
+      final defaultColumnWidth = windowWidthNow * (nativeWorkspace ? .30 : .115);
       _fileTransferMinimumWidth = defaultColumnWidth / 3;
-      _nameColWidth.value = defaultColumnWidth;
+      _nameColWidth.value = nativeWorkspace ? windowWidthNow * .44 : defaultColumnWidth;
       _modifiedColWidth.value = defaultColumnWidth;
-      _sizeColWidth.value = defaultColumnWidth;
+      _sizeColWidth.value = nativeWorkspace ? windowWidthNow * .26 : defaultColumnWidth;
     }
 
     if (_windowWidthPrev != windowWidthNow) {
@@ -561,8 +580,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Container(
-                          width: 50,
-                          height: 50,
+                          width: 34,
+                          height: 34,
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.all(Radius.circular(8)),
                             color: MyTheme.accent,
@@ -584,14 +603,15 @@ class _FileManagerViewState extends State<FileManagerView> {
                                   );
                                 }
                               })),
-                      Text(isLocal
+                      Expanded(child: Text(isLocal
                               ? translate("Local Computer")
-                              : translate("Remote Computer"))
-                          .marginOnly(left: 8.0)
+                              : translate("Remote Computer"),
+                          style: Theme.of(context).textTheme.titleMedium)
+                          .marginOnly(left: 8.0))
                     ],
                   ),
                   preferredSize: Size(double.infinity, 70))
-              .paddingOnly(bottom: 15),
+              .paddingOnly(bottom: 8),
           // buttons
           Row(
             children: [

@@ -1,5 +1,6 @@
 import 'package:dash_chat_2/dash_chat_2.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:get/get.dart';
@@ -126,7 +127,7 @@ class ChatPage extends StatelessWidget implements PageShape {
                       sendButtonBuilder: defaultSendButton(
                         padding:
                             EdgeInsets.symmetric(horizontal: 6, vertical: 0),
-                        color: MyTheme.accent,
+                        color: Theme.of(context).colorScheme.primary,
                         icon: Icons.send_rounded,
                       ),
                     ),
@@ -148,7 +149,7 @@ class ChatPage extends StatelessWidget implements PageShape {
                               "${message.createdAt.hour}:${message.createdAt.minute.toString().padLeft(2, '0')}",
                               style: TextStyle(
                                 color: Colors.white,
-                                fontSize: 8,
+                                fontSize: 10,
                               ),
                             ).marginOnly(top: 3),
                           ],
@@ -159,9 +160,9 @@ class ChatPage extends StatelessWidget implements PageShape {
                         final isOwnMessage = message.user.id.isBlank!;
                         return defaultMessageDecoration(
                           color:
-                              isOwnMessage ? MyTheme.accent : Colors.blueGrey,
-                          borderTopLeft: 8,
-                          borderTopRight: 8,
+                              isOwnMessage ? WorkspaceStyle.blue : WorkspaceStyle.slate,
+                          borderTopLeft: 14,
+                          borderTopRight: 14,
                           borderBottomRight: isOwnMessage ? 2 : 8,
                           borderBottomLeft: isOwnMessage ? 8 : 2,
                         );

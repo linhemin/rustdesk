@@ -245,7 +245,7 @@ class _RecordingDialogState extends State<_RecordingDialog> {
     return 'Ctrl / Alt / Shift';
   }
 
-  String _formatCombo() {
+  List<String> _comboParts() {
     // Plain-text labels (see same rationale in display.dart::_keyDisplay).
     final parts = <String>[];
     for (final m in ['primary', 'ctrl', 'alt', 'shift']) {
@@ -268,8 +268,7 @@ class _RecordingDialogState extends State<_RecordingDialog> {
     if (_key != null) {
       parts.add(_keyDisplay(_key!));
     }
-    if (parts.isEmpty) return translate('shortcut-recording-press-keys-tip');
-    return parts.join('+');
+    return parts;
   }
 
   String _keyDisplay(String key) {
@@ -365,7 +364,10 @@ class _RecordingDialogState extends State<_RecordingDialog> {
 
     final saveLabel = hasConflict ? 'Replace' : 'Save';
 
+    final parts = _comboParts();
+    final theme = Theme.of(context);
     return AlertDialog(
+      scrollable: true,
       title: Text(
         '${translate('Set shortcut')}: ${widget.actionLabel}',
       ),
@@ -382,26 +384,31 @@ class _RecordingDialogState extends State<_RecordingDialog> {
             children: [
               Text(translate('shortcut-recording-instruction')),
               const SizedBox(height: 12),
-              Container(
+              Semantics(
+                liveRegion: true,
+                label: parts.join(' + '),
+                child: Container(
                 width: double.infinity,
                 padding:
                     const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Theme.of(context).dividerColor),
-                  borderRadius: BorderRadius.circular(4),
+                  color: theme.colorScheme.background,
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Text(
-                  _formatCombo(),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: hasKey
-                        ? Theme.of(context).textTheme.titleLarge?.color
-                        : Theme.of(context).hintColor,
-                  ),
-                ),
-              ),
+                child: ExcludeSemantics(child: parts.isEmpty
+                    ? Icon(Icons.keyboard_outlined, color: theme.hintColor, size: 28)
+                    : Wrap(alignment: WrapAlignment.center, spacing: 6, runSpacing: 6,
+                        children: [
+                          for (final part in parts)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                              decoration: BoxDecoration(color: theme.cardColor,
+                                border: Border.all(color: theme.dividerColor),
+                                borderRadius: BorderRadius.circular(7)),
+                              child: Text(part, style: theme.textTheme.titleMedium),
+                            ),
+                        ])),
+              )),
               const SizedBox(height: 12),
               statusLine,
             ],

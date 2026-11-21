@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
@@ -458,16 +459,9 @@ class _CmHeaderState extends State<_CmHeader>
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(10.0),
-        gradient: LinearGradient(
-          begin: Alignment.topRight,
-          end: Alignment.bottomLeft,
-          colors: [
-            Color(0xff00bfe1),
-            Color(0xff0071ff),
-          ],
-        ),
+        color: WorkspaceStyle.navy,
       ),
-      margin: EdgeInsets.symmetric(horizontal: 5.0, vertical: 10.0),
+      margin: EdgeInsets.symmetric(horizontal: 10.0, vertical: 10.0),
       padding: EdgeInsets.only(
         top: 10.0,
         bottom: 10.0,
@@ -1081,25 +1075,19 @@ class _CmControlPanel extends StatelessWidget {
     return Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        Offstage(
-          offstage: !showElevation || !showAccept,
-          child: buildButton(context, color: Colors.green[700], onClick: () {
-            handleAccept(context);
-            handleElevate(context);
-            windowManager.minimize();
-          },
-              text: 'Accept and Elevate',
-              icon: Icon(
-                Icons.security_rounded,
-                color: Colors.white,
-                size: 14,
-              ),
-              textColor: Colors.white,
-              tooltip: 'accept_and_elevate_btn_tooltip'),
-        ),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
+            Expanded(
+              child: buildButton(
+                context,
+                color: Colors.transparent,
+                border: Border.all(color: Colors.grey),
+                onClick: handleDisconnect,
+                text: 'Cancel',
+                textColor: null,
+              ),
+            ),
             if (showAccept)
               Expanded(
                 child: Column(
@@ -1117,17 +1105,23 @@ class _CmControlPanel extends StatelessWidget {
                   ],
                 ),
               ),
-            Expanded(
-              child: buildButton(
-                context,
-                color: Colors.transparent,
-                border: Border.all(color: Colors.grey),
-                onClick: handleDisconnect,
-                text: 'Cancel',
-                textColor: null,
-              ),
-            ),
           ],
+        ),
+        Offstage(
+          offstage: !showElevation || !showAccept,
+          child: buildButton(context, color: Colors.transparent, border: Border.all(color: Theme.of(context).dividerColor), onClick: () {
+            handleAccept(context);
+            handleElevate(context);
+            windowManager.minimize();
+          },
+              text: 'Accept and Elevate',
+              icon: Icon(
+                Icons.security_rounded,
+                color: Theme.of(context).hintColor,
+                size: 14,
+              ),
+              textColor: null,
+              tooltip: 'accept_and_elevate_btn_tooltip'),
         ),
       ],
     ).marginOnly(bottom: buttonBottomMargin);
@@ -1143,25 +1137,13 @@ class _CmControlPanel extends StatelessWidget {
       String? tooltip,
       GestureTapDownCallback? onTapDown}) {
     assert(!(onClick == null && onTapDown == null));
-    Widget textWidget;
-    if (icon != null) {
-      textWidget = Text(
-        translate(text),
-        style: TextStyle(color: textColor),
-        textAlign: TextAlign.center,
-      );
-    } else {
-      textWidget = Expanded(
-        child: Text(
-          translate(text),
-          style: TextStyle(color: textColor),
-          textAlign: TextAlign.center,
-        ),
-      );
-    }
+    final textWidget = Flexible(
+      child: Text(translate(text),
+          style: TextStyle(color: textColor), textAlign: TextAlign.center),
+    );
     final borderRadius = BorderRadius.circular(10.0);
     final btn = Container(
-      height: 28,
+      constraints: const BoxConstraints(minHeight: 28),
       decoration: BoxDecoration(
           color: color, borderRadius: borderRadius, border: border),
       child: InkWell(
@@ -1179,7 +1161,7 @@ class _CmControlPanel extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Offstage(offstage: icon == null, child: icon).marginOnly(right: 5),
+            if (icon != null) icon.marginOnly(right: 5),
             textWidget,
           ],
         ),

@@ -5,6 +5,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:xterm/xterm.dart';
 
+import '../common/widgets/workspace.dart';
 import 'platform_model.dart';
 import 'rustdesk_terminal.dart';
 import 'terminal_copy_shortcut.dart';
@@ -276,6 +277,7 @@ class _TerminalMouseInteractionState extends State<TerminalMouseInteraction> {
       onPointerPanZoomEnd: _updatePointerPosition,
       child: TerminalView(
         widget.terminal,
+        theme: usesWorkspaceStyle ? _workspaceTerminalTheme : TerminalThemes.defaultTheme,
         key: _terminalViewKey,
         controller: widget.controller,
         scrollController: _scrollController,
@@ -293,3 +295,16 @@ class _TerminalMouseInteractionState extends State<TerminalMouseInteraction> {
     );
   }
 }
+
+const _workspaceTerminalTheme = TerminalTheme(
+  cursor: Color(0xffa8c6ff), selection: Color(0x9a456893),
+  background: Color(0xff111923), foreground: Color(0xffe1e9f5),
+  black: Color(0xff111923), red: Color(0xffff8e99), green: Color(0xff82d5ae),
+  yellow: Color(0xffe9c485), blue: Color(0xff8ab4ff), magenta: Color(0xffd6a7ef),
+  cyan: Color(0xff7bcfdc), white: Color(0xffd9e3ef),
+  brightBlack: Color(0xff8192a8), brightRed: Color(0xffffb8be), brightGreen: Color(0xffaaf3ca),
+  brightYellow: Color(0xffffdc9e), brightBlue: Color(0xffafcdff), brightMagenta: Color(0xffecc3ff),
+  brightCyan: Color(0xffa5e8ef), brightWhite: Color(0xffffffff),
+  searchHitBackground: Color(0xffe9c485), searchHitBackgroundCurrent: Color(0xff82d5ae),
+  searchHitForeground: Color(0xff111923),
+);

@@ -323,7 +323,9 @@ class _FileManagerPageState extends State<FileManagerPage> {
           centerTitle: true,
           title: ToggleSwitch(
             initialLabelIndex: showLocal ? 0 : 1,
-            activeBgColor: [MyTheme.idColor],
+            activeBgColor: [MyTheme.accent],
+            activeFgColor: Colors.white,
+            cornerRadius: 12,
             inactiveBgColor: Theme.of(context).brightness == Brightness.light
                 ? MyTheme.grayBg
                 : null,
@@ -335,7 +337,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
             fontSize: 15,
             iconSize: 18,
             labels: [translate("Local"), translate("Remote")],
-            icons: [Icons.phone_android_sharp, Icons.screen_share],
+            icons: [isIOS ? Icons.phone_iphone : Icons.phone_android_sharp, Icons.desktop_windows_outlined],
             onToggle: (index) {
               final current = showLocal ? 0 : 1;
               if (index != current) {
@@ -1011,47 +1013,48 @@ class BottomSheetBody extends StatelessWidget {
 
   @override
   BottomSheet build(BuildContext context) {
-    // ignore: no_leading_underscores_for_local_identifiers
-    final _actions = actions ?? [];
     return BottomSheet(
-      builder: (BuildContext context) {
-        return Container(
-            height: 65,
-            alignment: Alignment.centerLeft,
-            decoration: BoxDecoration(
-                color: MyTheme.accent50,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(10))),
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 15),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      leading,
-                      SizedBox(width: 16),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+      backgroundColor: Theme.of(context).cardColor,
+      builder: (context) => SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+            child: LayoutBuilder(builder: (context, bounds) {
+              final info = Row(children: [
+                IconTheme.merge(
+                    data: IconThemeData(
+                        color: Theme.of(context).colorScheme.primary),
+                    child: leading),
+                const SizedBox(width: 10),
+                Expanded(
+                    child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(title, style: TextStyle(fontSize: 18)),
-                          Text(text,
-                              style: TextStyle(fontSize: 14)) // TODO color
-                        ],
-                      )
-                    ],
-                  ),
-                  Row(children: () {
-                    _actions.add(IconButton(
-                      icon: Icon(Icons.cancel_outlined),
-                      onPressed: onCanceled,
-                    ));
-                    return _actions;
-                  }())
-                ],
-              ),
-            ));
-      },
+                      Text(title,
+                          style: Theme.of(context).textTheme.titleMedium),
+                      Text(text, style: Theme.of(context).textTheme.bodySmall),
+                    ])),
+              ]);
+              final controls = Wrap(alignment: WrapAlignment.end, children: [
+                ...?actions,
+                IconButton(
+                    tooltip: translate('Cancel'),
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: onCanceled),
+              ]);
+              if (bounds.maxWidth < 420 && (actions?.length ?? 0) > 1) {
+                return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [info, controls]);
+              }
+              return Row(children: [
+                Expanded(child: info),
+                Flexible(fit: FlexFit.loose, child: controls)
+              ]);
+            }),
+          )),
       onClosing: () {},
       // backgroundColor: MyTheme.grayBg,
       enableDrag: false,

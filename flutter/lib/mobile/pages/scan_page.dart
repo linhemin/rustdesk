@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:qr_code_scanner/qr_code_scanner.dart';
@@ -55,10 +56,10 @@ class _ScanPageState extends State<ScanPage> {
       key: qrKey,
       onQRViewCreated: _onQRViewCreated,
       overlay: QrScannerOverlayShape(
-        borderColor: Colors.red,
-        borderRadius: 10,
+        borderColor: isIOS ? WorkspaceStyle.ice : Colors.red,
+        borderRadius: isIOS ? 16 : 10,
         borderLength: 30,
-        borderWidth: 10,
+        borderWidth: isIOS ? 4 : 10,
         cutOutSize: scanArea,
       ),
       onPermissionSet: (ctrl, p) => _onPermissionSet(context, ctrl, p),

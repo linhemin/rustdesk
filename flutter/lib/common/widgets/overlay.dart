@@ -562,20 +562,40 @@ class QualityMonitor extends StatelessWidget {
   final QualityMonitorModel qualityMonitorModel;
   QualityMonitor(this.qualityMonitorModel);
 
-  Widget _row(String info, String? value, {Color? rightColor}) {
+  Widget _metric(String label, String value, {int flex = 3}) => Expanded(
+        flex: flex,
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style:
+                      const TextStyle(color: Color(0xffbac9df), fontSize: 10)),
+              AutoSizeText(value,
+                  maxLines: 1,
+                  minFontSize: 8,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600)),
+            ]),
+      );
+
+  Widget _row(String info, String? value) {
     return Row(
       children: [
         Expanded(
             flex: 8,
             child: AutoSizeText(info,
-                style: TextStyle(color: Color.fromARGB(255, 210, 210, 210)),
-                textAlign: TextAlign.right,
+                style: const TextStyle(color: Color(0xffbac9df)),
+                textAlign: TextAlign.start,
                 maxLines: 1)),
         Spacer(flex: 1),
         Expanded(
             flex: 8,
             child: AutoSizeText(value ?? '',
-                style: TextStyle(color: rightColor ?? Colors.white),
+                style: const TextStyle(color: Colors.white),
+                textAlign: TextAlign.end,
                 maxLines: 1)),
       ],
     );
@@ -590,29 +610,36 @@ class QualityMonitor extends StatelessWidget {
               ? Container(
                   constraints: BoxConstraints(maxWidth: 200),
                   padding: const EdgeInsets.all(8),
-                  color: MyTheme.canvasColor.withAlpha(150),
+                  decoration: BoxDecoration(
+                      color: const Color(0xed192638),
+                      borderRadius: BorderRadius.circular(10)),
                   child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _row("Speed", qualityMonitorModel.data.speed ?? '-'),
-                      _row("FPS", qualityMonitorModel.data.fps ?? '-'),
-                      // let delay be 0 if fps is 0
-                      _row(
-                          "Delay",
-                          "${qualityMonitorModel.data.delay == null ? '-' : (qualityMonitorModel.data.fps ?? "").replaceAll(' ', '').replaceAll('0', '').isEmpty ? 0 : qualityMonitorModel.data.delay}ms",
-                          rightColor: Colors.green),
+                      Row(children: [
+                        _metric(translate("Speed"),
+                            qualityMonitorModel.data.speed ?? '-', flex: 4),
+                        const SizedBox(width: 6),
+                        _metric("FPS", qualityMonitorModel.data.fps ?? '-'),
+                        const SizedBox(width: 6),
+                        // let delay be 0 if fps is 0
+                        _metric(
+                            "Delay",
+                            "${qualityMonitorModel.data.delay == null ? '-' : (qualityMonitorModel.data.fps ?? "").replaceAll(' ', '').replaceAll('0', '').isEmpty ? 0 : qualityMonitorModel.data.delay}ms"),
+                      ]),
+                      const Divider(color: Colors.white24, height: 10),
                       _row("Target Bitrate",
                           "${qualityMonitorModel.data.targetBitrate ?? '-'}kb"),
                       _row(
-                          "Codec", qualityMonitorModel.data.codecFormat ?? '-'),
+                          translate("Codec"), qualityMonitorModel.data.codecFormat ?? '-'),
                       _row("Chroma", qualityMonitorModel.data.chroma ?? '-'),
                       if (qualityMonitorModel.mobileConnection
                           case final connection?)
                         _row(translate("Connection"), connection),
                       if (!isMobile &&
                           qualityMonitorModel.webrtcTransport != null)
-                        _row("Transport",
-                            qualityMonitorModel.webrtcTransport!),
+                        _row("Transport", qualityMonitorModel.webrtcTransport!),
                     ],
                   ),
                 )

@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 
 import '../../common.dart';
 
-const sessionControlSurface = Color(0xF01A242E);
+const sessionControlSurface = Color(0xF219273B);
 const sessionControlInk = Color(0xFFEDF4F7);
-const sessionControlAccent = Color(0xFFA2F4D8);
+const sessionControlAccent = WorkspaceStyle.ice;
 
 enum SessionInputMode {
   touch('Touchscreen mode', Icons.touch_app_outlined),
@@ -117,7 +118,7 @@ class _SessionControlsDockState extends State<SessionControlsDock> {
                     translate(_expanded ? 'Collapse toolbar' : 'Show Toolbar'),
                 onPressed: () => setState(() => _expanded = !_expanded),
                 color: sessionControlAccent,
-                icon: Icon(_expanded ? Icons.close : Icons.widgets_outlined),
+                icon: Icon(_expanded ? Icons.close : Icons.tune_rounded),
               ),
             ],
           ),

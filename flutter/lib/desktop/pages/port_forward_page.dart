@@ -1,17 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
-
-const double _kColumn1Width = 30;
-const double _kColumn4Width = 100;
-const double _kRowHeight = 60;
-const double _kTextLeftMargin = 20;
 
 class _PortForward {
   int localPort;
@@ -104,10 +100,7 @@ class _PortForwardPageState extends State<PortForwardPage>
       }(), builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.done) {
           return Container(
-            decoration: BoxDecoration(
-                border: Border.all(
-                    width: 20,
-                    color: Theme.of(context).scaffoldBackgroundColor)),
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -115,8 +108,10 @@ class _PortForwardPageState extends State<PortForwardPage>
                 Flexible(
                   child: Container(
                     decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.background,
-                        border: Border.all(width: 1, color: MyTheme.border)),
+                        color: Theme.of(context).cardColor,
+                        borderRadius: BorderRadius.circular(12),
+                        border:
+                            Border.all(color: Theme.of(context).dividerColor)),
                     child:
                         widget.isRDP ? buildRdp(context) : buildTunnel(context),
                   ),
@@ -134,8 +129,11 @@ class _PortForwardPageState extends State<PortForwardPage>
     return Obx(() => Offstage(
           offstage: pfs.isEmpty && !widget.isRDP,
           child: Container(
-              height: 45,
-              color: const Color(0xFF007F00),
+              constraints: const BoxConstraints(minHeight: 48),
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                  color: WorkspaceStyle.navy,
+                  borderRadius: BorderRadius.circular(12)),
               child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -152,136 +150,103 @@ class _PortForwardPageState extends State<PortForwardPage>
         ));
   }
 
-  buildTunnel(BuildContext context) {
-    text(String label) => Expanded(
-        child: Text(translate(label)).marginOnly(left: _kTextLeftMargin));
+  Widget buildTunnel(BuildContext context) => Obx(() => ListView.builder(
+        padding: const EdgeInsets.all(14),
+        itemCount: pfs.length + 1,
+        itemBuilder: (context, index) => index == 0
+            ? buildTunnelAddRow(context)
+            : buildTunnelDataRow(context, pfs[index - 1]),
+      ));
 
-    return Theme(
-      data: Theme.of(context).copyWith(
-        colorScheme: Theme.of(context).colorScheme,
-      ),
-      child: Obx(() => ListView.builder(
-          controller: ScrollController(),
-          itemCount: pfs.length + 2,
-          itemBuilder: ((context, index) {
-            if (index == 0) {
-              return Container(
-                height: 25,
-                color: Theme.of(context).scaffoldBackgroundColor,
-                child: Row(children: [
-                  text('Local Port'),
-                  const SizedBox(width: _kColumn1Width),
-                  text('Remote Host'),
-                  text('Remote Port'),
-                  SizedBox(
-                      width: _kColumn4Width, child: Text(translate('Action')))
-                ]),
-              );
-            } else if (index == 1) {
-              return buildTunnelAddRow(context);
-            } else {
-              return buildTunnelDataRow(context, pfs[index - 2], index - 2);
-            }
-          }))),
-    );
-  }
-
-  buildTunnelAddRow(BuildContext context) {
+  Widget buildTunnelAddRow(BuildContext context) {
     var portInputFormatter = [
       FilteringTextInputFormatter.allow(RegExp(
           r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$'))
     ];
 
-    return Container(
-      height: _kRowHeight,
-      decoration:
-          BoxDecoration(color: Theme.of(context).colorScheme.background),
-      child: Row(children: [
-        buildTunnelInputCell(context,
-            controller: localPortController,
-            inputFormatters: portInputFormatter),
-        const SizedBox(
-            width: _kColumn1Width, child: Icon(Icons.arrow_forward_sharp)),
-        buildTunnelInputCell(context,
-            controller: remoteHostController, hint: 'localhost'),
-        buildTunnelInputCell(context,
-            controller: remotePortController,
-            inputFormatters: portInputFormatter),
-        ElevatedButton(
+    Widget field(String label, TextEditingController controller,
+            {bool port = false}) =>
+        TextField(
+          controller: controller,
+          inputFormatters: port ? portInputFormatter : null,
+          decoration: InputDecoration(
+              labelText: translate(label), hintText: port ? null : 'localhost'),
+        ).workaroundFreezeLinuxMint();
+    final add = ElevatedButton.icon(
+      onPressed: () async {
+        int? localPort = int.tryParse(localPortController.text);
+        int? remotePort = int.tryParse(remotePortController.text);
+        if (localPort != null &&
+            remotePort != null &&
+            (remoteHostController.text.isEmpty ||
+                remoteHostController.text.trim().isNotEmpty)) {
+          await bind.sessionAddPortForward(
+              sessionId: _ffi.sessionId,
+              localPort: localPort,
+              remoteHost: remoteHostController.text.trim().isEmpty
+                  ? 'localhost'
+                  : remoteHostController.text.trim(),
+              remotePort: remotePort);
+          localPortController.clear();
+          remoteHostController.clear();
+          remotePortController.clear();
+          refreshTunnelConfig();
+        }
+      },
+      icon: const Icon(Icons.add_rounded, size: 18),
+      label: Text(translate('Add')),
+    );
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(translate('TCP tunneling'),
+          style: Theme.of(context).textTheme.titleLarge),
+      const SizedBox(height: 16),
+      LayoutBuilder(builder: (context, bounds) {
+        final local = field('Local Port', localPortController, port: true);
+        final host = field('Remote Host', remoteHostController);
+        final remote = field('Remote Port', remotePortController, port: true);
+        if (bounds.maxWidth < 540) {
+          return Column(children: [
+            local,
+            const SizedBox(height: 10),
+            host,
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: remote),
+              const SizedBox(width: 10),
+              add
+            ]),
+          ]);
+        }
+        return Row(children: [
+          Expanded(child: local),
+          const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8),
+              child: Icon(Icons.arrow_forward, size: 18)),
+          Expanded(flex: 2, child: host),
+          const SizedBox(width: 8),
+          Expanded(child: remote),
+          const SizedBox(width: 10),
+          add,
+        ]);
+      }),
+      if (pfs.isNotEmpty) const Divider(height: 30),
+    ]);
+  }
+
+  Widget buildTunnelDataRow(BuildContext context, _PortForward pf) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.route_outlined),
+      title: Text('${pf.remoteHost}:${pf.remotePort}'),
+      subtitle: Text('${translate("Local Port")}  ${pf.localPort}'),
+      trailing: IconButton(
+          tooltip: translate('Remove'),
+          icon: const Icon(Icons.remove_circle_outline),
           onPressed: () async {
-            int? localPort = int.tryParse(localPortController.text);
-            int? remotePort = int.tryParse(remotePortController.text);
-            if (localPort != null &&
-                remotePort != null &&
-                (remoteHostController.text.isEmpty ||
-                    remoteHostController.text.trim().isNotEmpty)) {
-              await bind.sessionAddPortForward(
-                  sessionId: _ffi.sessionId,
-                  localPort: localPort,
-                  remoteHost: remoteHostController.text.trim().isEmpty
-                      ? 'localhost'
-                      : remoteHostController.text.trim(),
-                  remotePort: remotePort);
-              localPortController.clear();
-              remoteHostController.clear();
-              remotePortController.clear();
-              refreshTunnelConfig();
-            }
-          },
-          child: Text(
-            translate('Add'),
-          ),
-        ).marginSymmetric(horizontal: 10),
-      ]),
-    );
-  }
-
-  buildTunnelInputCell(BuildContext context,
-      {required TextEditingController controller,
-      List<TextInputFormatter>? inputFormatters,
-      String? hint}) {
-    return Expanded(
-      child: Padding(
-          padding: const EdgeInsets.all(10.0),
-          child: TextField(
-              controller: controller,
-              inputFormatters: inputFormatters,
-              decoration: InputDecoration(
-                hintText: hint,
-              )).workaroundFreezeLinuxMint()),
-    );
-  }
-
-  Widget buildTunnelDataRow(BuildContext context, _PortForward pf, int index) {
-    text(String label) => Expanded(
-        child: Text(label, style: const TextStyle(fontSize: 20))
-            .marginOnly(left: _kTextLeftMargin));
-
-    return Container(
-      height: _kRowHeight,
-      decoration: BoxDecoration(
-          color: index % 2 == 0
-              ? MyTheme.currentThemeMode() == ThemeMode.dark
-                  ? const Color(0xFF202020)
-                  : const Color(0xFFF4F5F6)
-              : Theme.of(context).colorScheme.background),
-      child: Row(children: [
-        text(pf.localPort.toString()),
-        const SizedBox(width: _kColumn1Width),
-        text(pf.remoteHost),
-        text(pf.remotePort.toString()),
-        SizedBox(
-          width: _kColumn4Width,
-          child: IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () async {
-              await bind.sessionRemovePortForward(
-                  sessionId: _ffi.sessionId, localPort: pf.localPort);
-              refreshTunnelConfig();
-            },
-          ),
-        ),
-      ]),
+            await bind.sessionRemovePortForward(
+                sessionId: _ffi.sessionId, localPort: pf.localPort);
+            refreshTunnelConfig();
+          }),
     );
   }
 
@@ -296,64 +261,26 @@ class _PortForwardPageState extends State<PortForwardPage>
     pfs.value = result;
   }
 
-  buildRdp(BuildContext context) {
-    text1(String label) => Expanded(
-        child: Text(translate(label)).marginOnly(left: _kTextLeftMargin));
-    text2(String label) => Expanded(
-            child: Text(
-          label,
-          style: const TextStyle(fontSize: 20),
-        ).marginOnly(left: _kTextLeftMargin));
-    return Theme(
-      data: Theme.of(context)
-          .copyWith(colorScheme: Theme.of(context).colorScheme),
-      child: ListView.builder(
-          controller: ScrollController(),
-          itemCount: 2,
-          itemBuilder: ((context, index) {
-            if (index == 0) {
-              return Container(
-                height: 25,
-                color: Theme.of(context).scaffoldBackgroundColor,
-                child: Row(children: [
-                  text1('Local Port'),
-                  const SizedBox(width: _kColumn1Width),
-                  text1('Remote Host'),
-                  text1('Remote Port'),
-                ]),
-              );
-            } else {
-              return Container(
-                height: _kRowHeight,
-                decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.background),
-                child: Row(children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: SizedBox(
-                        width: 120,
-                        child: ElevatedButton(
-                          onPressed: () =>
-                              bind.sessionNewRdp(sessionId: _ffi.sessionId),
-                          child: Text(
-                            translate('New RDP'),
-                          ),
-                        ).marginSymmetric(vertical: 10),
-                      ).marginOnly(left: 20),
-                    ),
-                  ),
-                  const SizedBox(
-                      width: _kColumn1Width,
-                      child: Icon(Icons.arrow_forward_sharp)),
-                  text2('localhost'),
-                  text2('RDP'),
-                ]),
-              );
-            }
-          })),
-    );
-  }
+  Widget buildRdp(BuildContext context) => ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.all(18),
+        children: [
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.desktop_windows_outlined),
+            title:
+                Text(widget.id, style: Theme.of(context).textTheme.titleMedium),
+            subtitle: const Text('RDP'),
+          ),
+          Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: ElevatedButton.icon(
+                onPressed: () => bind.sessionNewRdp(sessionId: _ffi.sessionId),
+                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                label: Text(translate('New RDP')),
+              )),
+        ],
+      );
 
   @override
   bool get wantKeepAlive => true;

@@ -20,6 +20,7 @@ import '../../models/input_model.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../../utils/image.dart';
+import '../widgets/session_controls.dart';
 
 final initText = '1' * 1024;
 
@@ -206,6 +207,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
           floatingActionButton: !showActionButton
               ? null
               : FloatingActionButton(
+                  tooltip: isIOS ? translate(keyboardIsVisible || _showGestureHelp ? 'Close' : 'Show Toolbar') : null,
                   mini: !keyboardIsVisible,
                   child: Icon(
                     (keyboardIsVisible || _showGestureHelp)
@@ -213,7 +215,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
                         : Icons.expand_less,
                     color: Colors.white,
                   ),
-                  backgroundColor: MyTheme.accent,
+                  backgroundColor: isIOS ? sessionControlSurface : MyTheme.accent,
                   onPressed: () {
                     setState(() {
                       if (keyboardIsVisible) {
@@ -295,6 +297,59 @@ class _ViewCameraPageState extends State<ViewCameraPage>
   }
 
   Widget getBottomAppBar() {
+    if (isIOS) {
+      return SafeArea(
+        top: false,
+        minimum: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: SessionControlsSurface(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(
+                tooltip: translate('Display Settings'),
+                icon: const Icon(Icons.monitor_outlined,
+                    color: sessionControlInk),
+                onPressed: () {
+                  setState(() => _showEdit = false);
+                  showOptions(context, widget.id, gFFI.dialogManager);
+                },
+              ),
+              IconButton(
+                tooltip: translate('Chat'),
+                icon: const Icon(Icons.chat_bubble_outline,
+                    color: sessionControlInk),
+                onPressed: () => onPressedTextChat(widget.id),
+              ),
+              IconButton(
+                tooltip: translate('More'),
+                icon: const Icon(Icons.tune, color: sessionControlInk),
+                onPressed: () {
+                  setState(() => _showEdit = false);
+                  showActions(widget.id);
+                },
+              ),
+              const SizedBox(
+                  height: 20,
+                  child: VerticalDivider(width: 10, color: Colors.white24)),
+              IconButton(
+                tooltip: translate('Disconnect'),
+                icon: const Icon(Icons.link_off, color: Color(0xffffb4ae)),
+                onPressed: () => clientClose(sessionId, gFFI),
+              ),
+              Obx(() => IconButton(
+                    tooltip: translate('Collapse toolbar'),
+                    color: sessionControlAccent,
+                    disabledColor: Colors.white38,
+                    icon: const Icon(Icons.keyboard_arrow_down),
+                    onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
+                        ? null
+                        : () => setState(() => _showBar = !_showBar),
+                  )),
+            ]),
+          ),
+        ),
+      );
+    }
     return BottomAppBar(
       elevation: 10,
       color: MyTheme.accent,
