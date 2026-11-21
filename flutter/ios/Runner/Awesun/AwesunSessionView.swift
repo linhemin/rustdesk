@@ -7,7 +7,7 @@ struct AwesunSessionView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             if model.keyboardInset > 0 {
-                keyboardAccessory.position(
+                keyboardAccessory(inDeck: false).position(
                     x: size.width / 2, y: size.height - model.keyboardInset - 19
                 )
             } else if model.keyboardOpen {
@@ -80,7 +80,7 @@ struct AwesunSessionView: View {
         .accessibilityLabel(Text(label))
     }
 
-    private var keyboardAccessory: some View {
+    private func keyboardAccessory(inDeck: Bool) -> some View {
         HStack(spacing: 4) {
             accessoryButton("自定义", width: 50) { model.openKeyboardPanel(.keyboardLayout) }
             accessoryButton("快捷键", width: 50) { model.openKeyboardPanel(.shortcuts) }
@@ -100,12 +100,15 @@ struct AwesunSessionView: View {
                     }
                 }
             }
-            accessoryButton("•••", width: 34) { model.openKeyboardPanel(.keyboardMore) }
-            accessoryButton("✕", width: 33) { model.systemKeyboard(false) }
+            accessoryButton("•••", selected: inDeck, width: 34) {
+                if inDeck { model.showSystemKeyboardFromDeck() }
+                else { model.openKeyboardPanel(.keyboardMore) }
+            }
+            accessoryButton("✕", width: 33, action: model.dismissRemoteKeyboard)
         }
         .padding(4)
         .frame(width: size.width, height: 38)
-        .background(Color(awesun: 0xFF12111C))
+        .background(AwesunPalette.keyboardDeck)
     }
 
     private func accessoryButton(_ title: String, selected: Bool = false,
@@ -131,7 +134,7 @@ struct AwesunSessionView: View {
                 Color.black.opacity(0.35).onTapGesture { model.closePanel() }
                 Group {
                     if model.functionsOpen {
-                        AwesunFunctionSheet(model: model)
+                        AwesunFunctionSheet(model: model, height: size.height * 0.79)
                     } else {
                         switch model.sheet {
                         case .mode: AwesunModeSheet(model: model)
@@ -140,9 +143,11 @@ struct AwesunSessionView: View {
                         case .actions: AwesunActionPanel(model: model, height: panelHeight)
                         case .displaySettings: AwesunDisplayPanel(model: model, height: panelHeight)
                         case .keyboardMore:
-                            AwesunKeyboardPanel(model: model, editing: false, maxHeight: panelHeight)
+                            AwesunKeyboardDeck(model: model, height: min(240, size.height * 0.42)) {
+                                keyboardAccessory(inDeck: true)
+                            }
                         case .keyboardLayout:
-                            AwesunKeyboardPanel(model: model, editing: true, maxHeight: panelHeight)
+                            AwesunAccessoryEditor(model: model, height: size.height * 0.88)
                         case .gamepad: AwesunGamePanel(model: model)
 
                         case .displays: actionSheet(

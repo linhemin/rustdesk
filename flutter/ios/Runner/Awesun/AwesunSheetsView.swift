@@ -69,75 +69,176 @@ struct AwesunBullet: View {
     }
 }
 
-/// 远程操作九宫格（长按进入排序，再点另一项交换）
 struct AwesunFunctionSheet: View {
     @ObservedObject var model: AwesunSessionModel
+    let height: CGFloat
     @State private var editing = false
-    @State private var picked: Int? = nil
+    @State private var picked: Int?
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+    private let quickIDs = ["quit", "shot", "sound", "screen", "chat", "actions"]
+    private let keyboardIDs = ["kbd", "layout", "keys", "game"]
+    private let displayIDs = ["display", "quality"]
 
     var body: some View {
-        AwesunSheetShell(title: "远程操作", onClose: { model.closeFunctions() }) {
-            Text(editing ? "点另一个图标即可交换位置" : "长按图标可调整位置")
-                .font(.system(size: 11))
-                .foregroundColor(AwesunPalette.textTertiary)
-                .padding(.top, 4)
+        AwesunSheetShell(title: "远程操作", onClose: model.closeFunctions) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 13) {
+                    quickActions
+                    Divider()
+                    if item("mode") != nil || item("mouse") != nil {
+                        touchControls
+                        Divider()
+                    }
+                    if !items(keyboardIDs).isEmpty {
+                        section("键盘", keys: keyboardIDs)
+                        Divider()
+                    }
+                    section("显示与连接", keys: displayIDs)
+                }
+                .padding(.top, 8)
+                .padding(.bottom, 6)
+            }
+            .frame(maxHeight: height)
+            .foregroundColor(.white)
+            .buttonStyle(.plain)
+        }
+    }
 
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(Array(model.functions.enumerated()), id: \.element.id) { index, item in
+    private var quickActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                heading("会话")
+                Spacer()
+                Button(editing ? "完成" : "调整") {
+                    editing.toggle()
+                    picked = nil
+                }
+                .font(.system(size: 12, weight: .medium))
+                .frame(minHeight: 30)
+            }
+            if editing {
+                Text("依次点两项以交换位置")
+                    .font(.system(size: 11))
+                    .foregroundColor(AwesunPalette.textSecondary)
+            }
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
+            LazyVGrid(columns: columns, spacing: 6) {
+                ForEach(items(quickIDs), id: \.element.id) { index, entry in
                     Button {
                         if editing {
                             if let from = picked {
                                 model.moveFunction(from: from, to: index)
                                 picked = nil
-                                editing = false
                             } else {
                                 picked = index
                             }
                         } else {
-                            model.perform(item)
+                            model.perform(entry)
                         }
                     } label: {
-                        VStack(spacing: 6) {
-                            Group {
-                                if item.symbol {
-                                    Image(systemName: item.icon)
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white)
-                                } else {
-                                    Image(item.icon).resizable().scaledToFit()
-                                }
-                            }
-                            .frame(width: 24, height: 24)
-                            Text(item.title)
-                                .font(.system(size: 11))
-                                .foregroundColor(Color(awesun: 0xFFE8EEF3))
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color.white.opacity(picked == index ? 0.16 : 0.06))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(Color.white.opacity(picked == index ? 0.35 : 0),
-                                              lineWidth: 1)
-                        )
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .onLongPressGesture(minimumDuration: 0.35) {
-                        editing = true
-                        picked = index
-                        model.haptic(.light)
+                        actionTile(entry, selected: picked == index)
                     }
                 }
             }
-            .padding(.top, 10)
         }
+    }
+
+    private var touchControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                heading("远控方式")
+                Spacer()
+                if let guide = item("guide") {
+                    Button {
+                        model.perform(guide)
+                    } label: {
+                        Label("手势指南", systemImage: "chevron.right")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(AwesunPalette.brandBlue)
+                }
+            }
+            if item("mode") != nil {
+                HStack(spacing: 8) {
+                    modeButton(.touch)
+                    modeButton(.pointer)
+                }
+            }
+            if item("mouse") != nil {
+                option("虚拟鼠标", value: model.mouseVisible, action: model.setMouseVisible)
+            }
+            option("锁定显示", value: model.displayLocked, action: model.setDisplayLocked)
+        }
+    }
+
+    private func modeButton(_ mode: AwesunMode) -> some View {
+        let selected = model.mode == mode
+        return Button {
+            model.selectMode(mode)
+        } label: {
+            Text(mode.title)
+                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundColor(selected ? AwesunPalette.brandRed : .white)
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .background(Color.white.opacity(selected ? 0.08 : 0.03))
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(selected ? AwesunPalette.brandRed : .white.opacity(0.20), lineWidth: 1))
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func option(_ title: String, value: Bool, action: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            Text(title).font(.system(size: 13))
+            Spacer()
+            AwesunSwitch(isOn: Binding(get: { value }, set: action))
+                .accessibilityLabel(Text(title))
+        }
+        .frame(minHeight: 33)
+        .padding(.horizontal, 4)
+    }
+
+    private func section(_ title: String, keys: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            heading(title)
+            HStack(spacing: 4) {
+                ForEach(items(keys), id: \.element.id) { _, entry in
+                    Button { model.perform(entry) } label: { actionTile(entry) }
+                }
+            }
+        }
+    }
+
+    private func heading(_ title: String) -> some View {
+        Text(title).font(.system(size: 12, weight: .semibold))
+            .foregroundColor(AwesunPalette.textSecondary)
+    }
+
+    private func actionTile(_ entry: AwesunFunctionItem, selected: Bool = false) -> some View {
+        VStack(spacing: 6) {
+            Group {
+                if entry.symbol {
+                    Image(systemName: entry.icon).font(.system(size: 19, weight: .medium))
+                } else {
+                    Image(entry.icon).resizable().scaledToFit()
+                }
+            }
+            .frame(width: 23, height: 23)
+            Text(entry.title).font(.system(size: 11, weight: .medium))
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, minHeight: 58)
+        .background(selected ? AwesunPalette.brandRed.opacity(0.30) : Color.white.opacity(0.035))
+        .cornerRadius(7)
+        .contentShape(Rectangle())
+    }
+
+    private func items(_ ids: [String]) -> [(offset: Int, element: AwesunFunctionItem)] {
+        Array(model.functions.enumerated()).filter { ids.contains($0.element.id) }
+    }
+
+    private func item(_ id: String) -> AwesunFunctionItem? {
+        model.functions.first { $0.id == id }
     }
 }
 
@@ -583,38 +684,61 @@ struct AwesunActionRow: View {
 struct AwesunShortcutPanel: View {
     @ObservedObject var model: AwesunSessionModel
     let height: CGFloat
+    @State private var custom = false
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
 
     var body: some View {
-        AwesunSheetShell(title: "快捷键", onClose: model.closeSheet) {
+        HStack(spacing: 4) {
             ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
-                    ForEach(AwesunKeyboardShortcut.common) { shortcut in
-                        Button { model.sendShortcut(shortcut) } label: {
-                            HStack(spacing: 4) {
-                                ForEach(shortcut.labels, id: \.self) { label in
-                                    Text(label)
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.65)
-                                        .padding(.horizontal, 5)
-                                        .frame(minHeight: 23)
-                                        .background(Color.white.opacity(0.15))
-                                        .cornerRadius(5)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                            .background(Color.white.opacity(0.08))
-                            .cornerRadius(8)
+                LazyVGrid(columns: columns, spacing: 4) {
+                    if custom {
+                        ForEach(model.accessoryShortcuts) { shortcut in
+                            tile(shortcut, action: "自定义")
                         }
-                        .accessibilityLabel(Text(shortcut.id))
+                    } else {
+                        ForEach(AwesunKeyboardShortcut.common.indices, id: \.self) { index in
+                            let item = AwesunKeyboardShortcut.common[index]
+                            tile(item.shortcut, action: item.action)
+                        }
                     }
                 }
             }
-            .foregroundColor(.white)
-            .frame(maxHeight: height)
-            .padding(.top, 12)
-            .buttonStyle(.plain)
+            VStack(spacing: 4) {
+                Button(action: model.closeSheet) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(AwesunPalette.keyboardCap)
+                        .cornerRadius(7)
+                }
+                .accessibilityLabel("关闭快捷键")
+                Button {
+                    custom.toggle()
+                } label: {
+                    AwesunKeyTile(title: custom ? "自定义" : "默认", selected: custom, expanded: true)
+                }
+                .disabled(model.accessoryShortcuts.isEmpty)
+                .accessibilityLabel(custom ? "显示默认快捷键" : "显示自定义快捷键")
+            }
+            .frame(width: 37)
         }
+        .frame(height: min(height, 193))
+        .padding(5)
+        .padding(.bottom, 6)
+        .background(AwesunPalette.keyboardDeck)
+        .foregroundColor(.white)
+        .buttonStyle(.plain)
+    }
+
+    private func tile(_ shortcut: AwesunKeyboardShortcut, action: String) -> some View {
+        Button {
+            model.sendShortcut(shortcut)
+        } label: {
+            AwesunKeyTile(title: shortcut.title, second: action, expanded: true)
+                .frame(height: 45)
+        }
+        .accessibilityLabel(Text(shortcut.title + "，" + action))
     }
 }
 

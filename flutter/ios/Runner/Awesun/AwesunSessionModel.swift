@@ -72,7 +72,7 @@ final class AwesunSessionModel: ObservableObject {
 
     @Published private var functionOrder = [
         "mouse", "kbd", "mode", "lock", "guide", "shot", "sound", "screen",
-        "display", "quality", "chat", "keys", "actions", "quit"
+        "display", "quality", "chat", "layout", "keys", "game", "actions", "quit"
     ]
 
     var functions: [AwesunFunctionItem] {
@@ -88,12 +88,14 @@ final class AwesunSessionModel: ObservableObject {
             AwesunFunctionItem(id: "display", title: "显示设置", icon: "display", symbol: true),
             AwesunFunctionItem(id: "quality", title: qualityVisible ? "关闭品质检测" : "品质检测", icon: "waveform.path", symbol: true),
             AwesunFunctionItem(id: "chat", title: "聊天", icon: "message", symbol: true),
-            AwesunFunctionItem(id: "keys", title: "自定义键盘", icon: "keyboard", symbol: true),
+            AwesunFunctionItem(id: "layout", title: "自定义键盘", icon: "keyboard.badge.ellipsis", symbol: true),
+            AwesunFunctionItem(id: "keys", title: "更多按键", icon: "ellipsis", symbol: true),
+            AwesunFunctionItem(id: "game", title: "游戏键盘", icon: "gamecontroller", symbol: true),
             AwesunFunctionItem(id: "actions", title: "更多操作", icon: AwesunIcons.more),
             AwesunFunctionItem(id: "quit", title: "断开", icon: AwesunIcons.quit)
         ]
         return functionOrder.compactMap { id in
-            if !canInput && ["mouse", "kbd", "keys"].contains(id) { return nil }
+            if !canInput && ["mouse", "kbd", "keys", "layout", "game"].contains(id) { return nil }
             switch id {
             case "mode" where !canSwitchMode: return nil
             case "sound" where !canSound: return nil
@@ -167,9 +169,22 @@ final class AwesunSessionModel: ObservableObject {
     }
 
     func openKeyboardPanel(_ panel: AwesunSheetKind) {
-        restoreSystemKeyboard = keyboardInset > 0
+        let wasVisible = keyboardInset > 0
+        restoreSystemKeyboard = restoreSystemKeyboard || wasVisible
         sheet = panel
-        if restoreSystemKeyboard { systemKeyboard(false) }
+        if wasVisible { systemKeyboard(false) }
+    }
+
+    func dismissRemoteKeyboard() {
+        restoreSystemKeyboard = false
+        closePanel()
+        systemKeyboard(false)
+    }
+
+    func showSystemKeyboardFromDeck() {
+        restoreSystemKeyboard = false
+        closeSheet()
+        systemKeyboard()
     }
 
     func closePanel() {
@@ -186,6 +201,9 @@ final class AwesunSessionModel: ObservableObject {
             systemKeyboard()
         case "keys":
             openKeyboardPanel(.keyboardMore)
+        case "layout":
+            openKeyboardPanel(.keyboardLayout)
+        case "game": sheet = .gamepad
         case "mode": sheet = .mode
         case "lock": sheet = .lock
         case "guide": sheet = .guide
@@ -430,7 +448,6 @@ final class AwesunSessionModel: ObservableObject {
     }
 
     func sendShortcut(_ shortcut: AwesunKeyboardShortcut) {
-        closePanel()
         AwesunBridge.shared.command("shortcut", ["key": shortcut.key, "modifiers": shortcut.modifiers])
     }
 
@@ -446,42 +463,29 @@ final class AwesunSessionModel: ObservableObject {
         accessoryShortcuts.first { $0.id == id }
     }
 
-    func addAccessoryShortcut(modifiers: Set<String>, key: String) {
-        guard let keyInfo = AwesunKeyboardLayout.keyByCode[key], !modifiers.isEmpty else { return }
-        let ordered = AwesunKeyboardShortcut.modifierOptions.filter { modifiers.contains($0.1) }
-        let labels = ordered.map { $0.0 } + [AwesunKeyboardLayout.title(for: keyInfo)]
-        let secure = key == "VK_DELETE" && modifiers == Set(["ctrl", "alt"])
-        if let existing = accessoryShortcuts.first(where: { $0.labels == labels }) {
-            if !accessoryKeys.contains(existing.id) { accessoryKeys.append(existing.id) }
-        } else {
-            let chord = AwesunKeyboardShortcut(labels: labels,
-                key: secure ? "secure-attention" : key,
-                modifiers: ordered.map { $0.1 }, storageID: "chord-" + UUID().uuidString)
-            accessoryShortcuts.append(chord)
-            accessoryKeys.append(chord.id)
+    var editableAccessorySlots: [AwesunAccessorySlot] {
+        accessoryKeys.compactMap { code in
+            if let shortcut = customShortcut(for: code) {
+                if shortcut.key == "secure-attention" {
+                    return AwesunAccessorySlot(key: "VK_DELETE", modifiers: ["ctrl", "alt"])
+                }
+                return AwesunAccessorySlot(key: shortcut.key, modifiers: Set(shortcut.modifiers))
+            }
+            guard AwesunKeyboardLayout.keyByCode[code] != nil else { return nil }
+            return AwesunAccessorySlot(key: code)
         }
-        saveAccessoryKeys()
     }
 
-    func removeAccessoryKey(_ id: String) {
-        accessoryKeys.removeAll { $0 == id }
-        accessoryShortcuts.removeAll { $0.id == id }
-        saveAccessoryKeys()
-    }
-
-    func toggleAccessoryKey(_ vk: String) {
-        if accessoryKeys.contains(vk) {
-            accessoryKeys.removeAll { $0 == vk }
-        } else {
-            accessoryKeys.append(vk)
+    func replaceAccessorySlots(_ slots: [AwesunAccessorySlot]) {
+        var chords: [AwesunKeyboardShortcut] = []
+        let keys = slots.map { slot in
+            if slot.modifiers.isEmpty { return slot.key }
+            let shortcut = slot.shortcut
+            chords.append(shortcut)
+            return shortcut.id
         }
-        saveAccessoryKeys()
-    }
-
-    func moveAccessoryKey(_ vk: String, offset: Int) {
-        guard let index = accessoryKeys.firstIndex(of: vk),
-              accessoryKeys.indices.contains(index + offset) else { return }
-        accessoryKeys.swapAt(index, index + offset)
+        accessoryShortcuts = chords
+        accessoryKeys = keys
         saveAccessoryKeys()
     }
 
