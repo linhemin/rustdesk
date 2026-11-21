@@ -155,13 +155,16 @@ async fn check_rounds(
                 let (own, peer) = Plan::pair(controller, local.len(), peers.len(), i, round);
                 let (id, _) = &local[own];
                 let advertised = peers[peer];
-                let latest = peers
-                    .last()
-                    .filter(|last| last.ip() == advertised.ip())
-                    .map_or(advertised.port(), SocketAddrV4::port);
+                let same_ip = |addr: &&SocketAddrV4| addr.ip() == advertised.ip();
+                let base = if plan.nats == [Nat::Random; 2] {
+                    peers.iter().find(same_ip)
+                } else {
+                    peers.iter().rev().find(same_ip)
+                }
+                .map_or(advertised.port(), SocketAddrV4::port);
                 let target = SocketAddrV4::new(
                     *advertised.ip(),
-                    plan.target_port(controller, advertised.port(), latest, peer_step, i, round),
+                    plan.target_port(controller, advertised.port(), base, peer_step, i, round),
                 );
                 if pc.expanded_first_check(id, target).await {
                     report.written = report.written.saturating_add(1);

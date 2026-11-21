@@ -129,7 +129,12 @@ impl Plan {
                 // A permutation bounds repeat probes while sampling beyond the
                 // mappings already exposed by the observation service.
                 const SPAN: usize = 65536 - 1024;
-                (1024 + (usize::from(latest) + (round * 503 + slot / 2) * 713) % SPAN) as u16
+                let position = if self.nats == [Nat::Random; 2] {
+                    (round * 31 + slot / 2) % 100
+                } else {
+                    round * 503 + slot / 2
+                };
+                (1024 + (usize::from(latest) + position * 713) % SPAN) as u16
             }
             _ => observed,
         }
@@ -172,5 +177,19 @@ mod tests {
         assert!(Plan::decode(&[4, 0]).is_none());
         assert_eq!(Nat::measured(Some([0, 2, 1, 4])), Linear);
         assert_eq!(Nat::measured(Some([0, 1, 1, 4])), Unknown);
+    }
+
+    #[test]
+    fn dual_random_uses_one_hundred_distinct_guesses_across_passes() {
+        let plan = Plan::new([Nat::Random; 2]);
+        let guesses = |round| {
+            (0..500)
+                .filter(|slot| slot % 2 == 1)
+                .map(|slot| plan.target_port(true, 35500, 42000, 0, slot, round))
+                .collect::<std::collections::HashSet<_>>()
+        };
+        assert_eq!(guesses(1).len(), 100);
+        assert_eq!(guesses(1), guesses(2));
+        assert_eq!(plan.target_port(true, 35500, 42000, 0, 1, 0), 35500);
     }
 }
