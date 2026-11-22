@@ -45,8 +45,16 @@ pub(super) async fn choose<'a, T: 'a>(
                 }
                 if best.as_ref().map_or(true, |(old, _)| rank > *old) {
                     best = Some((rank, path));
+                    // Committing direct TCP ends this race permanently. Allow the six-second
+                    // UDP check plus signaling, while an established UDP relay can upgrade live.
+                    let wait = if rank < Rank::UdpRelay {
+                        grace.max(Duration::from_secs(8))
+                    } else {
+                        grace
+                    };
+                    let end = Instant::now() + wait;
+                    deadline = Some(deadline.map_or(end, |previous| end.min(previous)));
                 }
-                deadline.get_or_insert_with(|| Instant::now() + grace);
             }
             Some(Err(err)) => error = err,
             None => return best.map(|(_, path)| path).ok_or(error),
@@ -64,7 +72,7 @@ mod tests {
         for direct in [true, false] {
             let tcp = async { Ok(("TCP", true)) }.boxed();
             let udp = async {
-                tokio::time::sleep(Duration::from_millis(750)).await;
+                tokio::time::sleep(Duration::from_millis(4_500)).await;
                 Ok((if direct { "UDP" } else { "QUIC" }, direct))
             }
             .boxed();
@@ -87,6 +95,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.0, "TCP");
-        assert_eq!(start.elapsed(), Duration::from_secs(3));
+        assert_eq!(start.elapsed(), Duration::from_secs(8));
     }
 }
