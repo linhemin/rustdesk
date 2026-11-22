@@ -250,6 +250,7 @@ class FfiModel with ChangeNotifier {
   bool get keyboard => _permissions['keyboard'] != false;
 
   clear() {
+    parent.target?.qualityMonitorModel.udpReports.clear();
     final hadConnection = _direct != null;
     _pi = PeerInfo();
     lastUserDisplay = null;
@@ -4591,7 +4592,6 @@ class FFI {
     await imageModel.update(null);
     cursorModel.clear();
     ffiModel.clear();
-    qualityMonitorModel.udpReports.clear();
     canvasModel.clear();
     inputModel.resetModifiers();
     // Dispose relative mouse mode resources to ensure cursor is restored

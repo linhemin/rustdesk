@@ -2017,8 +2017,10 @@ impl Client {
             direct_futures.push(
                 async move {
                     if let Some(paths) = paths {
-                        let round = crate::p2p::probe_report::id(&paths.key);
-                        probe_interface.send(Data::UdpProbeRound(round));
+                        if conn_type == ConnType::DEFAULT_CONN {
+                            let round = crate::p2p::probe_report::id(&paths.key);
+                            probe_interface.send(Data::UdpProbeRound(round));
+                        }
                         return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout).await
                             .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
                     }
