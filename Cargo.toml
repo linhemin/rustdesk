@@ -53,6 +53,8 @@ screencapturekit = ["cpal/screencapturekit"]
 async-trait = "0.1"
 scrap = { path = "libs/scrap", features = ["wayland"] }
 hbb_common = { path = "libs/hbb_common", features = ["webrtc"] }
+# Live direct uses matched ICE replies to decide when a quiet attempt can yield to a retry.
+webrtc = { version = "0.13.0", features = ["ice-socket-diagnostics"] }
 base = { path = "libs/base" }
 serde_derive = "1.0"
 serde = "1.0"
