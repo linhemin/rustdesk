@@ -4245,6 +4245,18 @@ String get appName {
   return _appName;
 }
 
+String? connectionTransportLabel(String streamType, bool direct) {
+  return switch (streamType) {
+    '' => null,
+    'Relay' => 'TCP',
+    'UDP' => 'KCP / UDP',
+    'IPv6' => 'KCP / IPv6',
+    'QUIC' => 'QUIC / UDP',
+    final s when !direct && s.startsWith('WebRTC') => '$s / TURN',
+    final s => s,
+  };
+}
+
 String getConnectionText(bool secure, bool direct, String streamType) {
   String connectionText;
   if (secure && direct) {
@@ -4256,16 +4268,8 @@ String getConnectionText(bool secure, bool direct, String streamType) {
   } else {
     connectionText = translate("Relayed and unencrypted connection");
   }
-  if (streamType == 'Relay') {
-    streamType = 'TCP';
-  } else if (streamType == 'QUIC') {
-    streamType = 'QUIC / UDP';
-  }
-  if (streamType.isEmpty) {
-    return connectionText;
-  } else {
-    return '$connectionText ($streamType)';
-  }
+  final transport = connectionTransportLabel(streamType, direct);
+  return transport == null ? connectionText : '$connectionText ($transport)';
 }
 
 String decode_http_response(http.Response resp) {

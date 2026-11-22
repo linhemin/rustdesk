@@ -118,9 +118,6 @@ class Header: Reactor.Component {
             title_conn = translate("Relayed and unencrypted connection");
         }
         var stream_type = this.stream_type;
-        if (stream_type == "Relay") {
-            stream_type = "TCP";
-        }
         if (stream_type) {
             title_conn += " (" + stream_type + ")";
         }
@@ -709,10 +706,18 @@ function startChat() {
 }
 
 handler.setConnectionType = function(secured, direct, stream_type) {
+    if (stream_type == "Relay") stream_type = "TCP";
+    else if (stream_type == "UDP") stream_type = "KCP / UDP";
+    else if (stream_type == "IPv6") stream_type = "KCP / IPv6";
+    else if (stream_type == "QUIC") stream_type = "QUIC / UDP";
+    else if (!direct && (stream_type == "WebRTC" || stream_type == "WebRTC/IPv6")) stream_type += " / TURN";
     header.update({
        secure_connection: secured,
        direct_connection: direct, 
        stream_type: stream_type,
+    });
+    if (qualityMonitor) qualityMonitor.update({
+        connection_label: translate(direct ? "Direct Connection" : "Relay Connection") + " · " + (stream_type || "—"),
     });
 }
 

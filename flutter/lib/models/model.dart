@@ -256,7 +256,7 @@ class FfiModel with ChangeNotifier {
     _cancelPendingMonitorRestore();
     _secure = null;
     _direct = null;
-    if (hadConnection && (isMobile || isWindows || isMacOS)) {
+    if (hadConnection) {
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     _inputBlocked = false;
@@ -280,7 +280,7 @@ class FfiModel with ChangeNotifier {
     cachedPeerData.streamType = streamType;
     _secure = secure;
     _direct = direct;
-    if (changed && (isMobile || isWindows || isMacOS)) {
+    if (changed) {
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     try {
@@ -4074,44 +4074,13 @@ class QualityMonitorModel with ChangeNotifier {
   bool get show => _show;
   QualityMonitorData get data => _data;
 
-  // Only a WebRTC session on the web names its transport here: web has no
-  // session tab to show it on (the desktop tab's tooltip already does), and
-  // WebRTC is the one path that can be direct or TURN.
-  String? get webrtcTransport {
-    if (!isWeb) return null;
-    final ffiModel = parent.target?.ffiModel;
-    if (ffiModel == null) return null;
-    final streamType = ffiModel.cachedPeerData.streamType;
-    if (!streamType.startsWith('WebRTC')) return null;
-    return ffiModel.direct == false ? '$streamType (TURN)' : streamType;
-  }
-
   bool? get directConnection => parent.target?.ffiModel.direct;
 
   String? get activeTransport {
     final model = parent.target?.ffiModel;
     final direct = model?.direct;
     if (model == null || direct == null) return null;
-    return switch (model.cachedPeerData.streamType) {
-      final transport when transport.startsWith('WebRTC') =>
-        direct ? transport : '$transport / TURN',
-      'UDP' => 'KCP / UDP',
-      'IPv6' => 'KCP / IPv6',
-      'QUIC' => 'QUIC / UDP',
-      'Relay' => 'TCP',
-      '' => null,
-      final transport => transport,
-    };
-  }
-
-  String? get mobileConnection {
-    if (!isMobile) return null;
-    final direct = directConnection;
-    if (direct == null) return null;
-    final connection =
-        translate(direct ? 'Direct Connection' : 'Relay Connection');
-    final transport = activeTransport;
-    return transport == null ? connection : '$connection · $transport';
+    return connectionTransportLabel(model.cachedPeerData.streamType, direct);
   }
 
   void connectionTypeChanged() {
