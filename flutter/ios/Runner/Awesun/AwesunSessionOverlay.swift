@@ -243,7 +243,6 @@ private final class AwesunMouseInput: UIView {
     private var wheelAngle: Double?
     private var wheelRemainder = 0.0
     private var panTimer: Timer?
-    private var hubGuide: CAShapeLayer?
     private let panInterval: TimeInterval = 1.0 / 30.0
 
     init(surface: AwesunTouchSurface) {
@@ -417,20 +416,6 @@ private final class AwesunMouseInput: UIView {
             return
         }
         guard panTimer == nil else { return }
-        if region == .hub {
-            let guide = CAShapeLayer()
-            guide.path = CGPath(ellipseIn: startingHub, transform: nil)
-            guide.fillColor = nil
-            guide.strokeColor = UIColor.white.withAlphaComponent(0.85).cgColor
-            guide.lineWidth = 1.5
-            guide.lineDashPattern = [4, 3]
-            guide.shadowColor = UIColor.black.cgColor
-            guide.shadowOpacity = 0.8
-            guide.shadowRadius = 1
-            guide.shadowOffset = .zero
-            surface?.layer.addSublayer(guide)
-            hubGuide = guide
-        }
         let timer = Timer(timeInterval: panInterval, repeats: true) { [weak self] timer in
             if self == nil {
                 timer.invalidate()
@@ -464,8 +449,6 @@ private final class AwesunMouseInput: UIView {
     private func stopPanning() {
         panTimer?.invalidate()
         panTimer = nil
-        hubGuide?.removeFromSuperlayer()
-        hubGuide = nil
     }
 
     private func updateWheel(at point: CGPoint) {

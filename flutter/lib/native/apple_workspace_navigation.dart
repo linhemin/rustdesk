@@ -107,38 +107,35 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
       final landscape =
           MediaQuery.orientationOf(context) == Orientation.landscape;
-      final height = widget.compact ? (landscape ? 52.0 : 64.0) : 72.0;
-      final width =
-          widget.labels.length * (widget.compact ? 106.0 : 124.0) + 16;
-      final scale = widget.compact ? (landscape ? 60 / 52 : 76 / 64) : 1.0;
+      final extraTextHeight =
+          (MediaQuery.textScalerOf(context).scale(11) - 11).clamp(0.0, 40.0);
+      final height = widget.compact
+          ? (landscape ? 52.0 : 63.0) + extraTextHeight
+          : 72.0;
+      final width = widget.compact ? 440.0 : widget.labels.length * 124.0 + 16;
+      final margin = widget.compact ? 20.0 : 12.0;
       final bottomGap = widget.compact
-          ? (MediaQuery.viewPaddingOf(context).bottom / 2)
+          ? (MediaQuery.viewPaddingOf(context).bottom * 0.6)
               .clamp(8.0, 20.0)
               .toDouble()
           : 6.0;
       return SafeArea(
         top: false,
         bottom: !widget.compact,
-        minimum: EdgeInsets.fromLTRB(12, 0, 12, bottomGap),
+        minimum: EdgeInsets.fromLTRB(margin, 0, margin, bottomGap),
         child: Align(
           heightFactor: 1,
           child: SizedBox(
-            width: width * scale,
-            height: height * scale,
-            // Scale the UIKit controls and glass together, including their hit targets.
-            child: FittedBox(
-              child: SizedBox(
-                width: width,
-                height: height,
-                child: ClipPath.shape(
-                  shape: const StadiumBorder(),
-                  child: UiKitView(
-                    viewType: _viewType,
-                    creationParams: _configuration,
-                    creationParamsCodec: const StandardMessageCodec(),
-                    onPlatformViewCreated: _onPlatformViewCreated,
-                  ),
-                ),
+            width: width,
+            height: height,
+            child: ClipPath.shape(
+              shape: const StadiumBorder(),
+              child: UiKitView(
+                key: ValueKey(widget.compact),
+                viewType: _viewType,
+                creationParams: _configuration,
+                creationParamsCodec: const StandardMessageCodec(),
+                onPlatformViewCreated: _onPlatformViewCreated,
               ),
             ),
           ),
