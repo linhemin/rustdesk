@@ -59,7 +59,6 @@ Offset panNativePointerCanvas(
 
   double axis(double current, double extent, double start, double end,
       double point, double movement) {
-    if (extent + 0.5 < end - start) return current;
     final cursor = point.clamp(start, math.max(start, end - 1)).toDouble();
     if (movement < 0) {
       final limit = math.min(end - extent, cursor - extent + 1);

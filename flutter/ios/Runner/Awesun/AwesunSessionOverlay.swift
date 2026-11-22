@@ -236,15 +236,15 @@ private final class AwesunMouseInput: UIView {
     private var contact: UITouch?
     private var region: AwesunMouseRegion?
     private var start: CGPoint = .zero
-    private var previous: CGPoint = .zero
+    private var startingHub: CGRect = .zero
     private var moved = false
     private let dragThreshold: CGFloat = 5
     private var hubTap: Task<Void, Never>?
     private var wheelAngle: Double?
     private var wheelRemainder = 0.0
-    private var edgeTimer: Timer?
-    private var edgeDirection: CGSize = .zero
-    private let edgeInterval: TimeInterval = 1.0 / 30.0
+    private var panTimer: Timer?
+    private var hubGuide: CAShapeLayer?
+    private let panInterval: TimeInterval = 1.0 / 30.0
 
     init(surface: AwesunTouchSurface) {
         self.surface = surface
@@ -269,6 +269,10 @@ private final class AwesunMouseInput: UIView {
         geometry(surface).pointer
     }
 
+    private func requestedCenter(for point: CGPoint) -> CGPoint {
+        CGPoint(x: startingHub.midX + point.x - start.x, y: startingHub.midY + point.y - start.y)
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard contact == nil, let touch = touches.first, let surface = surface else { return }
         let point = touch.location(in: self)
@@ -277,7 +281,10 @@ private final class AwesunMouseInput: UIView {
         contact = touch
         region = hit
         start = point
-        previous = point
+        let layout = geometry(surface)
+        let radius = AwesunControlLayout.hub * layout.scale
+        startingHub = CGRect(x: layout.center.x - radius, y: layout.center.y - radius,
+                             width: 2 * radius, height: 2 * radius)
         moved = false
         let model = surface.model
         if hit != .hub {
@@ -302,20 +309,17 @@ private final class AwesunMouseInput: UIView {
               let region = region, let surface = surface else { return }
         let current = touch.location(in: self)
         let distance = hypot(current.x - start.x, current.y - start.y)
-        let wasMoved = moved
         moved = moved || distance >= dragThreshold
         switch region {
         case .left, .hub:
             if moved {
                 hubTap?.cancel()
                 hubTap = nil
-                let origin = wasMoved ? previous : start
-                let old = geometry(surface).center
-                let motion = CGSize(width: current.x - origin.x, height: current.y - origin.y)
-                let next = CGPoint(x: old.x + motion.width, y: old.y + motion.height)
+                // Keep the displacement beyond the edge until this contact returns inside.
+                let next = requestedCenter(for: current)
                 let layout = geometry(surface, center: next)
                 surface.model.moveVirtualPointer(anchor: layout.center, point: layout.pointer)
-                updateEdgeMotion(motion, layout: layout, locked: surface.model.displayLocked)
+                updatePanning(at: current, layout: layout, locked: surface.model.displayLocked)
             }
         case .wheelTop:
             if moved {
@@ -330,7 +334,6 @@ private final class AwesunMouseInput: UIView {
         default:
             break
         }
-        previous = current
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -385,7 +388,7 @@ private final class AwesunMouseInput: UIView {
     }
 
     private func finish() {
-        stopEdgeMotion()
+        stopPanning()
         let temporaryWheel = region == .wheelTop
         contact = nil
         region = nil
@@ -400,45 +403,69 @@ private final class AwesunMouseInput: UIView {
         }
     }
 
-    private func updateEdgeMotion(_ motion: CGSize, layout: AwesunMouseGeometry, locked: Bool) {
-        let velocity = layout.canvasVelocity(toward: motion)
+    private func panVelocity(at point: CGPoint, layout: AwesunMouseGeometry) -> CGSize {
+        if region == .hub {
+            return AwesunMouseGeometry.hubVelocity(from: startingHub, toward: point)
+        }
+        return layout.canvasVelocity(toward: requestedCenter(for: point))
+    }
+
+    private func updatePanning(at point: CGPoint, layout: AwesunMouseGeometry, locked: Bool) {
+        let velocity = panVelocity(at: point, layout: layout)
         guard !locked && velocity != .zero else {
-            stopEdgeMotion()
+            stopPanning()
             return
         }
-        edgeDirection = motion
-        guard edgeTimer == nil else { return }
-        let timer = Timer(timeInterval: edgeInterval, repeats: true) { [weak self] timer in
+        guard panTimer == nil else { return }
+        if region == .hub {
+            let guide = CAShapeLayer()
+            guide.path = CGPath(ellipseIn: startingHub, transform: nil)
+            guide.fillColor = nil
+            guide.strokeColor = UIColor.white.withAlphaComponent(0.85).cgColor
+            guide.lineWidth = 1.5
+            guide.lineDashPattern = [4, 3]
+            guide.shadowColor = UIColor.black.cgColor
+            guide.shadowOpacity = 0.8
+            guide.shadowRadius = 1
+            guide.shadowOffset = .zero
+            surface?.layer.addSublayer(guide)
+            hubGuide = guide
+        }
+        let timer = Timer(timeInterval: panInterval, repeats: true) { [weak self] timer in
             if self == nil {
                 timer.invalidate()
                 return
             }
-            Task { @MainActor [weak self] in self?.advanceEdgeMotion() }
+            Task { @MainActor [weak self] in
+                guard let self = self, self.panTimer === timer else { return }
+                self.advancePanning()
+            }
         }
-        edgeTimer = timer
+        panTimer = timer
         RunLoop.main.add(timer, forMode: .common)
-        advanceEdgeMotion()
+        advancePanning()
     }
 
-    private func advanceEdgeMotion() {
-        guard let surface = surface, contact != nil, !surface.isHidden, !surface.model.displayLocked else {
-            stopEdgeMotion()
+    private func advancePanning() {
+        guard let surface = surface, let contact = contact, !surface.isHidden, !surface.model.displayLocked else {
+            stopPanning()
             return
         }
         let layout = geometry(surface)
-        let velocity = layout.canvasVelocity(toward: edgeDirection)
+        let velocity = panVelocity(at: contact.location(in: self), layout: layout)
         guard velocity != .zero else {
-            stopEdgeMotion()
+            stopPanning()
             return
         }
         AwesunBridge.shared.virtualMove(to: layout.pointer, canvasDelta: CGSize(
-            width: velocity.width * edgeInterval, height: velocity.height * edgeInterval))
+            width: velocity.width * panInterval, height: velocity.height * panInterval))
     }
 
-    private func stopEdgeMotion() {
-        edgeTimer?.invalidate()
-        edgeTimer = nil
-        edgeDirection = .zero
+    private func stopPanning() {
+        panTimer?.invalidate()
+        panTimer = nil
+        hubGuide?.removeFromSuperlayer()
+        hubGuide = nil
     }
 
     private func updateWheel(at point: CGPoint) {

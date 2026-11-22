@@ -88,6 +88,22 @@ void main() {
         const Offset(0, 12));
   });
 
+  test('holding the mouse hub reaches the last pixel of a letterboxed desktop',
+      () {
+    const viewport = Rect.fromLTWH(0, 0, 844, 390);
+    const image = Size(692, 390);
+    const tip = Offset(674, 244);
+    var origin = const Offset(76, 0);
+    for (var tick = 0; tick < 10; tick++) {
+      origin = panNativePointerCanvas(
+          origin, image, viewport, tip, const Offset(-20, 0));
+    }
+    expect(tip.dx - origin.dx, image.width - 1);
+    expect(origin.dy, 0);
+    expect(panNativePointerCanvas(origin, image, viewport, tip, Offset.zero),
+        origin);
+  });
+
   test('native keyboard translation restores a panned canvas without a refit',
       () {
     final ffi = _Session();
