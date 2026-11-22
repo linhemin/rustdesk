@@ -124,7 +124,8 @@ final class AwesunSessionOverlay {
         let inWindow = window.convert(value.cgRectValue, from: window.screen.coordinateSpace)
         let end = surface.convert(inWindow, from: window)
         let overlap = surface.bounds.intersection(end)
-        let docked = !overlap.isEmpty && end.maxY >= surface.bounds.maxY - 1
+        let docked = overlap.height > surface.safeAreaInsets.bottom + 1
+            && end.maxY >= surface.bounds.maxY - 1
         let coversWidth = overlap.width >= surface.bounds.width - 1
         let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
         showSystemAccessory(docked && coversWidth, duration: duration)
