@@ -27,12 +27,12 @@ final class AppleWorkspaceNavigationFactory: NSObject, FlutterPlatformViewFactor
 private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
     private let brand = NSTextField(labelWithString: "")
-    private let settingsButton = NSButton()
-    private let separator = NSBox()
+    private let settingsTopInset: CGFloat = 16
     private let channel: FlutterMethodChannel
     private var listHeight: NSLayoutConstraint!
     private var labels: [String] = []
     private var symbols: [String] = []
+    private var settingsLabel = ""
     private var applyingConfiguration = false
 
     init(viewId: Int64, arguments: Any?, messenger: FlutterBinaryMessenger) {
@@ -75,18 +75,9 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         scroll.drawsBackground = false
         scroll.hasHorizontalScroller = false
         scroll.documentView = table
-        separator.boxType = .separator
-        settingsButton.bezelStyle = .inline
-        settingsButton.isBordered = false
-        settingsButton.alignment = .left
-        settingsButton.imagePosition = .imageLeading
-        settingsButton.image = Self.symbol("slider.horizontal.3")
-        settingsButton.target = self
-        settingsButton.action = #selector(openSettings)
-
         let edge = NSBox()
         edge.boxType = .separator
-        for item in [header, scroll, separator, settingsButton, edge] as [NSView] {
+        for item in [header, scroll, edge] as [NSView] {
             item.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(item)
         }
@@ -105,14 +96,6 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
             listHeight,
-            separator.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-            separator.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 10),
-            separator.heightAnchor.constraint(equalToConstant: 1),
-            settingsButton.leadingAnchor.constraint(equalTo: header.leadingAnchor),
-            settingsButton.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
-            settingsButton.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
-            settingsButton.heightAnchor.constraint(equalToConstant: 33),
             edge.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             edge.topAnchor.constraint(equalTo: content.topAnchor),
             edge.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -173,10 +156,6 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         return NSImage(named: NSImage.actionTemplateName)
     }
 
-    @objc private func openSettings() {
-        channel.invokeMethod("settings", arguments: nil)
-    }
-
     private func update(_ arguments: Any?) {
         guard let config = arguments as? [String: Any],
               let labels = config["labels"] as? [String],
@@ -188,18 +167,15 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         defer { applyingConfiguration = false }
         appearance = NSAppearance(named: config["dark"] as? Bool == true ? .darkAqua : .aqua)
         brand.stringValue = config["brand"] as? String ?? ""
-        let settingsTitle = config["settings"] as? String ?? ""
-        settingsButton.attributedTitle = NSAttributedString(string: settingsTitle, attributes: [
-            .font: NSFont.systemFont(ofSize: 13),
-            .foregroundColor: NSColor.labelColor,
-        ])
-        settingsButton.isHidden = settingsTitle.isEmpty
-        separator.isHidden = settingsButton.isHidden
+        let settings = config["settings"] as? String ?? ""
         table.rowHeight = config["compact"] as? Bool == true ? 32 : 35
-        listHeight.constant = CGFloat(labels.count) * (table.rowHeight + table.intercellSpacing.height)
-        if self.labels != labels || self.symbols != symbols {
+        let rowSpacing = table.rowHeight + table.intercellSpacing.height
+        listHeight.constant = CGFloat(labels.count) * rowSpacing
+            + (settings.isEmpty ? 0 : rowSpacing + settingsTopInset)
+        if self.labels != labels || self.symbols != symbols || settingsLabel != settings {
             self.labels = labels
             self.symbols = symbols
+            settingsLabel = settings
             table.reloadData()
         }
         if labels.indices.contains(selected) {
@@ -209,33 +185,63 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         }
     }
 
-    func numberOfRows(in tableView: NSTableView) -> Int { labels.count }
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        labels.count + (settingsLabel.isEmpty ? 0 : 1)
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        tableView.rowHeight + (row == labels.count ? settingsTopInset : 0)
+    }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        if row == labels.count && !settingsLabel.isEmpty {
+            // Settings opens a separate tab; keep the current home destination selected.
+            if !applyingConfiguration {
+                channel.invokeMethod("settings", arguments: nil)
+            }
+            return false
+        }
+        return true
+    }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         WorkspaceDestinationRow()
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let title = NSTextField(labelWithString: labels[row])
+        let settings = row == labels.count
+        let title = NSTextField(labelWithString: settings ? settingsLabel : labels[row])
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let icon = NSImageView()
-        icon.image = Self.symbol(symbols[row])
+        icon.image = Self.symbol(settings ? "slider.horizontal.3" : symbols[row])
         icon.setAccessibilityElement(false)
         let stack = NSStackView(views: [icon, title])
-        stack.spacing = 10
+        stack.spacing = settings ? 5 : 10
         stack.alignment = .centerY
         stack.translatesAutoresizingMaskIntoConstraints = false
         let cell = NSTableCellView()
         cell.textField = title
         cell.imageView = icon
-        cell.toolTip = labels[row]
+        cell.toolTip = title.stringValue
         cell.addSubview(stack)
+        if settings {
+            let separator = NSBox()
+            separator.boxType = .separator
+            separator.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(separator)
+            NSLayoutConstraint.activate([
+                separator.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
+                separator.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+                separator.topAnchor.constraint(equalTo: cell.topAnchor, constant: settingsTopInset / 2),
+                separator.heightAnchor.constraint(equalToConstant: 1)
+            ])
+        }
         NSLayoutConstraint.activate([
-            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.widthAnchor.constraint(equalToConstant: settings ? 15 : 18),
             stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -8),
-            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor, constant: settings ? settingsTopInset / 2 : 0)
         ])
         return cell
     }
