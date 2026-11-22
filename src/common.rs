@@ -1388,6 +1388,10 @@ fn disabled_by_default_on_self_hosted(key: &str) -> bool {
     matches!(key, keys::OPTION_ENABLE_UDP_PUNCH | keys::OPTION_ENABLE_IPV6_PUNCH)
 }
 
+pub(crate) fn direct_only_enabled() -> bool {
+    get_local_option(keys::OPTION_DIRECT_ONLY) == "Y"
+}
+
 pub fn get_local_option(key: &str) -> String {
     let v = LocalConfig::get_option(key);
     if v.is_empty()

@@ -700,6 +700,9 @@ impl RendezvousMediator {
     }
 
     async fn handle_request_relay(&self, rr: RequestRelay, server: ServerPtr) -> ResultType<()> {
+        if crate::direct_only_enabled() {
+            return Ok(());
+        }
         if let Err(err) = self.check_relay_request(&rr, Instant::now()) {
             hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, warn, "Ignored relay request: {}", err);
             return Ok(());
@@ -724,6 +727,7 @@ impl RendezvousMediator {
             rr.secure,
             false,
             false,
+            false,
             Default::default(),
             String::new(),
             meta,
@@ -739,6 +743,7 @@ impl RendezvousMediator {
         server: ServerPtr,
         secure: bool,
         initiate: bool,
+        signaling_only: bool,
         force_relay: bool,
         socket_addr_v6: bytes::Bytes,
         webrtc_sdp_answer: String,
@@ -815,12 +820,17 @@ impl RendezvousMediator {
             ..Default::default()
         };
         if initiate {
-            rr.uuid = uuid.clone();
-            rr.relay_server = relay_server.clone();
+            if !signaling_only {
+                rr.uuid = uuid.clone();
+                rr.relay_server = relay_server.clone();
+            }
             rr.set_id(Config::get_id());
         }
         msg_out.set_relay_response(rr);
         socket.send(&msg_out).await?;
+        if signaling_only {
+            return Ok(());
+        }
         crate::create_relay_connection(
             server,
             relay_server,
@@ -899,8 +909,14 @@ impl RendezvousMediator {
             return Ok(());
         }
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&fla.socket_addr_v6);
-        let relay_server = self.get_relay_server(fla.relay_server.clone());
-        remember_reported_relay(&relay_server, Instant::now());
+        let direct_only = fla.direct_only || crate::direct_only_enabled();
+        let relay_server = if direct_only {
+            String::new()
+        } else {
+            let relay = self.get_relay_server(fla.relay_server.clone());
+            remember_reported_relay(&relay, Instant::now());
+            relay
+        };
         let relay = use_ws() || Config::is_proxy();
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
@@ -941,6 +957,7 @@ impl RendezvousMediator {
             server,
             true,
             true,
+            direct_only,
             relay,
             socket_addr_v6,
             String::new(),
@@ -1126,6 +1143,7 @@ impl RendezvousMediator {
             });
         }
 
+        let direct_only = WebRTCStream::endpoint_declares_direct_only(&answer);
         let session_key_for_cleanup = session_key.clone();
         tokio::spawn(async move {
             let result = stream.wait_connected(CONNECT_TIMEOUT).await;
@@ -1153,6 +1171,10 @@ impl RendezvousMediator {
                 // that never finished would leave the pcs to pile up unbounded, with the count
                 // reading zero. Detached, the wait is on WEBRTC_RT, which owns the pc, and not on
                 // this task.
+                stream.close_detached_with(slot);
+                return;
+            }
+            if direct_only && stream.is_relayed().await != Some(false) {
                 stream.close_detached_with(slot);
                 return;
             }
@@ -1201,13 +1223,16 @@ impl RendezvousMediator {
         // The controller's force_relay alone does not say whether ICE must be Relay-only; its
         // offer envelope does. `ice_policy: "all"` means the relay was forced by the transport
         // (ws), so answer with full ICE and let a direct pair form.
+        let strict_offer = WebRTCStream::endpoint_declares_direct_only(&ph.webrtc_sdp_offer);
+        let direct_only = ph.direct_only || strict_offer || crate::direct_only_enabled();
         let webrtc_relay_only =
-            ph.force_relay && !WebRTCStream::endpoint_declares_all_ice(&ph.webrtc_sdp_offer);
+            !strict_offer && ph.force_relay && !WebRTCStream::endpoint_declares_all_ice(&ph.webrtc_sdp_offer);
         // No enable-webrtc check here: it is LocalConfig, which the UI process writes and never
         // syncs over IPC, so this (server) process would read the private-server default of "N"
         // and refuse to answer in exactly the self-hosted deployments the transport is for.
         // A proxy still rules it out — ICE would bypass it and leak the real IP.
         let webrtc_viable = !ph.webrtc_sdp_offer.is_empty()
+            && (!direct_only || strict_offer)
             && !Config::is_proxy()
             && (!webrtc_relay_only || WebRTCStream::has_turn_server());
         let webrtc_sdp_answer = if webrtc_viable {
@@ -1250,8 +1275,13 @@ impl RendezvousMediator {
             )
             .await;
         }
-        let relay_server = self.get_relay_server(ph.relay_server);
-        remember_reported_relay(&relay_server, Instant::now());
+        let relay_server = if direct_only {
+            String::new()
+        } else {
+            let relay = self.get_relay_server(ph.relay_server);
+            remember_reported_relay(&relay, Instant::now());
+            relay
+        };
         // for ensure, websocket go relay directly
         // A symmetric NAT relays the legacy transports but deliberately not WebRTC: the answer
         // built above rides along on the relay request, and ICE probes the candidate pairs rather
@@ -1279,6 +1309,7 @@ impl RendezvousMediator {
                     server,
                     true,
                     true,
+                    direct_only,
                     relay,
                     socket_addr_v6.clone(),
                     webrtc_sdp_answer.clone(),

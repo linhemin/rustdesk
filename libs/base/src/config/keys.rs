@@ -136,6 +136,7 @@ pub const OPTION_P2P_SERVER_IP: &str = "p2p-server-ip";
 pub const OPTION_ENABLE_UDP_PUNCH: &str = "enable-udp-punch";
 pub const OPTION_ENABLE_IPV6_PUNCH: &str = "enable-ipv6-punch";
 pub const OPTION_ENABLE_PORT_FORWARD_MUX: &str = "enable-port-forward-mux";
+pub const OPTION_DIRECT_ONLY: &str = "direct-only";
 pub const OPTION_ENABLE_WEBRTC: &str = "enable-webrtc";
 pub const OPTION_RECORD_P2P_DIAGNOSTICS: &str = "record-p2p-diagnostics";
 pub const OPTION_P2P_TCP53_TARGET: &str = "p2p-tcp53-target";
@@ -268,6 +269,7 @@ pub const KEYS_LOCAL_SETTINGS: &[&str] = &[
     OPTION_ENABLE_UDP_PUNCH,
     OPTION_ENABLE_IPV6_PUNCH,
     OPTION_ENABLE_PORT_FORWARD_MUX,
+    OPTION_DIRECT_ONLY,
     OPTION_ENABLE_WEBRTC,
     OPTION_RELAY_FALLBACK_DELAY,
     OPTION_TOUCH_MODE,
