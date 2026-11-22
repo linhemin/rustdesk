@@ -40,6 +40,15 @@ import '../widgets/session_touchpad.dart';
 
 final initText = '1' * 1024;
 
+void updateIosSessionWakelock(UniqueKey key, AppLifecycleState? state) {
+  if (state == AppLifecycleState.resumed) {
+    WakelockManager.enable(key);
+  } else if (state == AppLifecycleState.paused ||
+      state == AppLifecycleState.detached) {
+    WakelockManager.disable(key);
+  }
+}
+
 // Workaround for Android (default input method, Microsoft SwiftKey keyboard) when using physical keyboard.
 // When connecting a physical keyboard, `KeyEvent.physicalKey.usbHidUsage` are wrong is using Microsoft SwiftKey keyboard.
 // https://github.com/flutter/flutter/issues/159384
@@ -240,7 +249,12 @@ class _RemotePageState extends State<RemotePage>
       gFFI.dialogManager
           .showLoading(translate('Connecting...'), onCancel: closeConnection);
     });
-    WakelockManager.enable(_uniqueKey);
+    if (isIOS) {
+      updateIosSessionWakelock(
+          _uniqueKey, WidgetsBinding.instance.lifecycleState);
+    } else {
+      WakelockManager.enable(_uniqueKey);
+    }
     _physicalFocusNode.requestFocus();
     HardwareKeyboard.instance.addHandler(_handleLocalKeyEvent);
     gFFI.inputModel.listenToMouse(true);
@@ -302,7 +316,10 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   Future<void> dispose() async {
-    if (isIOS) _canvasDrag.detach();
+    if (isIOS) {
+      WakelockManager.disable(_uniqueKey);
+      _canvasDrag.detach();
+    }
     _nativeSessionReadiness?.dispose();
     if (isIOS) {
       gFFI.qualityMonitorModel.removeListener(_syncNativePerformance);
@@ -342,7 +359,7 @@ class _RemotePageState extends State<RemotePage>
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: SystemUiOverlay.values);
-    WakelockManager.disable(_uniqueKey);
+    if (!isIOS) WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
     removeSharedStates(widget.id);
     // `on_voice_call_closed` should be called when the connection is ended.
@@ -353,6 +370,7 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (isIOS) updateIosSessionWakelock(_uniqueKey, state);
     if (isIOS && state != AppLifecycleState.resumed) _canvasDrag.interrupt();
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
