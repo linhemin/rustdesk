@@ -1023,6 +1023,27 @@ class _RemotePageState extends State<RemotePage>
         _canvasDrag.interrupt();
         _nativePointerBatch?.pan = Offset.zero;
         return null;
+      case 'panCanvasBy':
+        final canvas = gFFI.canvasModel;
+        if (!_nativeSessionActive || !_canSendSessionInput || canvas.locked) {
+          return null;
+        }
+        if (arguments case {'x': num x, 'y': num y, 'dx': num dx, 'dy': num dy}) {
+          final tip = Offset(x.toDouble(), y.toDouble());
+          final delta = Offset(dx.toDouble(), dy.toDouble());
+          final box = _sessionViewportKey.currentContext?.findRenderObject();
+          if (tip.isFinite && delta.isFinite && box is RenderBox &&
+              box.attached && box.hasSize) {
+            // A touch delta has already happened; a following lift must not discard it.
+            final before = Offset(canvas.x, canvas.y);
+            canvas.panNativeVirtualMouse(
+                delta, _nativePointerViewport(box), box.globalToLocal(tip));
+            if (before != Offset(canvas.x, canvas.y)) {
+              _moveNativePointer(tip, Offset.zero);
+            }
+          }
+        }
+        return null;
       case 'menu':
         return _nativeMenu(model);
       case 'action':

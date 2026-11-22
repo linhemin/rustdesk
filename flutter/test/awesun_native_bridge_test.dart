@@ -75,6 +75,7 @@ void main() {
       onClose: () {},
       onCommand: (id, args) async {
         commands.add(id);
+        if (id == 'panCanvasBy') return [args['x'], args['y'], args['dx'], args['dy']];
         return ['Copy P2P diagnostics', 'Refresh'];
       },
       onVirtualMove: (point, pan) => virtual.add((point, pan)),
@@ -103,6 +104,10 @@ void main() {
     await send(const MethodCall('virtualMove', {'x': 75, 'y': 93}));
     await send(const MethodCall(
         'virtualMove', {'x': 280, 'y': 450, 'panX': -12, 'panY': -8}));
+    expect(await send(const MethodCall('command', {
+      'id': 'panCanvasBy', 'x': 73, 'y': 91, 'dx': 12, 'dy': 24,
+    })), [73, 91, 12, 24]);
+    await send(const MethodCall('command', {'id': 'interruptCanvasPan'}));
     await send(const MethodCall('virtualDrag', {'down': false}));
     await send(
         const MethodCall('virtualClick', {'button': 'left', 'x': 73, 'y': 91}));
@@ -128,7 +133,7 @@ void main() {
     expect(input.events, hasLength(3));
     expect(await send(const MethodCall('command', {'id': 'menu'})),
         ['Copy P2P diagnostics', 'Refresh']);
-    expect(commands, ['menu']);
+    expect(commands, ['panCanvasBy', 'interruptCanvasPan', 'menu']);
     expect(await bridge.setActive(false), isFalse);
     await send(right);
     expect(input.events, hasLength(3));

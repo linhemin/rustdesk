@@ -345,7 +345,11 @@ private final class AwesunMouseInput: UIView {
                 let delta = CGSize(width: point.x - canvasPrevious.x, height: point.y - canvasPrevious.y)
                 canvasPrevious = point
                 if !surface.model.displayLocked && delta != .zero {
-                    AwesunBridge.shared.virtualMove(to: pointer(surface), canvasDelta: delta)
+                    let tip = pointer(surface)
+                    AwesunBridge.shared.command("panCanvasBy", [
+                        "x": Double(tip.x), "y": Double(tip.y),
+                        "dx": Double(delta.width), "dy": Double(delta.height)
+                    ])
                 }
             }
             return
