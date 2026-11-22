@@ -27,6 +27,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common/widgets/dialog.dart';
+import '../widgets/settings_workspace.dart';
 import '../../common/widgets/login.dart';
 
 const double _kTabWidth = 200;
@@ -291,48 +292,89 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
       final tabs = _settingTabs();
       return Scaffold(
           body: _buildBlock(children: [
-        Expanded(
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-              Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-                  child: Text(translate('Settings'),
-                      style: theme.textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w700))),
-              TabBar(
-                  controller: _workspaceTabs,
-                  isScrollable: true,
-                  tabAlignment: TabAlignment.start,
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-                  labelColor: theme.colorScheme.primary,
-                  unselectedLabelColor: theme.hintColor,
-                  labelStyle: theme.textTheme.labelLarge
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                  unselectedLabelStyle: theme.textTheme.labelLarge
-                      ?.copyWith(fontWeight: FontWeight.w500),
-                  indicatorSize: TabBarIndicatorSize.tab,
-                  indicator: UnderlineTabIndicator(
-                      borderSide:
-                          BorderSide(color: theme.colorScheme.primary, width: 3)),
-                  dividerColor: theme.dividerColor,
-                  onTap: controller.jumpToPage,
-                  tabs: [
-                    for (final tab in tabs)
-                      Tab(
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(tab.unselected, size: 17),
-                        const SizedBox(width: 6),
-                        Text(translate(tab.label)),
+        Expanded(child: LayoutBuilder(builder: (context, bounds) {
+          final wide = bounds.maxWidth >= 736;
+          return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            if (wide)
+              WorkspaceSidebar(
+                width: bounds.maxWidth >= 1000 ? 232 : 172,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(24, 24, 12, 20),
+                          child: Text(translate('Settings'),
+                              style: theme.textTheme.titleLarge)),
+                      Expanded(
+                          child: ListView(children: [
+                        for (var i = 0; i < tabs.length; i++)
+                          Obx(() => WorkspaceSettingsNavItem(
+                              label: translate(tabs[i].label),
+                              icon: selectedTab.value == tabs[i].key
+                                  ? tabs[i].selected
+                                  : tabs[i].unselected,
+                              selected: selectedTab.value == tabs[i].key,
+                              onTap: () => controller.jumpToPage(i))),
                       ])),
-                  ]),
-              Expanded(
-                  child: PageView(
-                      controller: controller,
-                      physics: const NeverScrollableScrollPhysics(),
-                      children: _children())),
-            ])),
+                    ]),
+              ),
+            Expanded(
+                child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (wide)
+                  Obx(() {
+                    final tab =
+                        tabs.firstWhere((tab) => tab.key == selectedTab.value);
+                    return WorkspaceSettingsHeader(
+                        title: translate(tab.label), icon: tab.unselected);
+                  })
+                else ...[
+                  Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+                      child: Text(translate('Settings'),
+                          style: theme.textTheme.headlineSmall)),
+                  TabBar(
+                      controller: _workspaceTabs,
+                      isScrollable: true,
+                      tabAlignment: TabAlignment.start,
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                      labelColor: theme.colorScheme.primary,
+                      unselectedLabelColor: theme.hintColor,
+                      labelStyle: theme.textTheme.labelLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                      unselectedLabelStyle: theme.textTheme.labelLarge
+                          ?.copyWith(fontWeight: FontWeight.w500),
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      indicator: UnderlineTabIndicator(
+                          borderSide: BorderSide(
+                              color: theme.colorScheme.primary, width: 3)),
+                      dividerColor: theme.dividerColor,
+                      onTap: controller.jumpToPage,
+                      tabs: [
+                        for (final tab in tabs)
+                          Tab(
+                              child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                Icon(tab.unselected, size: 17),
+                                const SizedBox(width: 6),
+                                Text(translate(tab.label)),
+                              ])),
+                      ]),
+                  const SizedBox(height: 12),
+                ],
+                Expanded(
+                    child: PageView(
+                  controller: controller,
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: _children(),
+                )),
+              ],
+            )),
+          ]);
+        })),
       ]));
     }
     return Scaffold(
@@ -476,7 +518,13 @@ class _GeneralState extends State<_General> {
       children: [
         if (!isWeb) service(),
         theme(),
-        _Card(title: 'Language', children: [language()]),
+        if (isWindows || isMacOS)
+          _Card(
+              title: 'Language',
+              title_suffix: [Flexible(child: language())],
+              children: const [])
+        else
+          _Card(title: 'Language', children: [language()]),
         if (!isWeb) hwcodec(),
         if (!isWeb) audio(context),
         if (!isWeb) record(context),
@@ -533,6 +581,24 @@ class _GeneralState extends State<_General> {
     }
 
     final isOptFixed = isOptionFixed(kCommConfKeyTheme);
+    if (isWindows || isMacOS) {
+      const themes = {
+        'light': 'Light',
+        'dark': 'Dark',
+        'system': 'Follow System'
+      };
+      return _Card(title: 'Theme', title_suffix: [
+        Flexible(
+            child: WorkspaceSettingsChoice(
+          value: current,
+          options: {
+            for (final option in themes.entries)
+              option.key: translate(option.value)
+          },
+          onChanged: isOptFixed ? null : onChanged,
+        ))
+      ], children: const []);
+    }
     return _Card(title: 'Theme', children: [
       _Radio<String>(context,
           value: 'light',
@@ -587,6 +653,7 @@ class _GeneralState extends State<_General> {
                     child: Text(translate(serviceStop.value ? 'Off' : 'On'),
                         style: theme.textTheme.bodyMedium)),
                 OutlinedButton(
+                    style: OutlinedButton.styleFrom(foregroundColor: theme.colorScheme.primary),
                     onPressed: serviceBtnEnabled.value ? toggleService : null,
                     child: Text(translate(label))),
               ]))
@@ -989,16 +1056,24 @@ class _GeneralState extends State<_General> {
         currentKey = defaultOptionLang;
       }
       final isOptFixed = isOptionFixed(kCommConfKeyLang);
+      Future<void> changeLanguage(String key) async {
+        await bind.mainSetLocalOption(key: kCommConfKeyLang, value: key);
+        if (isWeb) reloadCurrentWindow();
+        if (!isWeb) reloadAllWindows();
+        if (!isWeb) bind.mainChangeLanguage(lang: key);
+      }
+
+      if (isWindows || isMacOS) {
+        return WorkspaceSettingsChoice(
+            value: currentKey,
+            options: Map.fromIterables(keys, values),
+            onChanged: isOptFixed ? null : changeLanguage);
+      }
       return ComboBox(
         keys: keys,
         values: values,
         initialKey: currentKey,
-        onChanged: (key) async {
-          await bind.mainSetLocalOption(key: kCommConfKeyLang, value: key);
-          if (isWeb) reloadCurrentWindow();
-          if (!isWeb) reloadAllWindows();
-          if (!isWeb) bind.mainChangeLanguage(lang: key);
-        },
+        onChanged: changeLanguage,
         enabled: !isOptFixed,
       ).marginOnly(left: _kContentHMargin);
     });
@@ -2161,6 +2236,25 @@ class _DisplayState extends State<_Display> {
     ]).marginOnly(bottom: _kListViewBottomMargin);
   }
 
+  Widget _desktopChoice(String title, String value, Map<String, String> options,
+      ValueChanged<String>? onChanged,
+      {List<Widget> children = const []}) {
+    return _Card(
+        title: title,
+        title_suffix: [
+          Flexible(
+              child: WorkspaceSettingsChoice(
+                  value: value,
+                  fallback: translate('Default'),
+                  options: {
+                    for (final option in options.entries)
+                      option.key: translate(option.value)
+                  },
+                  onChanged: onChanged))
+        ],
+        children: children);
+  }
+
   Widget viewStyle(BuildContext context) {
     final isOptFixed = isOptionFixed(kOptionViewStyle);
     onChanged(String value) async {
@@ -2169,6 +2263,16 @@ class _DisplayState extends State<_Display> {
     }
 
     final groupValue = bind.mainGetUserDefaultOption(key: kOptionViewStyle);
+    if (isWindows || isMacOS) {
+      return _desktopChoice(
+          'Default View Style',
+          groupValue,
+          const {
+            kRemoteViewStyleOriginal: 'Scale original',
+            kRemoteViewStyleAdaptive: 'Scale adaptive'
+          },
+          isOptFixed ? null : onChanged);
+    }
     return _Card(title: 'Default View Style', children: [
       _Radio(context,
           value: kRemoteViewStyleOriginal,
@@ -2199,6 +2303,27 @@ class _DisplayState extends State<_Display> {
       setState(() {});
     }
 
+    if (isWindows || isMacOS) {
+      return _desktopChoice(
+          'Default Scroll Style',
+          groupValue,
+          const {
+            kRemoteScrollStyleAuto: 'ScrollAuto',
+            kRemoteScrollStyleBar: 'Scrollbar',
+            kRemoteScrollStyleEdge: 'ScrollEdge'
+          },
+          isOptFixed ? null : onChanged,
+          children: [
+            if (groupValue == kRemoteScrollStyleEdge)
+              EdgeThicknessControl(
+                  value: double.tryParse(bind.mainGetUserDefaultOption(
+                          key: kOptionEdgeScrollEdgeThickness)) ??
+                      100.0,
+                  onChanged: isOptionFixed(kOptionEdgeScrollEdgeThickness)
+                      ? null
+                      : onEdgeScrollEdgeThicknessChanged)
+          ]);
+    }
     return _Card(title: 'Default Scroll Style', children: [
       _Radio(context,
           value: kRemoteScrollStyleAuto,
@@ -2239,6 +2364,22 @@ class _DisplayState extends State<_Display> {
 
     final isOptFixed = isOptionFixed(kOptionImageQuality);
     final groupValue = bind.mainGetUserDefaultOption(key: kOptionImageQuality);
+    if (isWindows || isMacOS) {
+      return _desktopChoice(
+          'Default Image Quality',
+          groupValue,
+          const {
+            kRemoteImageQualityBest: 'Good image quality',
+            kRemoteImageQualityBalanced: 'Balanced',
+            kRemoteImageQualityLow: 'Optimize reaction time',
+            kRemoteImageQualityCustom: 'Custom'
+          },
+          isOptFixed ? null : onChanged,
+          children: [
+            if (groupValue == kRemoteImageQualityCustom)
+              customImageQualitySetting()
+          ]);
+    }
     return _Card(title: 'Default Image Quality', children: [
       _Radio(context,
           value: kRemoteImageQualityBest,
@@ -2296,28 +2437,29 @@ class _DisplayState extends State<_Display> {
 
     final groupValue =
         bind.mainGetUserDefaultOption(key: kOptionCodecPreference);
-    var hwRadios = [];
+    final hardwareCodecs = <String>[];
     final isOptFixed = isOptionFixed(kOptionCodecPreference);
     try {
       final Map codecsJson = jsonDecode(bind.mainSupportedHwdecodings());
       final h264 = codecsJson['h264'] ?? false;
       final h265 = codecsJson['h265'] ?? false;
-      if (h264) {
-        hwRadios.add(_Radio(context,
-            value: 'h264',
-            groupValue: groupValue,
-            label: 'H264',
-            onChanged: isOptFixed ? null : onChanged));
-      }
-      if (h265) {
-        hwRadios.add(_Radio(context,
-            value: 'h265',
-            groupValue: groupValue,
-            label: 'H265',
-            onChanged: isOptFixed ? null : onChanged));
-      }
+      if (h264) hardwareCodecs.add('h264');
+      if (h265) hardwareCodecs.add('h265');
     } catch (e) {
       debugPrint("failed to parse supported hwdecodings, err=$e");
+    }
+    if (isWindows || isMacOS) {
+      return _desktopChoice(
+          'Default Codec',
+          groupValue,
+          {
+            'auto': 'Auto',
+            'vp8': 'VP8',
+            'vp9': 'VP9',
+            'av1': 'AV1',
+            for (final codec in hardwareCodecs) codec: codec.toUpperCase()
+          },
+          isOptFixed ? null : onChanged);
     }
     return _Card(title: 'Default Codec', children: [
       _Radio(context,
@@ -2340,7 +2482,12 @@ class _DisplayState extends State<_Display> {
           groupValue: groupValue,
           label: 'AV1',
           onChanged: isOptFixed ? null : onChanged),
-      ...hwRadios,
+      for (final codec in hardwareCodecs)
+        _Radio(context,
+            value: codec,
+            groupValue: groupValue,
+            label: codec.toUpperCase(),
+            onChanged: isOptFixed ? null : onChanged),
     ]);
   }
 
@@ -2391,6 +2538,15 @@ class _DisplayState extends State<_Display> {
       setState(() {});
     }
 
+    if (isWindows || isMacOS) {
+      return SwitchListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: Text(translate(label),
+              style: Theme.of(context).textTheme.bodyMedium),
+          value: value,
+          onChanged: isOptFixed ? null : onChanged);
+    }
     return GestureDetector(
         child: Row(
           children: [
@@ -2733,11 +2889,13 @@ class _AboutState extends State<_About> {
       final buildDate = data['buildDate'].toString();
       final fingerprint = data['fingerprint'].toString();
       final myId = data['myId'].toString();
+      final native = isWindows || isMacOS;
+      final colors = Theme.of(context).colorScheme;
       const linkStyle = TextStyle(decoration: TextDecoration.underline);
       final scrollController = ScrollController();
       return SingleChildScrollView(
         controller: scrollController,
-        child: _Card(title: translate('About RustDesk'), children: [
+        child: _Card(title: native ? bind.mainGetAppNameSync() : translate('About RustDesk'), children: [
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2774,7 +2932,9 @@ class _AboutState extends State<_About> {
                     style: linkStyle,
                   ).marginSymmetric(vertical: 4.0)),
               Container(
-                decoration: const BoxDecoration(color: Color(0xFF2c8cff)),
+                decoration: BoxDecoration(
+                    color: native ? colors.primary.withOpacity(.08) : const Color(0xFF2c8cff),
+                    borderRadius: BorderRadius.circular(native ? 12 : 0)),
                 padding:
                     const EdgeInsets.symmetric(vertical: 24, horizontal: 8),
                 child: SelectionArea(
@@ -2786,13 +2946,13 @@ class _AboutState extends State<_About> {
                         children: [
                           Text(
                             'Copyright © ${DateTime.now().toString().substring(0, 4)} Purslane Tech Pte. Ltd.\n$license',
-                            style: const TextStyle(color: Colors.white),
+                            style: TextStyle(color: native ? colors.onSurface : Colors.white),
                           ),
                           Text(
                             translate('Slogan_tip'),
                             style: TextStyle(
                                 fontWeight: FontWeight.w800,
-                                color: Colors.white),
+                                color: native ? colors.primary : Colors.white),
                           )
                         ],
                       ),
@@ -2817,11 +2977,15 @@ Widget _Card(
     {required String title,
     required List<Widget> children,
     List<Widget>? title_suffix}) {
+  if (isWindows || isMacOS) {
+    return WorkspaceSettingsSection(
+        title: translate(title), trailing: title_suffix, children: children);
+  }
   return Row(
     children: [
       Flexible(
         child: SizedBox(
-          width: usesWorkspaceStyle ? 660 : _kCardFixedWidth,
+          width: _kCardFixedWidth,
           child: Card(
             child: Column(
               children: [
@@ -2896,6 +3060,26 @@ Widget _OptionCheckBox(
     enabled = false;
   }
 
+  if (isWindows || isMacOS) {
+    return Obx(() => SwitchListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: Row(children: [
+            Flexible(
+                child: Text(translate(label),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: disabledTextColor(
+                            context, enabled && !isOptFixed)))),
+            if (ref.value && checkedIcon != null) ...[
+              const SizedBox(width: 6),
+              checkedIcon
+            ],
+            if (trailing != null) trailing,
+          ]),
+          value: ref.value,
+          onChanged: enabled && !isOptFixed ? onChanged : null,
+        ));
+  }
   return GestureDetector(
     child: Obx(
       () => Row(
@@ -3167,10 +3351,11 @@ Widget _SubLabeledWidget(BuildContext context, String label, Widget child,
     {bool enabled = true}) {
   return Row(
     children: [
-      Text(
+      Flexible(
+          child: Text(
         '${translate(label)}: ',
         style: TextStyle(color: disabledTextColor(context, enabled)),
-      ),
+      )),
       SizedBox(
         width: 10,
       ),
@@ -3184,6 +3369,29 @@ Widget _lock(
   String label,
   Function() onUnlock,
 ) {
+  Future<void> requestUnlock() async {
+    final unlockPin = bind.mainGetUnlockPin();
+    if (unlockPin.isEmpty || isUnlockPinDisabled()) {
+      bool checked = await callMainCheckSuperUserPermission();
+      if (checked) {
+        onUnlock();
+      }
+    } else {
+      checkUnlockPinDialog(unlockPin, onUnlock);
+    }
+  }
+
+  if (isWindows || isMacOS) {
+    if (!locked) return const SizedBox.shrink();
+    return Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 14),
+            child: OutlinedButton.icon(
+                icon: const Icon(Icons.lock_open_outlined, size: 17),
+                label: Text(translate(label)),
+                onPressed: requestUnlock)));
+  }
   return Offstage(
       offstage: !locked,
       child: Row(
@@ -3204,17 +3412,7 @@ Widget _lock(
                             ),
                             Text(translate(label)).marginOnly(left: 5),
                           ]).marginSymmetric(vertical: 2)),
-                  onPressed: () async {
-                    final unlockPin = bind.mainGetUnlockPin();
-                    if (unlockPin.isEmpty || isUnlockPinDisabled()) {
-                      bool checked = await callMainCheckSuperUserPermission();
-                      if (checked) {
-                        onUnlock();
-                      }
-                    } else {
-                      checkUnlockPinDialog(unlockPin, onUnlock);
-                    }
-                  },
+                  onPressed: requestUnlock,
                 ).marginSymmetric(horizontal: 2, vertical: 4),
               ).marginOnly(left: _kCardLeftMargin),
             ).marginOnly(top: 10),

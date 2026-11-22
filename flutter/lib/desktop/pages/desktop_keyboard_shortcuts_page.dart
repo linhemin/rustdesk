@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
+import '../../common/widgets/workspace.dart';
 import '../../common/widgets/keyboard_shortcuts/page_body.dart';
 
 class DesktopKeyboardShortcutsPage extends StatefulWidget {
@@ -39,6 +40,15 @@ class _DesktopKeyboardShortcutsPageState
   Widget build(BuildContext context) {
     final foregroundColor =
         AppBarTheme.of(context).titleTextStyle?.color ?? Colors.white;
+    final body = KeyboardShortcutsPageBody(
+      key: _bodyKey,
+      compact: true,
+      // Desktop's General settings tab already exposes the Enable +
+      // Pass-through checkboxes (it's the only entry point to this page),
+      // so we hide the duplicates here. Mobile shells keep the default
+      // (true) because their entry tile doesn't carry the toggles.
+      showMasterToggles: false,
+    );
     return Scaffold(
       appBar: AppBar(
         title: Text(translate('Keyboard shortcuts')),
@@ -52,15 +62,12 @@ class _DesktopKeyboardShortcutsPageState
           ).marginOnly(right: 12),
         ],
       ),
-      body: KeyboardShortcutsPageBody(
-        key: _bodyKey,
-        compact: true,
-        // Desktop's General settings tab already exposes the Enable +
-        // Pass-through checkboxes (it's the only entry point to this page),
-        // so we hide the duplicates here. Mobile shells keep the default
-        // (true) because their entry tile doesn't carry the toggles.
-        showMasterToggles: false,
-      ),
+      body: (isWindows || isMacOS)
+          ? Padding(
+              padding: const EdgeInsets.all(16),
+              child: WorkspacePanel(
+                  padding: const EdgeInsets.all(12), child: body))
+          : body,
     );
   }
 }
