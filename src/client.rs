@@ -1987,7 +1987,7 @@ impl Client {
             direct_futures.push(
                 async move {
                     if let Some(paths) = paths {
-                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout, direct_only).await
+                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout, direct_only || relay_server.is_empty()).await
                             .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
                     }
                     let (conn, kcp, typ) =
@@ -6095,13 +6095,13 @@ fn native_stage(phase: &'static str, stage: &'static str) {
 }
 
 async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: Arc<UdpSocket>,
-    peer: SocketAddr, ms_timeout: u64, direct_only: bool) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    peer: SocketAddr, ms_timeout: u64, no_relay: bool) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
     #[cfg(target_os = "ios")]
     let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp");
     #[cfg(target_os = "ios")]
     if let Some(o) = observation.as_mut() { o.set_stage("checking NAS candidate pairs"); }
     // With a relay to fall back on, wait no longer than the plain punch does.
-    let window = Duration::from_secs(if direct_only { 6 } else { 3 });
+    let window = Duration::from_secs(if no_relay { 6 } else { 3 });
     let (socket, _) = paths.select_within(socket, peer, false, window).await.map_err(|err| {
         #[cfg(target_os = "ios")]
         if let Some(o) = observation.as_mut() { o.finish_candidates(&err); }
