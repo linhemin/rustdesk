@@ -1261,10 +1261,9 @@ impl RendezvousMediator {
         // let ordinary relay traffic use the pool up. The v6 punch is not relayed with them - a
         // symmetric NAT on v4 says nothing about v6 - and its place is taken after the v4 one,
         // or it could be the last and leave the punch the peer counts on with none.
-        let relay_v4 = (!direct_only && (ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC)
-            || Config::get_nat_type() == NatType::SYMMETRIC as i32))
-            || relay
-            || (config::is_disable_tcp_listen() && ph.udp_port <= 0);
+        let relay_v4 = relay
+            || (config::is_disable_tcp_listen() && ph.udp_port <= 0)
+            || (!direct_only && symmetric_nat_requires_relay(&ph, Config::get_nat_type()));
         let punch_udp = !relay_v4 && ph.udp_port > 0;
         let punch_tcp = !relay_v4 && ph.udp_port <= 0 && ph.webrtc_sdp_offer.is_empty();
         let punch_v6 = peer_addr_v6.port() > 0 && !relay;
@@ -1288,7 +1287,7 @@ impl RendezvousMediator {
             relay
         };
         // for ensure, websocket go relay directly
-        // A symmetric NAT relays the legacy transports but deliberately not WebRTC: the answer
+        // A symmetric NAT can relay the legacy transports but deliberately not WebRTC: the answer
         // built above rides along on the relay request, and ICE probes the candidate pairs rather
         // than trusting this classification, so a direct WebRTC pair can still form on a
         // connection this branch has already called relay-only. Do not gate the answerer on
@@ -1687,6 +1686,16 @@ async fn start_ipv6(
     Default::default()
 }
 
+fn symmetric_nat_requires_relay(ph: &PunchHole, local_nat: i32) -> bool {
+    // The NAT classification comes from TCP. A mapped UDP request with an hbbs
+    // reply token can test its own path, even when either TCP mapping varies.
+    let mapped_udp = ph.webrtc_sdp_offer.is_empty()
+        && (1..=i32::from(u16::MAX)).contains(&ph.udp_port)
+        && ph.udp_reply_token.len() == 16;
+    !mapped_udp && (ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC)
+        || local_nat == NatType::SYMMETRIC as i32)
+}
+
 async fn udp_nat_listen(
     socket: Arc<tokio::net::UdpSocket>,
     peer_addr: SocketAddr,
@@ -1954,8 +1963,9 @@ impl Drop for CheckIfResendPk {
 #[cfg(test)]
 mod tests {
     use super::{
-        connection_meta, mpsc, tokio, wait_for_retry, AnswererSlot, Duration, IceRoute,
-        Instant, IntoTargetAddr, Ordering, PunchHoleSent, RendezvousMediator, RendezvousMessage,
+        connection_meta, mpsc, symmetric_nat_requires_relay, tokio, wait_for_retry, AnswererSlot,
+        Duration, IceRoute, Instant, IntoTargetAddr, NatType, Ordering, PunchHole, PunchHoleSent,
+        RendezvousMediator, RendezvousMessage,
         CONNECT_TIMEOUT, MANUAL_RESTARTED, MANUAL_RESTART_NOTIFY, MAX_WEBRTC_ANSWERERS,
         SHOULD_EXIT, TCP_PUNCHES, UDP_PUNCHES,
     };
@@ -2033,6 +2043,21 @@ mod tests {
         let sent = sent.punch_hole_sent();
         assert_eq!(sent.webrtc_sdp_answer, "answer");
         assert_eq!(&sent.socket_addr_v6[..], b"v6");
+    }
+
+    #[test]
+    fn ordinary_mapped_udp_can_probe_with_a_symmetric_tcp_nat() {
+        let mut ph = PunchHole {
+            nat_type: NatType::SYMMETRIC.into(),
+            udp_port: 49152,
+            udp_reply_token: bytes::Bytes::from_static(&[7; 16]),
+            ..Default::default()
+        };
+        assert!(!symmetric_nat_requires_relay(&ph, NatType::ASYMMETRIC as i32));
+        ph.nat_type = NatType::ASYMMETRIC.into();
+        assert!(!symmetric_nat_requires_relay(&ph, NatType::SYMMETRIC as i32));
+        ph.udp_reply_token = Default::default();
+        assert!(symmetric_nat_requires_relay(&ph, NatType::SYMMETRIC as i32));
     }
 
     fn queue(route: &mut IceRoute, candidate: &str) -> bool {

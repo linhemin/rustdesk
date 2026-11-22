@@ -1909,7 +1909,7 @@ impl Client {
         // always direct; WebRTC is direct only when ICE nominated a non-TURN pair.
         let mut direct_futures = Vec::new();
         if allow_tcp_punch {
-            let fut = crate::p2p::connect_punch(peer, local_addr, connect_timeout);
+            let fut = crate::p2p::connect_controller_tcp(peer, local_addr, is_local, connect_timeout);
             direct_futures.push(
                 async move {
                     let conn = fut.await?;

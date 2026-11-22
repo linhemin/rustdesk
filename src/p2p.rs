@@ -296,6 +296,28 @@ pub(crate) async fn connect_punch(
     socket_client::connect_tcp_local(peer, Some(local), timeout).await
 }
 
+fn controller_tcp_source(peer: SocketAddr, local: SocketAddr, is_local: bool) -> Option<SocketAddr> {
+    // The LAN peer already has a listener. Its route can differ from the
+    // Wi-Fi, VPN or cellular route used to reach the rendezvous server.
+    let lan_listener = is_local && matches!(peer.ip(), std::net::IpAddr::V4(ip) if ip.is_private());
+    (!lan_listener).then_some(local)
+}
+
+pub(crate) async fn connect_controller_tcp(
+    peer: SocketAddr,
+    local: SocketAddr,
+    is_local: bool,
+    timeout: u64,
+) -> hbb_common::ResultType<Stream> {
+    if let Some(source) = controller_tcp_source(peer, local, is_local) {
+        return connect_punch(peer, source, timeout).await;
+    }
+    if let Some(iface) = Interface::configured() {
+        return iface.connect(peer, 0, timeout).await;
+    }
+    socket_client::connect_tcp_local(peer, None, timeout).await
+}
+
 pub(crate) async fn rendezvous_punch_socket(
     server: &str,
     verify_rendezvous: bool,
@@ -334,6 +356,14 @@ mod tests {
             assert_eq!(source.is_ipv4(), ipv4);
             assert_eq!(conn.local_addr(), source);
         }
+    }
+
+    #[test]
+    fn a_private_listener_does_not_reuse_the_public_punch_source() {
+        let signal = "[2001:db8::1]:41001".parse().unwrap();
+        let lan = "192.168.1.5:49000".parse().unwrap();
+        assert_eq!(controller_tcp_source(lan, signal, true), None);
+        assert_eq!(controller_tcp_source(lan, signal, false), Some(signal));
     }
 
     #[test]
