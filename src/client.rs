@@ -1308,6 +1308,14 @@ impl Client {
             .map(|(socket, addr)| (Some(socket), Some(addr)))
             .unwrap_or((None, None));
         let udp_nat_port = udp.1.map(|(port, _)| *port.lock().unwrap()).unwrap_or(0);
+        let mut udp_candidates = if let Some((nas, source)) = mapped.filter(|_| {
+            udp_nat_port > 0 && handshake_grant && socket.is_secured() && udp.0.is_some()
+        }) {
+            crate::p2p::udp_paths::Candidates::gather(source, nas).await
+        } else {
+            Default::default()
+        };
+        let mut udp_paths = None;
         #[cfg(target_os = "ios")]
         if udp.0.is_some() {
             let stage = if udp_nat_port != 0 { "mapping advertised" } else { "no public mapping" };
@@ -1352,6 +1360,12 @@ impl Client {
         } else {
             transports.join("+")
         };
+        let tcp_only = allow_tcp_punch && udp_nat_port == 0 && ipv6.1.is_none() && webrtc_sdp_offer.is_empty();
+        if tcp_only {
+            native_stage("ordinary-tcp", "requesting TCP endpoint");
+        } else if !tcp_punch_allowed() && !interface.is_force_relay() {
+            native_stage("ordinary-tcp", "TCP disabled in settings");
+        }
         msg_out.set_punch_hole_request(PunchHoleRequest {
             id: peer.to_owned(),
             token: token.to_owned(),
@@ -1360,6 +1374,7 @@ impl Client {
             conn_type: conn_type.into(),
             version: crate::VERSION.to_owned(),
             udp_port: udp_nat_port as _,
+            udp_mapping_tickets: udp_candidates.tickets.clone().into(),
             force_relay: interface.is_force_relay() && !direct_permission.direct_only,
             direct_only: direct_permission.direct_only,
             socket_addr_v6: ipv6.1.unwrap_or_default(),
@@ -1463,12 +1478,21 @@ impl Client {
                             webrtc_sdp_answer = ph.webrtc_sdp_answer;
                             if let Some(socket) = udp.0.take() {
                                 if udp_nat_port > 0 && ph.is_udp {
-                                    match crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await {
-                                        Ok(()) => udp.0 = Some(socket),
-                                        Err(err) => {
-                                            #[cfg(target_os = "ios")]
-                                            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "peer socket connect failed");
-                                            log::debug!("UDP peer route unavailable: {err}");
+                                    if let Some(key) = hbb_common::sodiumoxide::crypto::auth::Key::from_slice(&ph.udp_probe_key)
+                                        .filter(|_| !udp_candidates.tickets.is_empty() && exchanged)
+                                    {
+                                        udp_paths = Some(crate::p2p::udp_paths::Paths {
+                                            local: std::mem::take(&mut udp_candidates), ports: ph.udp_candidate_ports, key,
+                                        });
+                                        udp.0 = Some(socket);
+                                    } else {
+                                        match crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await {
+                                            Ok(()) => udp.0 = Some(socket),
+                                            Err(err) => {
+                                                #[cfg(target_os = "ios")]
+                                                crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "peer socket connect failed");
+                                                log::debug!("UDP peer route unavailable: {err}");
+                                            }
                                         }
                                     }
                                 } else if udp_nat_port > 0 {
@@ -1494,6 +1518,7 @@ impl Client {
                         }
                     }
                     Some(rendezvous_message::Union::RelayResponse(rr)) => {
+                        if tcp_only { native_stage("ordinary-tcp", "rendezvous returned relay"); }
                         #[cfg(target_os = "ios")]
                         if udp_nat_port > 0 {
                             crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "rendezvous returned relay instead of UDP");
@@ -1855,7 +1880,7 @@ impl Client {
                 &token,
                 conn_type,
                 interface,
-                udp.0,
+                udp.0.map(|socket| (socket, udp_paths)),
                 ipv6.0,
                 webrtc_for_connect,
                 webrtc_bridge_stop,
@@ -1885,7 +1910,7 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         interface: impl Interface,
-        udp_socket_nat: Option<Arc<UdpSocket>>,
+        udp_socket_nat: Option<(Arc<UdpSocket>, Option<crate::p2p::udp_paths::Paths>)>,
         udp_socket_v6: Option<Arc<UdpSocket>>,
         webrtc_offerer: Option<WebRTCStream>,
         webrtc_bridge_stop: Option<oneshot::Sender<()>>,
@@ -1948,15 +1973,22 @@ impl Client {
             let fut = crate::p2p::connect_controller_tcp(peer, local_addr, is_local, connect_timeout);
             direct_futures.push(
                 async move {
-                    let conn = fut.await?;
+                    native_stage("ordinary-tcp", "connecting to peer");
+                    let result = fut.await;
+                    native_stage("ordinary-tcp", if result.is_ok() { "peer TCP connected" } else { "peer TCP connection failed" });
+                    let conn = result?;
                     Ok((conn, None, "TCP", true))
                 }
                 .boxed(),
             );
         }
-        if let Some(udp_socket_nat) = udp_socket_nat {
+        if let Some((udp_socket_nat, paths)) = udp_socket_nat {
             direct_futures.push(
                 async move {
+                    if let Some(paths) = paths {
+                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout).await
+                            .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
+                    }
                     let (conn, kcp, typ) =
                         udp_nat_connect(udp_socket_nat, "UDP", connect_timeout).await?;
                     Ok((conn, kcp, typ, true))
@@ -6018,6 +6050,37 @@ pub mod peer_online {
             assert!(!Client::is_expected_webrtc_ice_candidate(&ice, "session-b"));
         }
     }
+}
+
+fn native_stage(phase: &'static str, stage: &'static str) {
+    log::trace!("{phase}: {stage}");
+    #[cfg(target_os = "ios")]
+    crate::ios_p2p_diagnostics::record_milestone(phase, stage);
+}
+
+async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: Arc<UdpSocket>,
+    peer: SocketAddr, ms_timeout: u64) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    #[cfg(target_os = "ios")]
+    let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp");
+    #[cfg(target_os = "ios")]
+    if let Some(o) = observation.as_mut() { o.set_stage("checking NAS candidate pairs"); }
+    let (socket, _) = paths.select(socket, peer, false).await.map_err(|err| {
+        #[cfg(target_os = "ios")]
+        if let Some(o) = observation.as_mut() { o.finish_candidates(&err); }
+        log::debug!("{err:#}");
+        err
+    })?;
+    #[cfg(target_os = "ios")]
+    if let Some(o) = observation.as_mut() { o.set_stage("verified UDP pair; starting KCP"); }
+    let (kcp, stream) = KcpStream::connect(socket, Duration::from_millis(ms_timeout)).await
+        .map_err(|err| {
+            #[cfg(target_os = "ios")]
+            if let Some(o) = observation.as_mut() { o.finish("candidate KCP handshake failed", Some(&err)); }
+            err
+        })?;
+    #[cfg(target_os = "ios")]
+    if let Some(o) = observation.as_mut() { o.finish("candidate KCP handshake completed", None); }
+    Ok((stream, Some(kcp), "UDP"))
 }
 
 #[inline]

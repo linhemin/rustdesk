@@ -419,6 +419,19 @@ mod recorder {
             }
         }
 
+        pub(crate) fn finish_candidates(&mut self, err: &anyhow::Error) {
+            self.finish("no verified UDP pair", Some(err));
+            if let Some(c) = err.downcast_ref::<crate::p2p::udp_paths::Counts>() {
+                self.result = "timeout";
+                if let Ok(mut state) = self.progress.lock() {
+                    state.latest = Some((Instant::now(), format!(
+                        "nativeUdp [localSockets,nasPorts,sent,sendErrors,authenticatedPairs]=[{},{},{},{},{}]",
+                        c.sockets, c.ports, c.sent, c.errors, c.authenticated
+                    )));
+                }
+            }
+        }
+
         pub(crate) fn set_punch_status(
             &mut self,
             status: tokio::sync::watch::Receiver<crate::live_direct::PunchStatus>,

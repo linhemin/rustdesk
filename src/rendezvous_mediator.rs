@@ -461,8 +461,10 @@ impl RendezvousMediator {
             select! {
                 n = socket.next() => {
                     match n {
-                        Some(Ok((bytes, _))) => {
+                        Some(Ok((bytes, from))) => {
                             if let Ok(msg) = Message::parse_from_bytes(&bytes) {
+                                if msg.has_punch_hole() && !msg.punch_hole().udp_candidate_ports.is_empty()
+                                    && from != addr { continue; }
                                 rz.handle_resp(msg.union, Sink::Framed(&mut socket, &addr), &server, &mut update_latency).await?;
                             } else {
                                 log::debug!("Non-protobuf message bytes received: {:?}", bytes);
@@ -1336,7 +1338,7 @@ impl RendezvousMediator {
         };
         if ph.udp_port > 0 {
             peer_addr.set_port(ph.udp_port as u16);
-            self.punch_udp_hole(peer_addr, &ph.shared_egress_ipv4, server, msg_punch, meta, slot_udp)
+            self.punch_udp_hole(peer_addr, &ph.shared_egress_ipv4, ph.udp_candidate_ports, server, msg_punch, meta, slot_udp)
                 .await?;
             return Ok(());
         }
@@ -1408,20 +1410,32 @@ impl RendezvousMediator {
         &self,
         peer_addr: SocketAddr,
         shared_egress: &[u8],
+        candidate_ports: Vec<u32>,
         server: ServerPtr,
-        msg_punch: PunchHoleSent,
+        mut msg_punch: PunchHoleSent,
         meta: ConnectionMeta,
         slot: Option<PunchSlot>,
     ) -> ResultType<()> {
         let ordinary_v4 = peer_addr.is_ipv4() && msg_punch.webrtc_sdp_answer.is_empty();
         let mut msg_out = Message::new();
-        msg_out.set_punch_hole_sent(msg_punch);
         let (socket, addr) = if ordinary_v4 {
             crate::p2p::ordinary_udp::ordinary_udp_socket(&self.host, true).await?
         } else {
             crate::p2p::rendezvous_punch_socket(&self.host, true).await?
         };
         let destination = crate::p2p::ordinary_udp::peer_candidate(peer_addr, addr, shared_egress);
+        let mut paths = None;
+        if ordinary_v4 && slot.is_some() && !candidate_ports.is_empty() && msg_punch.udp_reply_token.len() == 16 {
+            let mut local = crate::p2p::udp_paths::Candidates::gather(socket.local_addr()?, addr).await;
+            if !local.tickets.is_empty() {
+                let key = hbb_common::sodiumoxide::crypto::hash::sha256::hash(&msg_punch.udp_reply_token);
+                msg_punch.udp_mapping_tickets = std::mem::take(&mut local.tickets).into();
+                paths = Some(crate::p2p::udp_paths::Paths {
+                    local, ports: candidate_ports, key: hbb_common::sodiumoxide::crypto::auth::Key(key.0),
+                });
+            }
+        }
+        msg_out.set_punch_hole_sent(msg_punch);
         let data = msg_out.write_to_bytes()?;
         socket.send_to(&data, addr).await?;
         // The reply is out, and with it the answer and the v6 address: declined is the listen
@@ -1447,6 +1461,7 @@ impl RendezvousMediator {
         });
         udp_nat_listen(
             socket_cloned,
+            paths,
             destination,
             peer_addr,
             server,
@@ -1679,6 +1694,7 @@ async fn start_ipv6(
             allow_err!(
                 udp_nat_listen(
                     socket.clone(),
+                    None,
                     peer_addr_v6,
                     peer_addr_v4,
                     server,
@@ -1705,6 +1721,7 @@ fn symmetric_nat_requires_relay(ph: &PunchHole, local_nat: i32) -> bool {
 
 async fn udp_nat_listen(
     socket: Arc<tokio::net::UdpSocket>,
+    paths: Option<crate::p2p::udp_paths::Paths>,
     peer_addr: SocketAddr,
     peer_addr_v4: SocketAddr,
     server: ServerPtr,
@@ -1714,11 +1731,16 @@ async fn udp_nat_listen(
     let tm = Instant::now();
     let socket_cloned = socket.clone();
     let func = async {
-        crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await?;
-        if peer_addr.is_ipv4() {
-            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP peer probing started");
-        }
-        let init_packet = crate::punch_udp(socket.clone(), true).await?;
+        let (socket, init_packet) = if let Some(paths) = paths {
+            paths.select(socket, peer_addr, true).await?
+        } else {
+            crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await?;
+            if peer_addr.is_ipv4() {
+                hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP peer probing started");
+            }
+            let init = crate::punch_udp(socket.clone(), true).await?;
+            (socket, init)
+        };
         if peer_addr.is_ipv4() {
             hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP received KCP SYN");
         }
@@ -2035,6 +2057,7 @@ mod tests {
             .punch_udp_hole(
                 host,
                 &[],
+                Vec::new(),
                 crate::server::new_for_test(),
                 msg_punch,
                 connection_meta(None, None),
