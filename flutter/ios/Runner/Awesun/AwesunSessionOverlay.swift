@@ -8,6 +8,7 @@ final class AwesunSessionOverlay {
 
     private var model = AwesunSessionModel()
     private var host: UIHostingController<AwesunSessionRootView>?
+    private var systemAccessory: UIHostingController<AwesunKeyboardAccessory>?
     private var surface: AwesunTouchSurface?
     private weak var installedIn: UIViewController?
 
@@ -78,8 +79,31 @@ final class AwesunSessionOverlay {
             host.view.bottomAnchor.constraint(equalTo: surface.bottomAnchor),
         ])
         host.didMove(toParent: flutterVC)
+        let accessory = UIHostingController(rootView: AwesunKeyboardAccessory(model: model))
+        accessory.view.backgroundColor = .clear
+        accessory.view.isOpaque = false
+        accessory.view.translatesAutoresizingMaskIntoConstraints = false
+        let clip = surface.accessoryClip
+        clip.clipsToBounds = true
+        clip.translatesAutoresizingMaskIntoConstraints = false
+        flutterVC.addChild(accessory)
+        surface.insertSubview(clip, belowSubview: host.view)
+        clip.addSubview(accessory.view)
+        NSLayoutConstraint.activate([
+            clip.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
+            clip.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+            clip.bottomAnchor.constraint(equalTo: flutterVC.view.keyboardLayoutGuide.topAnchor),
+            clip.heightAnchor.constraint(equalToConstant: AwesunKeyboardAccessory.height),
+            accessory.view.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
+            accessory.view.trailingAnchor.constraint(equalTo: clip.trailingAnchor),
+            accessory.view.topAnchor.constraint(equalTo: clip.topAnchor),
+            accessory.view.bottomAnchor.constraint(equalTo: clip.bottomAnchor),
+        ])
+        accessory.didMove(toParent: flutterVC)
+        self.systemAccessory = accessory
         self.surface = surface
         self.host = host
+        showSystemAccessory(false, duration: 0)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)),
                                                name: UIResponder.keyboardWillChangeFrameNotification,
                                                object: nil)
@@ -91,11 +115,30 @@ final class AwesunSessionOverlay {
         guard model.active, let surface = surface, let window = surface.window,
               let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue
         else { return }
+        if let screen = notification.object as? UIScreen, screen !== window.screen { return }
         let inWindow = window.convert(value.cgRectValue, from: window.screen.coordinateSpace)
         let end = surface.convert(inWindow, from: window)
         let overlap = surface.bounds.intersection(end)
         let docked = !overlap.isEmpty && end.maxY >= surface.bounds.maxY - 1
+        let coversWidth = overlap.width >= surface.bounds.width - 1
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0
+        showSystemAccessory(docked && coversWidth, duration: duration)
         AwesunBridge.shared.command("systemKeyboardTarget", ["inset": docked ? Double(overlap.height) : 0])
+    }
+
+    private func showSystemAccessory(_ visible: Bool, duration: TimeInterval) {
+        guard let view = systemAccessory?.view, let clip = surface?.accessoryClip else { return }
+        clip.isUserInteractionEnabled = visible
+        clip.accessibilityElementsHidden = !visible
+        let transform = visible ? CGAffineTransform.identity
+            : CGAffineTransform(translationX: 0, y: AwesunKeyboardAccessory.height)
+        guard view.transform != transform else { return }
+        // The layout guide follows UIKit, including interactive movement. Only reveal or
+        // retract the strip inside its clipped bounds, starting with the same notification.
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : duration, delay: 0,
+                       options: [.curveLinear, .beginFromCurrentState, .allowUserInteraction]) {
+            view.transform = transform
+        }
     }
 
     @objc private func cancelMouseInput() {
@@ -114,6 +157,10 @@ final class AwesunSessionOverlay {
             model = AwesunSessionModel()
             surface.model = model
             host.rootView = AwesunSessionRootView(model: model)
+            systemAccessory?.rootView = AwesunKeyboardAccessory(model: model)
+            showSystemAccessory(false, duration: 0)
+        } else if active && !model.active, let view = installedIn?.view {
+            showSystemAccessory(view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 1, duration: 0)
         }
         model.mode = touchMode ? .touch : .pointer
         model.active = active
@@ -172,6 +219,7 @@ final class AwesunSessionOverlay {
 
 private final class AwesunTouchSurface: UIView {
     var model: AwesunSessionModel
+    let accessoryClip = UIView()
 
     lazy var mouseInput = AwesunMouseInput(surface: self)
 
@@ -205,6 +253,11 @@ private final class AwesunTouchSurface: UIView {
     }
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if !isHidden && isUserInteractionEnabled && mouseAvailable &&
+            accessoryClip.isUserInteractionEnabled,
+           let target = accessoryClip.hitTest(convert(point, to: accessoryClip), with: event) {
+            return target
+        }
         if !isHidden && isUserInteractionEnabled && bounds.contains(point) &&
             mouseAvailable && point.y < mouseArea.height && !floatingControl(at: point) {
             if mouseInput.ownsCanvasTouches { return mouseInput }

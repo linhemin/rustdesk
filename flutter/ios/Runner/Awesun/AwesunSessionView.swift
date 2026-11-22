@@ -14,7 +14,7 @@ struct AwesunSessionView: View {
             if model.mouseVisible {
                 AwesunVirtualMouseView(model: model, screenSize: size)
             }
-            keyboardAndControls
+            sessionControls
                 .animation(panelAnimation, value: model.keyboardInset > 0)
                 .animation(panelAnimation, value: model.isKeyboardPanel)
 
@@ -38,12 +38,8 @@ struct AwesunSessionView: View {
     }
 
     @ViewBuilder
-    private var keyboardAndControls: some View {
-        if model.keyboardInset > 0 {
-            keyboardAccessory(inDeck: false)
-                .position(x: size.width / 2, y: size.height - model.keyboardInset - 19)
-                .transition(.opacity)
-        } else if !model.isKeyboardPanel {
+    private var sessionControls: some View {
+        if model.keyboardInset == 0 && !model.isKeyboardPanel {
             controls.transition(.opacity)
         }
     }
@@ -107,53 +103,6 @@ struct AwesunSessionView: View {
         .accessibilityLabel(Text(label))
     }
 
-    private func keyboardAccessory(inDeck: Bool) -> some View {
-        HStack(spacing: 4) {
-            accessoryButton("自定义", width: 50) { model.openKeyboardPanel(.keyboardLayout) }
-            accessoryButton("快捷键", width: 50) { model.openKeyboardPanel(.shortcuts) }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
-                    ForEach(model.accessoryKeys, id: \.self) { code in
-                        if let shortcut = model.customShortcut(for: code) {
-                            accessoryButton(shortcut.title, width: 80) {
-                                model.sendShortcut(shortcut)
-                            }
-                        } else if let key = AwesunKeyboardLayout.keyByCode[code] {
-                            accessoryButton(AwesunKeyboardLayout.title(for: key),
-                                selected: model.modifiers.contains(key.label), width: 38) {
-                                model.sendAccessoryKey(key)
-                            }
-                        }
-                    }
-                }
-            }
-            accessoryButton("全键盘", width: 43) { model.openKeyboardPanel(.keyboardFull) }
-            accessoryButton("•••", selected: inDeck, width: 31) {
-                if inDeck { model.showSystemKeyboardFromDeck() }
-                else { model.openKeyboardPanel(.keyboardMore) }
-            }
-            accessoryButton("✕", width: 33, action: model.dismissRemoteKeyboard)
-        }
-        .padding(4)
-        .frame(width: size.width, height: 38)
-        .background(AwesunPalette.keyboardDeck)
-    }
-
-    private func accessoryButton(_ title: String, selected: Bool = false,
-                                 width: CGFloat, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 13))
-                .lineLimit(1)
-                .minimumScaleFactor(0.65)
-                .frame(width: width, height: 28)
-                .background(selected ? AwesunPalette.brandRed : Color.white.opacity(0.09))
-                .cornerRadius(7)
-        }
-        .foregroundColor(.white)
-        .buttonStyle(.plain)
-    }
-
     @ViewBuilder
     private var sheetLayer: some View {
         if model.functionsOpen || (model.sheet != nil &&
@@ -176,7 +125,7 @@ struct AwesunSessionView: View {
                         case .displaySettings: AwesunDisplayPanel(model: model, height: panelHeight)
                         case .keyboardMore:
                             AwesunKeyboardDeck(model: model, height: min(240, size.height * 0.42)) {
-                                keyboardAccessory(inDeck: true)
+                                AwesunKeyboardAccessory(model: model, inDeck: true)
                             }
                         case .keyboardLayout:
                             AwesunAccessoryEditor(model: model, height: size.height * 0.88)
@@ -236,6 +185,60 @@ struct AwesunSessionView: View {
             }
             .frame(maxHeight: size.height * 0.55)
         }
+    }
+}
+
+struct AwesunKeyboardAccessory: View {
+    static let height: CGFloat = 38
+    @ObservedObject var model: AwesunSessionModel
+    var inDeck = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            accessoryButton("自定义", width: 50) { model.openKeyboardPanel(.keyboardLayout) }
+            accessoryButton("快捷键", width: 50) { model.openKeyboardPanel(.shortcuts) }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(model.accessoryKeys, id: \.self) { code in
+                        if let shortcut = model.customShortcut(for: code) {
+                            accessoryButton(shortcut.title, width: 80) {
+                                model.sendShortcut(shortcut)
+                            }
+                        } else if let key = AwesunKeyboardLayout.keyByCode[code] {
+                            accessoryButton(AwesunKeyboardLayout.title(for: key),
+                                selected: model.modifiers.contains(key.label), width: 38) {
+                                model.sendAccessoryKey(key)
+                            }
+                        }
+                    }
+                }
+            }
+            accessoryButton("全键盘", width: 43) { model.openKeyboardPanel(.keyboardFull) }
+            accessoryButton("•••", selected: inDeck, width: 31) {
+                if inDeck { model.showSystemKeyboardFromDeck() }
+                else { model.openKeyboardPanel(.keyboardMore) }
+            }
+            accessoryButton("✕", width: 33, action: model.dismissRemoteKeyboard)
+        }
+        .padding(4)
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.height)
+        .background(AwesunPalette.keyboardDeck)
+    }
+
+    private func accessoryButton(_ title: String, selected: Bool = false,
+                                 width: CGFloat, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .frame(width: width, height: 28)
+                .background(selected ? AwesunPalette.brandRed : Color.white.opacity(0.09))
+                .cornerRadius(7)
+        }
+        .foregroundColor(.white)
+        .buttonStyle(.plain)
     }
 }
 
