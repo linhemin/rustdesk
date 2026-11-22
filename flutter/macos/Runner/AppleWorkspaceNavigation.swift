@@ -81,7 +81,6 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         settingsButton.alignment = .left
         settingsButton.imagePosition = .imageLeading
         settingsButton.image = Self.symbol("slider.horizontal.3")
-        settingsButton.font = .systemFont(ofSize: 13)
         settingsButton.target = self
         settingsButton.action = #selector(openSettings)
 
@@ -189,8 +188,12 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         defer { applyingConfiguration = false }
         appearance = NSAppearance(named: config["dark"] as? Bool == true ? .darkAqua : .aqua)
         brand.stringValue = config["brand"] as? String ?? ""
-        settingsButton.title = config["settings"] as? String ?? ""
-        settingsButton.isHidden = settingsButton.title.isEmpty
+        let settingsTitle = config["settings"] as? String ?? ""
+        settingsButton.attributedTitle = NSAttributedString(string: settingsTitle, attributes: [
+            .font: NSFont.systemFont(ofSize: 13),
+            .foregroundColor: NSColor.labelColor,
+        ])
+        settingsButton.isHidden = settingsTitle.isEmpty
         separator.isHidden = settingsButton.isHidden
         table.rowHeight = config["compact"] as? Bool == true ? 32 : 35
         listHeight.constant = CGFloat(labels.count) * (table.rowHeight + table.intercellSpacing.height)
