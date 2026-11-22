@@ -248,10 +248,11 @@ impl<T: InvokeUiSession> Remote<T> {
                         return;
                     }
                 }
-                // Only WebRTC needs refining: its label names the transport that won the race,
-                // not the family ICE ended up nominating, and it is the one path where the two
-                // can disagree with the address the rendezvous observed.
-                let stream_type = if peer.webrtc_remote_ipv6().await.unwrap_or(false) {
+                // A relay fallback can return a WebSocket. For WebRTC the address family
+                // comes from the nominated ICE pair, independently of the rendezvous address.
+                let stream_type = if matches!(&peer, Stream::WebSocket(_)) {
+                    "WebSocket"
+                } else if peer.webrtc_remote_ipv6().await.unwrap_or(false) {
                     "WebRTC/IPv6"
                 } else {
                     stream_type
