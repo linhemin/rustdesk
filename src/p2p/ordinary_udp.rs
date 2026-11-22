@@ -81,7 +81,7 @@ pub(crate) async fn connect_peer(
 }
 
 #[cfg(target_vendor = "apple")]
-pub(super) async fn udp_peer_destination(
+pub(crate) async fn udp_peer_destination(
     socket: &tokio::net::UdpSocket,
     peer: SocketAddr,
 ) -> ResultType<SocketAddr> {
@@ -95,7 +95,7 @@ pub(super) async fn udp_peer_destination(
 }
 
 #[cfg(not(target_vendor = "apple"))]
-pub(super) async fn udp_peer_destination(_: &tokio::net::UdpSocket, peer: SocketAddr) -> ResultType<SocketAddr> {
+pub(crate) async fn udp_peer_destination(_: &tokio::net::UdpSocket, peer: SocketAddr) -> ResultType<SocketAddr> {
     Ok(peer)
 }
 

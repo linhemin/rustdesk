@@ -1732,9 +1732,10 @@ async fn udp_nat_listen(
     let socket_cloned = socket.clone();
     let func = async {
         let (socket, init_packet) = if let Some(paths) = paths {
-            let selected = paths.select(socket, peer_addr, true).await?;
+            let advertised = crate::p2p::ordinary_udp::udp_peer_destination(&socket, peer_addr).await?;
+            let selected = paths.select(socket, advertised, true).await?;
             let actual = selected.0.peer_addr()?;
-            if actual.ip() != peer_addr.ip() && !crate::server::ip_allowed(actual.ip()) {
+            if actual.ip() != advertised.ip() && !crate::server::ip_allowed(actual.ip()) {
                 anyhow::bail!("UDP source is outside the IP whitelist");
             }
             selected
