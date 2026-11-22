@@ -128,6 +128,8 @@ impl Mode {
                 if answer.as_ref() != BOUND {
                     bail!("Peer declined path attachment");
                 }
+                #[cfg(target_os = "ios")]
+                crate::ios_p2p_diagnostics::record_milestone("native-upgrade", "peer confirmed session attachment");
                 Ok(Lane {
                     io: Relay::new(socket),
                     label,

@@ -1976,7 +1976,7 @@ impl Client {
                 async move {
                     native_stage("ordinary-tcp", "connecting to peer");
                     let result = fut.await;
-                    native_stage("ordinary-tcp", if result.is_ok() { "peer TCP connected" } else { "peer TCP connection failed" });
+                    native_stage("ordinary-tcp", if result.is_ok() { "TCP socket open; awaiting peer authentication" } else { "peer TCP connection failed" });
                     let conn = result?;
                     Ok((conn, None, "TCP", true))
                 }
@@ -2036,6 +2036,7 @@ impl Client {
         // window so a direct punch can still land. Falls back to plain select_ok when only one
         // kind is present.
         let attempted_direct = webrtc_fut.is_some() || !direct_futures.is_empty();
+        let mut preverified = None;
         let direct_result = match (webrtc_fut, direct_futures.is_empty()) {
             (Some(webrtc_fut), false) => {
                 race_transports_prefer_webrtc(
@@ -2047,6 +2048,18 @@ impl Client {
                 .await
             }
             (Some(webrtc_fut), true) => webrtc_fut.await,
+            (None, false) if direct_permission.native_upgrade && !interface.is_force_relay() && direct_futures.len() > 1 => {
+                let signed = &signed_id_pk;
+                let checks = direct_futures.into_iter().map(|attempt| async move {
+                    let (mut conn, kcp, typ, direct) = attempt.await?;
+                    let pk = Self::authenticate_path(peer_id, signed, key, &mut conn, true, typ).await?;
+                    Ok(((conn, kcp, typ, direct), pk))
+                }.boxed());
+                select_ok(checks).await.map(|((path, pk), _)| {
+                    preverified = Some(pk);
+                    path
+                })
+            }
             (None, false) => select_ok(direct_futures).await.map(|c| c.0),
             (None, true) => Err(anyhow!("No direct transport available")),
         };
@@ -2101,7 +2114,10 @@ impl Client {
             start.elapsed(),
             punch_type
         );
-        let res = Self::secure_connection_for_path(peer_id, signed_id_pk.clone(), key, &mut conn, direct_permission.native_upgrade).await;
+        let res = match preverified {
+            Some(pk) if direct => Ok(pk),
+            _ => Self::authenticate_path(peer_id, &signed_id_pk, key, &mut conn, direct_permission.native_upgrade, typ).await,
+        };
         let pk: Option<Vec<u8>> = match res {
             Ok(pk) => pk,
             Err(e) if typ == "WebRTC" && !direct_only && !relay_server.is_empty() => {
@@ -2177,6 +2193,21 @@ impl Client {
         Ok((conn, direct, pk, kcp, typ))
     }
 
+    async fn authenticate_path(
+        peer_id: &str, signed_id_pk: &[u8], key: &str, conn: &mut Stream, upgrade: bool, label: &str,
+    ) -> ResultType<Option<Vec<u8>>> {
+        let result = Self::secure_connection_for_path(peer_id, signed_id_pk.to_vec(), key, conn, upgrade).await;
+        if label == "TCP" {
+            let stage = match &result {
+                Ok(Some(_)) if conn.is_secured() => "peer identity verified",
+                Ok(_) => "peer identity unavailable",
+                Err(_) => "peer authentication did not complete",
+            };
+            native_stage("ordinary-tcp", stage);
+        }
+        result
+    }
+
     /// Establish secure connection with the server.
     async fn secure_connection(
         peer_id: &str,
@@ -2227,6 +2258,7 @@ impl Client {
                 // non-secure path with is_secured() false: bailing would only move the session to
                 // a relay that fails the same check and then runs in plaintext.
                 // send an empty message out in case server is setting up secure and waiting for first message
+                if native_upgrade { bail!("Native path has no trusted peer identity"); }
                 conn.send(&Message::new()).await?;
                 return Ok(option_pk);
             }
@@ -2315,6 +2347,9 @@ impl Client {
             None => {
                 bail!("Reset by the peer");
             }
+        }
+        if native_upgrade && !conn.is_secured() {
+            bail!("Native path did not authenticate the peer");
         }
         Ok(option_pk)
     }
@@ -6721,6 +6756,23 @@ mod kx_tests {
         conn.send(&test_delay(1)).await.unwrap();
         let decrypted = matches!(conn.next().await, Some(Ok(b)) if delay_in(&b) == Some(2));
         (seen.await.unwrap(), decrypted)
+    }
+
+    #[tokio::test]
+    async fn open_tcp_without_signed_peer_message_cannot_win_a_native_session_upgrade() {
+        let (rs_pk, rs_sk) = sign::gen_keypair();
+        let (peer_pk, _) = sign::gen_keypair();
+        let identity = IdPk {
+            id: PEER_ID.to_owned(), pk: peer_pk.0.to_vec().into(), ..Default::default()
+        }.write_to_bytes().unwrap();
+        let listener = hbb_common::tcp::new_listener("127.0.0.1:0", false).await.unwrap();
+        let mut conn = connect_tcp(listener.local_addr().unwrap(), 2000).await.unwrap();
+        let (stream, addr) = listener.accept().await.unwrap();
+        let mut other = FramedStream::from(stream, addr);
+        other.send(&test_delay(7)).await.unwrap();
+        assert!(Client::secure_connection_for_path(
+            PEER_ID, sign::sign(&identity, &rs_sk), &crate::encode64(rs_pk.0), &mut conn, true,
+        ).await.is_err());
     }
 
     #[tokio::test]
