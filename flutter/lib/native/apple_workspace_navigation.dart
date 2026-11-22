@@ -16,6 +16,9 @@ class AppleWorkspaceNavigation extends StatefulWidget {
     required this.selected,
     required this.onSelect,
     required this.compact,
+    this.brand,
+    this.settingsLabel,
+    this.onSettings,
   }) : assert(labels.length == symbols.length);
 
   final List<String> labels;
@@ -23,6 +26,9 @@ class AppleWorkspaceNavigation extends StatefulWidget {
   final int selected;
   final ValueChanged<int> onSelect;
   final bool compact;
+  final String? brand;
+  final String? settingsLabel;
+  final VoidCallback? onSettings;
 
   @override
   State<AppleWorkspaceNavigation> createState() =>
@@ -39,6 +45,8 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
         'symbols': widget.symbols,
         'selected': widget.selected,
         'compact': widget.compact,
+        if (widget.brand != null) 'brand': widget.brand!,
+        if (widget.settingsLabel != null) 'settings': widget.settingsLabel!,
         'dark': _brightness == Brightness.dark,
       };
 
@@ -57,6 +65,8 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     super.didUpdateWidget(oldWidget);
     if (widget.selected != oldWidget.selected ||
         widget.compact != oldWidget.compact ||
+        widget.brand != oldWidget.brand ||
+        widget.settingsLabel != oldWidget.settingsLabel ||
         !listEquals(widget.labels, oldWidget.labels) ||
         !listEquals(widget.symbols, oldWidget.symbols)) {
       _updateNativeView();
@@ -68,7 +78,9 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     _channel?.setMethodCallHandler(null);
     _channel = MethodChannel('$_viewType/$viewId')
       ..setMethodCallHandler((call) async {
-        if (call.method == 'select') {
+        if (call.method == 'settings') {
+          widget.onSettings?.call();
+        } else if (call.method == 'select') {
           final index = call.arguments;
           if (index is int && index >= 0 && index < widget.labels.length) {
             widget.onSelect(index);

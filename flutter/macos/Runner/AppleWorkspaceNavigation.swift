@@ -26,7 +26,11 @@ final class AppleWorkspaceNavigationFactory: NSObject, FlutterPlatformViewFactor
 
 private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let table = NSTableView()
+    private let brand = NSTextField(labelWithString: "")
+    private let settingsButton = NSButton()
+    private let separator = NSBox()
     private let channel: FlutterMethodChannel
+    private var listHeight: NSLayoutConstraint!
     private var labels: [String] = []
     private var symbols: [String] = []
     private var applyingConfiguration = false
@@ -37,35 +41,83 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         )
         super.init(frame: .zero)
 
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("tab"))
+        let content = NSView()
+        let surface = Self.makeSurface(content)
+        surface.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(surface)
+
+        let mark = NSImageView()
+        mark.image = Self.appMark()
+        mark.imageScaling = .scaleProportionallyUpOrDown
+        mark.setAccessibilityElement(false)
+        brand.font = .systemFont(ofSize: 17, weight: .semibold)
+        brand.lineBreakMode = .byTruncatingTail
+        brand.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let header = NSStackView(views: [mark, brand])
+        header.spacing = 9
+        header.alignment = .centerY
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("destination"))
+        column.minWidth = 1
         column.resizingMask = .autoresizingMask
         table.addTableColumn(column)
         table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
         table.headerView = nil
         table.backgroundColor = .clear
         table.autoresizingMask = [.width]
-        table.selectionHighlightStyle = .sourceList
-        if #available(macOS 11.0, *) {
-            table.style = .sourceList
-        }
+        table.selectionHighlightStyle = .regular
+        table.intercellSpacing = NSSize(width: 0, height: 3)
+        if #available(macOS 11.0, *) { table.style = .plain }
         table.delegate = self
         table.dataSource = self
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
-        scroll.scrollerStyle = .overlay
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
+        scroll.hasHorizontalScroller = false
         scroll.documentView = table
+        separator.boxType = .separator
+        settingsButton.bezelStyle = .inline
+        settingsButton.isBordered = false
+        settingsButton.alignment = .left
+        settingsButton.imagePosition = .imageLeading
+        settingsButton.image = Self.symbol("slider.horizontal.3")
+        settingsButton.font = .systemFont(ofSize: 13)
+        settingsButton.target = self
+        settingsButton.action = #selector(openSettings)
 
-        let surface = makeSurface(for: scroll)
-        surface.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(surface)
+        let edge = NSBox()
+        edge.boxType = .separator
+        for item in [header, scroll, separator, settingsButton, edge] as [NSView] {
+            item.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(item)
+        }
+        listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: trailingAnchor),
             surface.topAnchor.constraint(equalTo: topAnchor),
             surface.bottomAnchor.constraint(equalTo: bottomAnchor),
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            header.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -12),
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
+            mark.widthAnchor.constraint(equalToConstant: 25),
+            mark.heightAnchor.constraint(equalToConstant: 25),
+            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 22),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
+            listHeight,
+            separator.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
+            separator.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 10),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+            settingsButton.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            settingsButton.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            settingsButton.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            settingsButton.heightAnchor.constraint(equalToConstant: 33),
+            edge.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            edge.topAnchor.constraint(equalTo: content.topAnchor),
+            edge.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            edge.widthAnchor.constraint(equalToConstant: 1)
         ])
 
         update(arguments)
@@ -81,40 +133,67 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
 
     required init?(coder: NSCoder) { nil }
 
-    deinit {
-        channel.setMethodCallHandler(nil)
-    }
+    deinit { channel.setMethodCallHandler(nil) }
 
-    private func makeSurface(for content: NSView) -> NSView {
+    private static func makeSurface(_ content: NSView) -> NSView {
 #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
-            glass.cornerRadius = 20
+            glass.cornerRadius = 0
             glass.contentView = content
             return glass
         }
 #endif
-        let fallback = NSVisualEffectView()
-        fallback.material = .sidebar
-        fallback.blendingMode = .withinWindow
-        content.frame = fallback.bounds
+        let material = NSVisualEffectView()
+        material.material = .sidebar
+        material.blendingMode = .withinWindow
+        content.frame = material.bounds
         content.autoresizingMask = [.width, .height]
-        fallback.addSubview(content)
-        return fallback
+        material.addSubview(content)
+        return material
+    }
+
+    private static func appMark() -> NSImage? {
+        if let frameworks = Bundle.main.privateFrameworksURL,
+           let assets = Bundle(url: frameworks.appendingPathComponent("App.framework")) {
+            for ext in ["png", "svg"] {
+                if let url = assets.url(forResource: "icon", withExtension: ext,
+                                        subdirectory: "flutter_assets/assets"),
+                   let mark = NSImage(contentsOf: url) { return mark }
+            }
+        }
+        return NSApp.applicationIconImage
+    }
+
+    private static func symbol(_ name: String) -> NSImage? {
+        if #available(macOS 11.0, *) {
+            let icon = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+                ?? NSImage(systemSymbolName: "display", accessibilityDescription: nil)
+            return icon?.withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+        }
+        return NSImage(named: NSImage.actionTemplateName)
+    }
+
+    @objc private func openSettings() {
+        channel.invokeMethod("settings", arguments: nil)
     }
 
     private func update(_ arguments: Any?) {
-        guard let settings = arguments as? [String: Any],
-              let labels = settings["labels"] as? [String],
-              let symbols = settings["symbols"] as? [String],
+        guard let config = arguments as? [String: Any],
+              let labels = config["labels"] as? [String],
+              let symbols = config["symbols"] as? [String],
               labels.count == symbols.count,
-              let selected = settings["selected"] as? Int else { return }
+              let selected = config["selected"] as? Int else { return }
 
         applyingConfiguration = true
         defer { applyingConfiguration = false }
-
-        appearance = NSAppearance(named: settings["dark"] as? Bool == true ? .darkAqua : .aqua)
-        table.rowHeight = settings["compact"] as? Bool == true ? 36 : 42
+        appearance = NSAppearance(named: config["dark"] as? Bool == true ? .darkAqua : .aqua)
+        brand.stringValue = config["brand"] as? String ?? ""
+        settingsButton.title = config["settings"] as? String ?? ""
+        settingsButton.isHidden = settingsButton.title.isEmpty
+        separator.isHidden = settingsButton.isHidden
+        table.rowHeight = config["compact"] as? Bool == true ? 32 : 35
+        listHeight.constant = CGFloat(labels.count) * (table.rowHeight + table.intercellSpacing.height)
         if self.labels != labels || self.symbols != symbols {
             self.labels = labels
             self.symbols = symbols
@@ -130,40 +209,30 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
     func numberOfRows(in tableView: NSTableView) -> Int { labels.count }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        AppleWorkspaceRowView()
+        WorkspaceDestinationRow()
     }
 
-    func tableView(
-        _ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int
-    ) -> NSView? {
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let title = NSTextField(labelWithString: labels[row])
         title.lineBreakMode = .byTruncatingTail
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        let symbol: NSImage?
-        if #available(macOS 11.0, *) {
-            symbol = NSImage(systemSymbolName: symbols[row], accessibilityDescription: nil)
-                ?? NSImage(systemSymbolName: "circle", accessibilityDescription: nil)
-        } else {
-            symbol = NSImage(named: NSImage.actionTemplateName)
-        }
-        let image = AppleWorkspaceSymbolView(symbol: symbol)
-        image.setAccessibilityElement(false)
-        image.widthAnchor.constraint(equalToConstant: 20).isActive = true
-
-        let rowContent = NSStackView(views: [image, title])
-        rowContent.spacing = 8
-        rowContent.alignment = .centerY
-        rowContent.translatesAutoresizingMaskIntoConstraints = false
-
+        let icon = NSImageView()
+        icon.image = Self.symbol(symbols[row])
+        icon.setAccessibilityElement(false)
+        let stack = NSStackView(views: [icon, title])
+        stack.spacing = 10
+        stack.alignment = .centerY
+        stack.translatesAutoresizingMaskIntoConstraints = false
         let cell = NSTableCellView()
         cell.textField = title
-        cell.imageView = image
-        cell.addSubview(rowContent)
+        cell.imageView = icon
+        cell.toolTip = labels[row]
+        cell.addSubview(stack)
         NSLayoutConstraint.activate([
-            rowContent.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
-            rowContent.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -8),
-            rowContent.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            stack.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -8),
+            stack.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
         ])
         return cell
     }
@@ -174,14 +243,18 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
     }
 }
 
-private final class AppleWorkspaceRowView: NSTableRowView {
-    override var isSelected: Bool {
-        didSet { updateForeground() }
+private final class WorkspaceDestinationRow: NSTableRowView {
+    private var dark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+
+    override func drawSelection(in dirtyRect: NSRect) {
+        let color = dark ? NSColor(srgbRed: 0.19, green: 0.24, blue: 0.38, alpha: 1)
+                         : NSColor(srgbRed: 0.92, green: 0.93, blue: 0.99, alpha: 1)
+        color.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 0), xRadius: 8, yRadius: 8).fill()
     }
 
-    override var isEmphasized: Bool {
-        didSet { updateForeground() }
-    }
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+    override var isSelected: Bool { didSet { updateForeground() } }
 
     override func didAddSubview(_ subview: NSView) {
         super.didAddSubview(subview)
@@ -191,78 +264,15 @@ private final class AppleWorkspaceRowView: NSTableRowView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateForeground()
+        needsDisplay = true
     }
 
     private func updateForeground() {
-        guard let cell = subviews.first(where: { $0 is NSTableCellView }) as? NSTableCellView else {
-            return
-        }
-        guard isSelected else {
-            cell.textField?.textColor = .labelColor
-            (cell.imageView as? AppleWorkspaceSymbolView)?.selectionForeground = nil
-            return
-        }
-        let foreground = selectionForeground()
-        cell.textField?.textColor = foreground
-        (cell.imageView as? AppleWorkspaceSymbolView)?.selectionForeground = foreground
+        guard let cell = subviews.compactMap({ $0 as? NSTableCellView }).first else { return }
+        let foreground = dark ? NSColor(srgbRed: 0.78, green: 0.82, blue: 1, alpha: 1)
+                              : NSColor(srgbRed: 0.20, green: 0.28, blue: 0.70, alpha: 1)
+        cell.textField?.textColor = isSelected ? foreground : .labelColor
+        cell.textField?.font = .systemFont(ofSize: 13, weight: isSelected ? .semibold : .regular)
+        cell.imageView?.contentTintColor = isSelected ? foreground : .secondaryLabelColor
     }
-
-    private func selectionForeground() -> NSColor {
-        let background = isEmphasized
-            ? NSColor.selectedContentBackgroundColor : NSColor.unemphasizedSelectedContentBackgroundColor
-        var rgb: NSColor?
-        if #available(macOS 11.0, *) {
-            effectiveAppearance.performAsCurrentDrawingAppearance {
-                rgb = background.usingColorSpace(.sRGB)
-            }
-        } else {
-            let previous = NSAppearance.current
-            NSAppearance.current = effectiveAppearance
-            rgb = background.usingColorSpace(.sRGB)
-            NSAppearance.current = previous
-        }
-        guard let rgb = rgb else {
-            return isEmphasized ? .alternateSelectedControlTextColor : .unemphasizedSelectedTextColor
-        }
-        func linear(_ value: CGFloat) -> CGFloat {
-            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
-        }
-        let luminance = 0.2126 * linear(rgb.redComponent)
-            + 0.7152 * linear(rgb.greenComponent) + 0.0722 * linear(rgb.blueComponent)
-        let contrastWithBlack = (luminance + 0.05) / 0.05
-        let contrastWithWhite = 1.05 / (luminance + 0.05)
-        return contrastWithBlack >= contrastWithWhite ? .black : .white
-    }
-}
-
-private final class AppleWorkspaceSymbolView: NSImageView {
-    private let symbol: NSImage?
-
-    var selectionForeground: NSColor? {
-        didSet {
-            guard selectionForeground != oldValue else { return }
-            guard let symbol, let foreground = selectionForeground else {
-                image = symbol
-                return
-            }
-            // AppKit applies its own emphasized tint to template images in a source list.
-            image = NSImage(size: symbol.size, flipped: false) { bounds in
-                guard let context = NSGraphicsContext.current?.cgContext else { return false }
-                context.beginTransparencyLayer(auxiliaryInfo: nil)
-                symbol.draw(in: bounds)
-                foreground.setFill()
-                bounds.fill(using: .sourceIn)
-                context.endTransparencyLayer()
-                return true
-            }
-        }
-    }
-
-    init(symbol: NSImage?) {
-        self.symbol = symbol
-        super.init(frame: .zero)
-        image = symbol
-    }
-
-    required init?(coder: NSCoder) { nil }
 }

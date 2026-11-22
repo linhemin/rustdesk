@@ -109,42 +109,26 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           final compact = bounds.maxWidth < 760;
           return Row(children: [
             SizedBox(
-                width: compact ? 148 : 192,
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 16, 8, 12),
-                          child: Row(children: [
-                            loadIcon(24),
-                            const SizedBox(width: 8),
-                            Expanded(
-                                child: Text(bind.mainGetAppNameSync(),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium))
-                          ])),
-                      Expanded(
-                          child: AppleWorkspaceNavigation(
-                              labels: [
-                            for (final item in destinations) item.label
-                          ],
-                              symbols: [
-                            'arrow.up.right',
-                            'desktopcomputer',
-                            if (incoming) 'laptopcomputer'
-                          ],
-                              selected: current,
-                              onSelect: select,
-                              compact: compact)),
-                      if (!bind.isDisableSettings())
-                        TextButton.icon(
-                            onPressed: DesktopTabPage.onAddSetting,
-                            icon: const Icon(Icons.tune_rounded, size: 18),
-                            label: Text(translate('Settings'))),
-                    ])),
+              width: compact ? 164 : 204,
+              child: ColoredBox(
+                color: Theme.of(context).cardColor,
+                child: AppleWorkspaceNavigation(
+                  labels: [for (final item in destinations) item.label],
+                  symbols: [
+                    'arrow.left.arrow.right',
+                    'display.2',
+                    if (incoming) 'laptopcomputer',
+                  ],
+                  selected: current,
+                  compact: compact,
+                  onSelect: select,
+                  brand: bind.mainGetAppNameSync(),
+                  settingsLabel:
+                      bind.isDisableSettings() ? null : translate('Settings'),
+                  onSettings: DesktopTabPage.onAddSetting,
+                ),
+              ),
+            ),
             Expanded(child: content),
           ]);
         }));
