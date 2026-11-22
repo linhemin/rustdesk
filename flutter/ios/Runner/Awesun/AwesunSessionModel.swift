@@ -40,7 +40,9 @@ final class AwesunSessionModel: ObservableObject {
     @Published private(set) var mouseVisible = UserDefaults.standard.bool(forKey: AwesunSessionModel.mouseVisibleKey)
     @Published private(set) var mouseCollapsed = true
     @Published var mouseAnchor: CGPoint?
-    @Published var mouseViewport: CGRect?
+    @Published var videoViewport: CGRect?
+    @Published var holdsMouseInScreenSpace = false
+    var mouseViewport: CGRect? { holdsMouseInScreenSpace ? nil : videoViewport }
     @Published var pressedMouseRegion: AwesunMouseRegion?
     @Published var wheelIndicator: Double?
     @Published var lockPlacement = AwesunDockPlacement(fraction: 0.10)

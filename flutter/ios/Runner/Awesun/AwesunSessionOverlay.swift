@@ -45,7 +45,7 @@ final class AwesunSessionOverlay {
             case "setMouseViewport":
                 if let x = args["x"] as? Double, let y = args["y"] as? Double,
                    let width = args["width"] as? Double, let height = args["height"] as? Double {
-                    self.model.mouseViewport = CGRect(x: x, y: y, width: width, height: height)
+                    self.model.videoViewport = CGRect(x: x, y: y, width: width, height: height)
                 }
                 result(nil)
             case "setPerformanceStatus":
@@ -298,6 +298,12 @@ private final class AwesunMouseInput: UIView {
             $0 !== contact && AwesunControlLayout.mouseRegion(
                 $0.location(in: self), model: surface.model, size: bounds.size) == nil
         }) {
+            let layout = geometry(surface)
+            surface.model.mouseAnchor = layout.center
+            surface.model.holdsMouseInScreenSpace = true
+            if let primary = contact {
+                rebaseGrip(at: primary.location(in: self), center: layout.center)
+            }
             canvasContact = other
             canvasPrevious = other.location(in: self)
             moved = true
@@ -340,6 +346,10 @@ private final class AwesunMouseInput: UIView {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let surface = surface, surface.mouseAvailable else { cancel(); return }
         if let other = canvasContact {
+            if let primary = contact, touches.contains(primary) {
+                let layout = geometry(surface, center: requestedCenter(for: primary.location(in: self)))
+                surface.model.moveVirtualPointer(anchor: layout.center, point: layout.pointer)
+            }
             if touches.contains(other) {
                 let point = other.location(in: self)
                 let delta = CGSize(width: point.x - canvasPrevious.x, height: point.y - canvasPrevious.y)
@@ -438,12 +448,15 @@ private final class AwesunMouseInput: UIView {
         canvasContact = nil
         stopPanning(interruptCanvas: true)
         guard let touch = contact, let surface = surface else { return }
-        // Resume from the still-held finger without replaying motion made during the handoff.
-        start = touch.location(in: self)
         let layout = geometry(surface)
-        startingHub.origin = CGPoint(x: layout.center.x - startingHub.width / 2,
-                                     y: layout.center.y - startingHub.height / 2)
+        rebaseGrip(at: touch.location(in: self), center: layout.center)
         panTravel = .braked(low: panExcursion(at: start, layout: layout))
+    }
+
+    private func rebaseGrip(at touch: CGPoint, center: CGPoint) {
+        start = touch
+        startingHub.origin = CGPoint(x: center.x - startingHub.width / 2,
+                                     y: center.y - startingHub.height / 2)
     }
 
     func cancel() {
@@ -461,6 +474,7 @@ private final class AwesunMouseInput: UIView {
         wheelAngle = nil
         wheelRemainder = 0
         if let model = surface?.model {
+            model.holdsMouseInScreenSpace = false
             model.endDrag()
             model.pressedMouseRegion = nil
             model.wheelIndicator = nil
