@@ -376,15 +376,16 @@ mod tests {
     #[tokio::test]
     async fn direct_path_works_when_the_peer_can_only_reach_the_nas_observed_port() {
         let peer = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
-        let primary = Arc::new(UdpSocket::bind("127.0.0.2:0").await.unwrap());
-        let port = UdpSocket::bind("127.0.0.2:0").await.unwrap().local_addr().unwrap().port();
+        let primary = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
         let mut local = Candidates { sockets: Vec::new(), tickets: vec![0; RECEIPT_SIZE] };
         local.tickets[..2].copy_from_slice(&port.to_be_bytes());
         local.bind_observed_ports(primary.local_addr().unwrap()).await;
         let key = auth::gen_key();
         let destination = SocketAddr::new(primary.local_addr().unwrap().ip(), port);
         let peer_addr = peer.local_addr().unwrap();
-        let caller = Paths { local: Candidates::default(), ports: vec![], key: key.clone() };
+        let challenge = packet(0, &[7; 8], &key);
+        let ack = packet(1, &[7; 8], &key);
         let host = Paths { local, ports: vec![], key };
         let accept = async {
             let (sock, syn) = host.select(primary, peer_addr, true).await.unwrap();
@@ -392,10 +393,17 @@ mod tests {
             KcpStream::accept(sock, Duration::from_secs(2), syn).await.unwrap()
         };
         let dial = async {
-            // A connected UDP socket accepts application packets only from its nominated peer.
+            // Model a filter that only admits responses from the NAS-observed port.
+            peer.send_to(&challenge, destination).await.unwrap();
+            timeout(Duration::from_secs(2), async {
+                let mut buf = [0; 64];
+                loop {
+                    let (n, from) = peer.recv_from(&mut buf).await.unwrap();
+                    if from == destination && buf[..n] == ack[..] { break; }
+                }
+            }).await.unwrap();
             peer.connect(destination).await.unwrap();
-            let (sock, _) = caller.select(peer, destination, false).await.unwrap();
-            KcpStream::connect(sock, Duration::from_secs(2)).await.unwrap()
+            KcpStream::connect(peer, Duration::from_secs(2)).await.unwrap()
         };
         let ((_a, mut client), (_b, mut server)) = tokio::join!(dial, accept);
         client.send_raw(b"hello".to_vec()).await.unwrap();
