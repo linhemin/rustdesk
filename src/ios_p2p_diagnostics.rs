@@ -230,14 +230,14 @@ mod recorder {
         }
     }
 
-    fn recording() -> Option<(u64, watch::Receiver<()>)> {
+    fn recording() -> Option<(SyncSender<(u64, String)>, watch::Receiver<()>)> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let mut writer = WRITER.lock().unwrap();
         if crate::get_local_option(OPTION_RECORD_P2P_DIAGNOSTICS) != "Y" {
             return None;
         }
         if let Some(writer) = writer.as_ref() {
-            return Some((writer.generation, writer.stop.subscribe()));
+            return Some((writer.entries.clone(), writer.stop.subscribe()));
         }
         let generation = NEXT.fetch_add(1, Ordering::Relaxed);
         let (entries, rx) = sync_channel(16);
@@ -267,14 +267,14 @@ mod recorder {
             log::warn!("Could not start P2P diagnostics: {err}");
             return None;
         }
-        *writer = Some(Writer { generation, entries, stop });
-        Some((generation, stop_rx))
+        *writer = Some(Writer { generation, entries: entries.clone(), stop });
+        Some((entries, stop_rx))
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone)]
     struct Attempt {
         id: u64,
-        generation: u64,
+        entries: SyncSender<(u64, String)>,
         started: Instant,
         start_path: &'static str,
         offerer: bool,
@@ -305,12 +305,6 @@ mod recorder {
 
     impl Attempt {
         fn publish(&self, progress: &Progress, result: &str) {
-            let Ok(writer) = WRITER.try_lock() else {
-                return;
-            };
-            let Some(writer) = writer.as_ref().filter(|w| w.generation == self.generation) else {
-                return;
-            };
             let side = if self.offerer {
                 "controller"
             } else {
@@ -333,7 +327,7 @@ mod recorder {
             if let Some(punch) = &progress.punch {
                 append_punch_status(&mut entry, &punch.borrow());
             }
-            let _ = writer.entries.try_send((self.id, entry));
+            let _ = self.entries.try_send((self.id, entry));
         }
     }
 
@@ -348,10 +342,10 @@ mod recorder {
     impl Observation {
         pub(crate) fn new(offerer: bool, phase: &'static str) -> Option<Self> {
             static NEXT: AtomicU64 = AtomicU64::new(0);
-            let (generation, stop) = recording()?;
+            let (entries, stop) = recording()?;
             let attempt = Attempt {
                 id: NEXT.fetch_add(1, Ordering::Relaxed),
-                generation,
+                entries,
                 started: Instant::now(),
                 start_path: path_label(),
                 offerer,
@@ -377,7 +371,7 @@ mod recorder {
             self.set_stage("negotiating");
             let pc = pc.clone();
             let progress = self.progress.clone();
-            let attempt = self.attempt;
+            let attempt = self.attempt.clone();
             let mut stop = self.stop.clone();
             self.sampler = Some(tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(Duration::from_secs(2));
@@ -409,6 +403,19 @@ mod recorder {
         pub(crate) fn set_stage(&mut self, stage: &'static str) {
             if let Ok(mut state) = self.progress.lock() {
                 state.stage = stage;
+            }
+        }
+
+        pub(crate) fn finish_udp_probe(&mut self, err: &anyhow::Error) {
+            self.finish("peer probe not acknowledged", Some(err));
+            if let Some(counts) = err.downcast_ref::<crate::common::UdpPunchTimeout>() {
+                self.result = "timeout";
+                if let Ok(mut state) = self.progress.lock() {
+                    state.latest = Some((Instant::now(), format!(
+                        "nativeUdp [sent,sendErrors,peerProbes,receiveErrors]=[{},{},{},{}]",
+                        counts.sent, counts.send_errors, counts.received, counts.recv_errors
+                    )));
+                }
             }
         }
 

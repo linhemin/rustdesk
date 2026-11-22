@@ -1,0 +1,139 @@
+use hbb_common::{config::Config, socket_client, timeout, tokio, ResultType, Stream};
+use std::{net::SocketAddr, sync::Arc};
+
+// hbbs pairs the ordinary IPv4 port with the source of the signaling connection.
+// The IPv6 direct transport negotiates its own endpoint independently.
+pub(crate) async fn ordinary_udp_socket(
+    server: &str,
+    verify_rendezvous: bool,
+) -> ResultType<(Arc<tokio::net::UdpSocket>, SocketAddr)> {
+    let original = super::rendezvous_punch_socket(server, verify_rendezvous).await?;
+    if !original.0.local_addr()?.ip().is_unspecified() {
+        return Ok(original);
+    }
+    fn routed_source(peer: SocketAddr) -> std::io::Result<SocketAddr> {
+        let route = std::net::UdpSocket::bind(Config::get_any_listen_addr(peer.is_ipv4()))?;
+        route.connect(peer)?;
+        Ok(SocketAddr::new(route.local_addr()?.ip(), 0))
+    }
+    let mut target = original.1;
+    if original.1.is_ipv6() {
+        let lookup = tokio::net::lookup_host(server);
+        if let Ok(Ok(mut addresses)) = timeout(400, lookup).await {
+            if let Some(v4) = addresses.find(
+                |addr| matches!(addr, SocketAddr::V4(a) if super::usable_server_ipv4(*a.ip())),
+            ) {
+                if routed_source(v4).is_ok() {
+                    target = v4;
+                } else {
+                    #[cfg(target_vendor = "apple")]
+                    if let Ok(translated) = udp_peer_destination(&original.0, v4).await {
+                        target = translated;
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(source) = routed_source(target) {
+        if let Ok(socket) = tokio::net::UdpSocket::bind(source).await {
+            return Ok((Arc::new(socket), target));
+        }
+    }
+    Ok(original)
+}
+
+pub(crate) async fn connect_udp_observer(
+    observer: SocketAddr,
+    source: SocketAddr,
+) -> ResultType<Stream> {
+    #[cfg(target_os = "windows")]
+    if let Some(iface) =
+        super::Interface::configured().filter(|i| source.ip() == std::net::IpAddr::V4(i.address))
+    {
+        return iface.connect(observer, 0, 1_500).await;
+    }
+    let local = SocketAddr::new(source.ip(), 0);
+    socket_client::connect_tcp_local(observer, Some(local), 1_500).await
+}
+
+pub(crate) async fn connect_peer(
+    socket: &tokio::net::UdpSocket,
+    peer: SocketAddr,
+) -> ResultType<()> {
+    #[cfg(target_vendor = "apple")]
+    let peer = udp_peer_destination(socket, peer).await?;
+    socket.connect(peer).await?;
+    Ok(())
+}
+
+#[cfg(target_vendor = "apple")]
+async fn udp_peer_destination(
+    socket: &tokio::net::UdpSocket,
+    peer: SocketAddr,
+) -> ResultType<SocketAddr> {
+    use hbb_common::{anyhow::Context, libc};
+    use std::{ffi::CString, net::Ipv6Addr, ptr};
+
+    let SocketAddr::V4(v4) = peer else {
+        return Ok(peer);
+    };
+    if !socket.local_addr()?.is_ipv6() {
+        return Ok(peer);
+    }
+    // On DNS64 networks Darwin synthesizes a routable IPv6 address even for
+    // a numeric IPv4 literal. Rust's lookup_host short-circuits numeric input.
+    let lookup = tokio::task::spawn_blocking(move || -> Option<SocketAddr> {
+        let host = CString::new(v4.ip().to_string()).ok()?;
+        let hints = libc::addrinfo {
+            ai_flags: libc::AI_DEFAULT,
+            ai_family: libc::AF_UNSPEC,
+            ai_socktype: libc::SOCK_DGRAM,
+            ..unsafe { std::mem::zeroed() }
+        };
+        let mut first = ptr::null_mut();
+        // The list and its entries belong to getaddrinfo until freeaddrinfo below.
+        unsafe {
+            if libc::getaddrinfo(host.as_ptr(), ptr::null(), &hints, &mut first) != 0 {
+                return None;
+            }
+            let mut cur = first;
+            let mut translated = None;
+            while let Some(entry) = cur.as_ref() {
+                if entry.ai_family == libc::AF_INET6
+                    && !entry.ai_addr.is_null()
+                    && entry.ai_addrlen as usize >= std::mem::size_of::<libc::sockaddr_in6>()
+                {
+                    let addr = &*entry.ai_addr.cast::<libc::sockaddr_in6>();
+                    translated = Some(SocketAddr::new(
+                        Ipv6Addr::from(addr.sin6_addr.s6_addr).into(),
+                        v4.port(),
+                    ));
+                    break;
+                }
+                cur = entry.ai_next;
+            }
+            libc::freeaddrinfo(first);
+            translated
+        }
+    });
+    timeout(1_500, lookup)
+        .await??
+        .context("No system IPv6 route to the IPv4 UDP peer")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn signal_reuses_the_mapping_source_and_observer() {
+        let hbbs = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let observer = hbbs.local_addr().unwrap();
+        let mapped = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let source = mapped.local_addr().unwrap();
+        let stream = connect_udp_observer(observer, source).await.unwrap();
+        let (_, observed) = hbbs.accept().await.unwrap();
+        assert_eq!(observed.ip(), source.ip());
+        assert_eq!(stream.local_addr(), observed);
+    }
+}

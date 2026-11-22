@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 #[path = "p2p/observer_policy.rs"]
 pub(crate) mod observer_policy;
+pub(crate) mod ordinary_udp;
 #[path = "p2p/udp_mapping.rs"]
 pub(crate) mod udp_mapping;
 
@@ -118,7 +119,6 @@ impl Interface {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
 fn usable_server_ipv4(ip: Ipv4Addr) -> bool {
     let [first, second, ..] = ip.octets();
     first != 0

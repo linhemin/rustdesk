@@ -1412,9 +1412,14 @@ impl RendezvousMediator {
         meta: ConnectionMeta,
         slot: Option<PunchSlot>,
     ) -> ResultType<()> {
+        let ordinary_v4 = peer_addr.is_ipv4() && msg_punch.webrtc_sdp_answer.is_empty();
         let mut msg_out = Message::new();
         msg_out.set_punch_hole_sent(msg_punch);
-        let (socket, addr) = crate::p2p::rendezvous_punch_socket(&self.host, true).await?;
+        let (socket, addr) = if ordinary_v4 {
+            crate::p2p::ordinary_udp::ordinary_udp_socket(&self.host, true).await?
+        } else {
+            crate::p2p::rendezvous_punch_socket(&self.host, true).await?
+        };
         let data = msg_out.write_to_bytes()?;
         socket.send_to(&data, addr).await?;
         // The reply is out, and with it the answer and the v6 address: declined is the listen
@@ -1439,7 +1444,7 @@ impl RendezvousMediator {
             }
         });
         udp_nat_listen(
-            socket_cloned.clone(),
+            socket_cloned,
             peer_addr,
             peer_addr,
             server,
@@ -1707,7 +1712,7 @@ async fn udp_nat_listen(
     let tm = Instant::now();
     let socket_cloned = socket.clone();
     let func = async {
-        socket.connect(peer_addr).await?;
+        crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await?;
         if peer_addr.is_ipv4() {
             hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, info, "Ordinary UDP peer probing started");
         }

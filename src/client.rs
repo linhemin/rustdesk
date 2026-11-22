@@ -776,9 +776,13 @@ impl Client {
         // no need to care about multiple rendezvous servers case, since it is acutally not used any more.
         // Shared state for UDP NAT test result
         if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
-            if let Ok((socket, addr)) =
+            let socket = if !key.is_empty() && !Config::is_proxy() && !use_ws()
+                && (direct_permission.native_upgrade || !crate::get_webrtc_enabled()) {
+                crate::p2p::ordinary_udp::ordinary_udp_socket(&rendezvous_server, false).await
+            } else {
                 crate::p2p::rendezvous_punch_socket(&rendezvous_server, false).await
-            {
+            };
+            if let Ok((socket, addr)) = socket {
                 let udp_port = Arc::new(Mutex::new(0));
                 let up_cloned = udp_port.clone();
                 let socket_cloned = socket.clone();
@@ -786,7 +790,7 @@ impl Client {
                     allow_err!(crate::p2p::udp_mapping::observe(&socket_cloned, addr, &up_cloned, stop_udp_rx).await);
                 };
                 tokio::spawn(func);
-                (Some(socket), Some(udp_port))
+                (Some(socket), Some((udp_port, addr)))
             } else {
                 #[cfg(target_os = "ios")]
                 crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "cannot bind rendezvous socket");
@@ -1146,7 +1150,7 @@ impl Client {
         token: String,
         conn_type: ConnType,
         interface: impl Interface,
-        mut udp: (Option<Arc<UdpSocket>>, Option<Arc<Mutex<u16>>>),
+        mut udp: (Option<Arc<UdpSocket>>, Option<(Arc<Mutex<u16>>, SocketAddr)>),
         stop_udp_tx: Option<oneshot::Sender<()>>,
         mut ipv6: Option<(Arc<UdpSocket>, bytes::Bytes)>,
         webrtc_offerer: Option<WebRTCStream>,
@@ -1170,7 +1174,24 @@ impl Client {
         // into_inner() once the stream is adopted into a connection attempt.
         let mut webrtc_offerer = webrtc_offerer.map(OffererGuard::new);
         let mut start = Instant::now();
-        let mut socket = crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await;
+        let mapped = if webrtc_offerer.is_none() && !Config::is_proxy() && !use_ws() && !key.is_empty() {
+            udp.1.as_ref().zip(udp.0.as_ref())
+                .and_then(|((_, observer), sock)| Some((*observer, sock.local_addr().ok()?)))
+        } else {
+            None
+        };
+        let mut socket = if let Some((observer, source)) = mapped {
+            match crate::p2p::ordinary_udp::connect_udp_observer(observer, source).await {
+                Ok(stream) => Ok(stream),
+                Err(_) => {
+                    // A mapping from another observer or interface cannot be advertised here.
+                    udp = (None, None);
+                    crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await
+                }
+            }
+        } else {
+            crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await
+        };
         debug_assert!(!servers.contains(&rendezvous_server));
         let rtt = start.elapsed();
         log::debug!("TCP connection establishment time used: {:?}", rtt);
@@ -1232,7 +1253,19 @@ impl Client {
                         err
                     );
                     webrtc_offerer = None;
-                    socket = crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await?;
+                    let retry = if let Some((observer, source)) = mapped.filter(|_| udp.0.is_some()) {
+                        crate::p2p::ordinary_udp::connect_udp_observer(observer, source).await.ok()
+                    } else {
+                        None
+                    };
+                    socket = if let Some(stream) = retry {
+                        stream
+                    } else {
+                        if mapped.is_some() {
+                            udp = (None, None);
+                        }
+                        crate::p2p::connect_rendezvous(&rendezvous_server, None, CONNECT_TIMEOUT).await?
+                    };
                     my_addr = socket.local_addr();
                 }
             }
@@ -1246,7 +1279,7 @@ impl Client {
         // waiting for the UDP NAT test. The WebRTC exchange does not replace that wait, it only
         // spends part of the same budget, so what is left of it is waited out here and a result
         // that has already arrived is taken at once.
-        if let Some(udp) = udp.1.as_ref().filter(|_| !legacy_secure) {
+        if let Some((udp, _)) = udp.1.as_ref().filter(|_| !legacy_secure) {
             let tm = udp_nat_wait_from;
             // rtt is the TCP connect time. When it is too short to be a real WAN round trip it
             // says nothing about the UDP path (a TUN VPN or the LAN gateway answered the
@@ -1274,7 +1307,7 @@ impl Client {
             .take()
             .map(|(socket, addr)| (Some(socket), Some(addr)))
             .unwrap_or((None, None));
-        let udp_nat_port = udp.1.map(|x| *x.lock().unwrap()).unwrap_or(0);
+        let udp_nat_port = udp.1.map(|(port, _)| *port.lock().unwrap()).unwrap_or(0);
         #[cfg(target_os = "ios")]
         if udp.0.is_some() {
             let stage = if udp_nat_port != 0 { "mapping advertised" } else { "no public mapping" };
@@ -1285,7 +1318,7 @@ impl Client {
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
-        let allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let mut allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
         let mut family_retry_available = allow_tcp_punch
             && !interface.is_force_relay()
             && !Config::is_proxy()
@@ -1420,6 +1453,9 @@ impl Client {
                         } else {
                             peer_nat_type = ph.nat_type();
                             is_local = ph.is_local();
+                            // The independently signaled TCP attempt owns its TCP listener.
+                            // A TCP accept on this UDP mapping would discard a live KCP probe.
+                            allow_tcp_punch &= !ph.is_udp;
                             signed_id_pk = ph.pk.into();
                             relay_server = ph.relay_server;
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
@@ -1427,7 +1463,7 @@ impl Client {
                             webrtc_sdp_answer = ph.webrtc_sdp_answer;
                             if let Some(socket) = udp.0.take() {
                                 if udp_nat_port > 0 && ph.is_udp {
-                                    match socket.connect(peer_addr).await {
+                                    match crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await {
                                         Ok(()) => udp.0 = Some(socket),
                                         Err(err) => {
                                             #[cfg(target_os = "ios")]
@@ -5991,33 +6027,33 @@ async fn udp_nat_connect(
     ms_timeout: u64,
 ) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
     #[cfg(target_os = "ios")]
-    let record = |stage| {
-        if typ == "UDP" {
-            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", stage);
-        }
+    let mut observation = if typ == "UDP" {
+        crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp")
+    } else {
+        None
     };
     #[cfg(target_os = "ios")]
-    record("peer probing started");
+    if let Some(o) = observation.as_mut() { o.set_stage("peer probing started"); }
     crate::punch_udp(socket.clone(), false)
         .await
         .map_err(|err| {
             #[cfg(target_os = "ios")]
-            record("peer probe not acknowledged");
+            if let Some(o) = observation.as_mut() { o.finish_udp_probe(&err); }
             log::debug!("{err}");
             anyhow!(err)
         })?;
     #[cfg(target_os = "ios")]
-    record("peer probe acknowledged; entering KCP handshake");
+    if let Some(o) = observation.as_mut() { o.set_stage("peer probe acknowledged; entering KCP handshake"); }
     let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout))
         .await
         .map_err(|err| {
             #[cfg(target_os = "ios")]
-            record("KCP handshake failed");
+            if let Some(o) = observation.as_mut() { o.finish("KCP handshake failed", Some(&err)); }
             log::debug!("Failed to connect KCP stream: {}", err);
             anyhow!(err)
         })?;
     #[cfg(target_os = "ios")]
-    record("KCP handshake completed");
+    if let Some(o) = observation.as_mut() { o.finish("KCP handshake completed", None); }
     Ok((res.1, Some(res.0), typ))
 }
 
@@ -6404,10 +6440,26 @@ async fn strict_native_udp_waits_for_delayed_kcp_without_contacting_relay() {
     let local = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let remote = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let (local_addr, remote_addr) = (local.local_addr().unwrap(), remote.local_addr().unwrap());
-    local.connect(remote_addr).await.unwrap();
     remote.connect(local_addr).await.unwrap();
+    // A transparent TCP proxy can accept on the same number as the peer's
+    // UDP port. Only the independently negotiated TCP endpoint is a candidate.
+    let unrelated_tcp = tokio::net::TcpListener::bind(remote_addr).await.unwrap();
+    let hbbs = hbb_common::tcp::new_listener("127.0.0.1:0", false).await.unwrap();
+    let observer = hbbs.local_addr().unwrap();
     let hbbr = hbb_common::tcp::new_listener("127.0.0.1:0", false).await.unwrap();
     let relay = hbbr.local_addr().unwrap().to_string();
+    let signal = tokio::spawn(async move {
+        let (tcp, _) = hbbs.accept().await.unwrap();
+        let mut stream = Stream::from(tcp, observer);
+        let request = stream.next_timeout(3_000).await.unwrap().unwrap();
+        assert!(RendezvousMessage::parse_from_bytes(&request).unwrap().punch_hole_request().direct_only);
+        let mut reply = RendezvousMessage::new();
+        reply.set_punch_hole_response(PunchHoleResponse {
+            socket_addr: AddrMangle::encode(remote_addr).into(),
+            is_udp: true, relay_server: relay, ..Default::default()
+        });
+        stream.send(&reply).await.unwrap();
+    });
     let controlled = tokio::spawn(async move {
         let first = crate::punch_udp(remote.clone(), true).await.unwrap();
         tokio::time::sleep(Duration::from_millis(1700)).await;
@@ -6418,11 +6470,12 @@ async fn strict_native_udp_waits_for_delayed_kcp_without_contacting_relay() {
     });
     let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
     let permission = DirectRetryPermission { direct_only: true, ..Default::default() };
-    let connect = Client::connect(local_addr, remote_addr, "123456789", Vec::new(), &relay, "", 1,
-        NatType::SYMMETRIC, 0, false, "", "", ConnType::DEFAULT_CONN, ui,
-        Some(local), None, None, None, false, "UDP", &permission);
-    let (mut stream, direct, _, _keep_kcp, protocol) = tokio::select! {
+    let connect = Client::_start_inner("123456789".into(), String::new(), String::new(),
+        ConnType::DEFAULT_CONN, ui, (Some(local), Some((Arc::new(Mutex::new(local_addr.port())), observer))),
+        None, None, None, observer.to_string(), Vec::new(), true, &permission);
+    let ((mut stream, direct, _, _keep_kcp, protocol), _, _) = tokio::select! {
         _ = hbbr.accept() => panic!("strict mode contacted hbbr"),
+        _ = unrelated_tcp.accept() => panic!("attempted TCP on the advertised UDP port"),
         result = connect => result.unwrap(),
     };
     assert!(direct);
@@ -6430,6 +6483,7 @@ async fn strict_native_udp_waits_for_delayed_kcp_without_contacting_relay() {
     assert_eq!(&stream.next_timeout(3_000).await.unwrap().unwrap()[..], b"direct session");
     stream.send_raw(b"ack".to_vec()).await.unwrap();
     controlled.await.unwrap();
+    signal.await.unwrap();
 }
 
 #[cfg(all(test, feature = "flutter"))]

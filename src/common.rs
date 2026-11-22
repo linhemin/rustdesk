@@ -2983,6 +2983,24 @@ const PUNCH_PROBE: [u8; 4] = *b"RDP?";
 const PUNCH_ACK: [u8; 4] = *b"RDP!";
 const PUNCH_PACKET_LEN: usize = 12;
 
+#[derive(Debug, Default)]
+pub(crate) struct UdpPunchTimeout {
+    pub(crate) sent: u32,
+    pub(crate) send_errors: u32,
+    pub(crate) received: u32,
+    pub(crate) recv_errors: u32,
+    pub(crate) acked: bool,
+}
+
+impl std::fmt::Display for UdpPunchTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UDP punch is timed out, {} probes sent, {} probes received, acked: {}, {} send errors, {} recv errors absorbed",
+            self.sent, self.received, self.acked, self.send_errors, self.recv_errors)
+    }
+}
+
+impl std::error::Error for UdpPunchTimeout {}
+
 fn punch_packet(tag: &[u8; 4], tid: u64) -> [u8; PUNCH_PACKET_LEN] {
     let mut packet = [0u8; PUNCH_PACKET_LEN];
     packet[..4].copy_from_slice(tag);
@@ -3028,12 +3046,11 @@ pub async fn punch_udp(
     // one peer round trip, so a pair that has not answered in this long is not going to. The old
     // 20s came from having no way to tell "not yet" from "never".
     const MAX_TIME: Duration = Duration::from_secs(3);
-    let mut probes_sent = 0u32;
-    let mut probes_seen = 0u32;
-    let mut acked = false;
-    let mut recv_errors = 0u32;
-    socket.send(&probe).await.ok();
-    probes_sent += 1;
+    let mut stats = UdpPunchTimeout::default();
+    match socket.send(&probe).await {
+        Ok(_) => stats.sent += 1,
+        Err(_) => stats.send_errors += 1,
+    }
     let tm = Instant::now();
     // Absolute instants, not relative sleeps: `select!` rebuilds every arm each iteration, so a
     // peer that keeps the receive side ready restarts a relative timer before it can fire. That
@@ -3045,11 +3062,13 @@ pub async fn punch_udp(
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => {
-                bail!("UDP punch is timed out, {probes_sent} probes sent, {probes_seen} probes received, acked: {acked}, {recv_errors} recv errors absorbed");
+                return Err(stats.into());
             }
             _ = tokio::time::sleep_until(next_probe) => {
-                socket.send(&probe).await.ok();
-                probes_sent += 1;
+                match socket.send(&probe).await {
+                    Ok(_) => stats.sent += 1,
+                    Err(_) => stats.send_errors += 1,
+                }
                 retry_interval = std::cmp::min(retry_interval.mul_f64(1.5), MAX_INTERVAL);
                 next_probe = Instant::now() + retry_interval;
             }
@@ -3058,8 +3077,8 @@ pub async fn punch_udp(
                     // ICMP unreachable from the peer's NAT is expected while the hole forms and
                     // surfaces here as ConnectionReset/Refused; treat it as loss, MAX_TIME bounds
                     // the attempt. Log only the first - this retries every 10ms.
-                    recv_errors += 1;
-                    if recv_errors == 1 {
+                    stats.recv_errors += 1;
+                    if stats.recv_errors == 1 {
                         log::debug!("UDP punch recv error (treated as loss): {e}");
                     }
                     hbb_common::sleep(0.01).await;
@@ -3069,20 +3088,20 @@ pub async fn punch_udp(
                     if ack == Some(tid) {
                         if !listen {
                             log::debug!(
-                                "UDP punch confirmed in {:?}, {probes_sent} probes sent, {probes_seen} received",
-                                tm.elapsed()
+                                "UDP punch confirmed in {:?}, {} probes sent, {} received",
+                                tm.elapsed(), stats.sent, stats.received
                             );
                             return Ok(None);
                         }
-                        acked = true;
+                        stats.acked = true;
                     } else if let Some(peer_tid) = punch_tid(&data[..n], &PUNCH_PROBE) {
-                        probes_seen += 1;
+                        stats.received += 1;
                         socket.send(&punch_packet(&PUNCH_ACK, peer_tid)).await.ok();
                     } else if listen && ack.is_none() {
                         if let Some(syn) = crate::kcp_stream::KcpStream::incoming_syn(&data[..n]) {
                             log::debug!(
-                                "UDP punch confirmed by KCP SYN in {:?}, {probes_sent} probes sent",
-                                tm.elapsed()
+                                "UDP punch confirmed by KCP SYN in {:?}, {} probes sent",
+                                tm.elapsed(), stats.sent
                             );
                             return Ok(Some(syn));
                         }
@@ -3295,7 +3314,9 @@ mod tests {
         let res = punch_udp(Arc::new(a), false).await;
         let elapsed = start.elapsed();
         flooder.abort();
-        assert!(res.is_err(), "the punch should have timed out");
+        let counts = res.unwrap_err().downcast::<UdpPunchTimeout>().unwrap();
+        assert!(counts.sent > 1);
+        assert_eq!((counts.received, counts.send_errors, counts.acked), (0, 0, false));
         assert!(
             elapsed < Duration::from_secs(6),
             "the punch ran for {elapsed:?}; its deadline did not hold"
