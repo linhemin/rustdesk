@@ -1384,13 +1384,14 @@ pub fn get_webrtc_enabled() -> bool {
     )
 }
 
+fn disabled_by_default_on_self_hosted(key: &str) -> bool {
+    matches!(key, keys::OPTION_ENABLE_UDP_PUNCH | keys::OPTION_ENABLE_IPV6_PUNCH)
+}
+
 pub fn get_local_option(key: &str) -> String {
     let v = LocalConfig::get_option(key);
     if v.is_empty()
-        && (key == keys::OPTION_ENABLE_UDP_PUNCH
-            || key == keys::OPTION_ENABLE_IPV6_PUNCH
-            || (key == keys::OPTION_ENABLE_WEBRTC
-                && !cfg!(any(target_os = "windows", target_os = "ios"))))
+        && disabled_by_default_on_self_hosted(key)
         && !is_public(&Config::get_rendezvous_server())
     {
         return "N".to_owned();
@@ -2416,7 +2417,6 @@ async fn key_exchange(
                         if picked < 1 || !conn.is_secured() {
                             policy = SignedRendezvousPolicy::default();
                         }
-                        #[cfg(any(target_os = "windows", target_os = "ios"))]
                         if policy.session_direct {
                             if let Stream::Tcp(socket) = conn {
                                 socket.stage_signed_observers(key, signed_observers);
@@ -3183,6 +3183,15 @@ mod tests {
         self,
         time::{interval, interval_at, sleep, Duration, Instant, Interval},
     };
+
+    #[test]
+    fn self_hosted_controllers_offer_webrtc_by_default() {
+        assert!(!disabled_by_default_on_self_hosted(keys::OPTION_ENABLE_WEBRTC));
+        assert!(config::option2bool(keys::OPTION_ENABLE_WEBRTC, ""));
+        assert!(!config::option2bool(keys::OPTION_ENABLE_WEBRTC, "N"));
+        assert!(disabled_by_default_on_self_hosted(keys::OPTION_ENABLE_UDP_PUNCH));
+        assert!(disabled_by_default_on_self_hosted(keys::OPTION_ENABLE_IPV6_PUNCH));
+    }
 
     #[test]
     fn relay_uuid_rejects_control_bytes_but_not_other_id_formats() {

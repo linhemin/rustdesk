@@ -2300,7 +2300,7 @@ impl Connection {
             && !self.view_camera
             && !self.terminal
             && crate::live_direct::supported_transport(&self.stream)
-            && crate::live_direct::enabled()
+            && crate::live_direct::responder_enabled()
     }
 
     fn is_port_forward(&self) -> bool {

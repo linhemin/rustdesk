@@ -81,12 +81,13 @@ static FULL_PORT_POOLS: Semaphore = Semaphore::const_new(2);
 static DROP_TEST_PATH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub(crate) fn enabled() -> bool {
-    // Both platforms use the OS route (including VPN) for WebRTC. iOS only builds the
-    // controller; Windows also advertises the responder capability after authorization.
-    cfg!(any(target_os = "windows", target_os = "ios"))
-        && crate::get_webrtc_enabled()
+    crate::get_webrtc_enabled()
         && !Config::is_proxy()
         && Config::get_option("force-always-relay") != "Y"
+}
+
+pub(crate) fn responder_enabled() -> bool {
+    cfg!(any(target_os = "windows", target_os = "ios")) && enabled()
 }
 
 pub(crate) async fn next_path(status: &mut Option<watch::Receiver<bool>>) -> Option<bool> {
@@ -1317,7 +1318,6 @@ mod tests {
         assert!(matches!(Role::offerer(true, true, true, true, false), Role::GroupOfferer));
     }
 
-    #[cfg(any(target_os = "ios", target_os = "windows"))]
     #[tokio::test]
     async fn quiet_lightweight_ice_ends_before_the_handshake_deadline() {
         let mut rtc = Rtc(WebRTCStream::new("", false, LITE_TIMEOUT).await.unwrap());

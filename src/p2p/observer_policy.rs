@@ -37,7 +37,6 @@ pub(crate) async fn confirm_signed_direct_permission(conn: &mut Stream) -> Resul
 // The signed announcement can be replayed. Commit it only after the caller has
 // authenticated a reply on this same connection with its fresh session keys.
 pub(crate) fn finish_signed_observer_exchange(conn: &mut Stream, confirmed: bool) {
-    #[cfg(any(target_os = "windows", target_os = "ios"))]
     if let Stream::Tcp(socket) = conn {
         let secured = socket.is_secured();
         if let Some((key, observers)) = socket.take_signed_observers() {
@@ -46,6 +45,4 @@ pub(crate) fn finish_signed_observer_exchange(conn: &mut Stream, confirmed: bool
             }
         }
     }
-    #[cfg(not(any(target_os = "windows", target_os = "ios")))]
-    let _ = (conn, confirmed);
 }

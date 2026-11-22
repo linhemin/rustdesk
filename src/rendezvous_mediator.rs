@@ -760,7 +760,7 @@ impl RendezvousMediator {
         // socket since the failed exchange may have consumed a message on this one, and the
         // controller falls back to its other transports.
         let mut webrtc_sdp_answer = webrtc_sdp_answer;
-        let eligible = secure && !force_relay && !use_ws() && crate::live_direct::enabled();
+        let eligible = secure && !force_relay && !use_ws() && crate::live_direct::responder_enabled();
         let carries_answer = !webrtc_sdp_answer.is_empty();
         let mut signed_grant = false;
         if carries_answer || eligible {
