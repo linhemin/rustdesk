@@ -250,7 +250,6 @@ class FfiModel with ChangeNotifier {
   bool get keyboard => _permissions['keyboard'] != false;
 
   clear() {
-    parent.target?.qualityMonitorModel.udpReports.clear();
     final hadConnection = _direct != null;
     _pi = PeerInfo();
     lastUserDisplay = null;
@@ -258,6 +257,7 @@ class FfiModel with ChangeNotifier {
     _secure = null;
     _direct = null;
     if (hadConnection) {
+      parent.target?.qualityMonitorModel.udpReports.clear();
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     _inputBlocked = false;
