@@ -56,7 +56,7 @@ use hbb_common::{
     rand,
     rendezvous_proto::*,
     sha2::{Digest, Sha256},
-    socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6},
+    socket_client::{connect_tcp, connect_tcp_local},
     sodiumoxide::{base64, crypto::sign},
     timeout,
     tokio::{
@@ -69,7 +69,6 @@ use hbb_common::{
         time::{interval, Duration, Instant},
     },
     webrtc::WebRTCStream,
-    websocket::{check_ws, is_ws_endpoint},
     AddrMangle, ResultType, Stream,
 };
 use base::{
@@ -96,6 +95,7 @@ pub use super::lang::*;
 
 mod login_method;
 mod path_rtt;
+mod transport_preference;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
@@ -359,6 +359,7 @@ type PeerConnection = (
 struct DirectRetryPermission {
     direct_only: bool,
     native_upgrade: bool,
+    udp_upgrade_only: bool,
     punch_failed: OnceLock<()>,
     server_requires_direct: OnceLock<()>,
     checked: OnceLock<String>,
@@ -530,7 +531,7 @@ pub(crate) fn tcp_punch_allowed() -> bool {
 
 impl Client {
     fn native_path_dialer(interface: impl Interface, key: &str, token: &str,
-        original_pk: Option<Vec<u8>>, server: String) -> crate::live_direct::native::Dial {
+        original_pk: Option<Vec<u8>>, server: String, udp_upgrade_only: bool) -> crate::live_direct::native::Dial {
         let other_server = interface.get_lch().read().unwrap().other_server.clone();
         let (peer, key, token) = match other_server {
             Some((id, _, key)) => (id, key, String::new()),
@@ -543,10 +544,32 @@ impl Client {
                 if interface.is_policy_relay() || !crate::live_direct::native::enabled() {
                     bail!("Direct transport is disabled");
                 }
-                let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
-                let ((stream, direct, pk, kcp, label), _, _) = Self::start_via_rendezvous(
-                    &peer, &key, &token, ConnType::DEFAULT_CONN, interface, server, Vec::new(), true, &permission
-                ).await?;
+                let udp_permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only: true, ..Default::default() };
+                let udp = Self::start_via_rendezvous(
+                    &peer, &key, &token, ConnType::DEFAULT_CONN, interface.clone(), server.clone(), Vec::new(), true, &udp_permission
+                );
+                let path = if udp_upgrade_only || !tcp_punch_allowed() {
+                    udp.await?
+                } else {
+                    // An authenticated upgrade has four seconds to present its session ticket.
+                    // Give UDP its head start before opening the fallback TCP connection.
+                    let udp_path = if crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() {
+                        tokio::time::timeout(transport_preference::tcp_wait(Self::udp_preference_window()), udp)
+                            .await.ok().and_then(Result::ok)
+                    } else {
+                        drop(udp);
+                        None
+                    };
+                    match udp_path {
+                        Some(path) => path,
+                        None => {
+                            let tcp_permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
+                            Self::_start_inner(peer, key, token, ConnType::DEFAULT_CONN, interface,
+                                (None, None), None, None, None, server, Vec::new(), true, &tcp_permission).await?
+                        }
+                    }
+                };
+                let ((stream, direct, pk, kcp, label), _, _) = path;
                 if !direct || !stream.is_secured() || pk.is_none() || pk != original_pk {
                     bail!("Native path does not match the authenticated session");
                 }
@@ -728,6 +751,11 @@ impl Client {
             direct_permission,
         );
         if let Some((iface, server)) = lan.zip(lan_server) {
+            if !crate::is_udp_disabled() && (crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() || crate::get_webrtc_enabled()) {
+                let lan = Self::probe_lan(peer, key, token, &server, iface, direct_permission);
+                return transport_preference::choose([existing.boxed(), lan.boxed()], Self::udp_preference_window(),
+                    |path| transport_preference::rank(path.0.4, path.0.1)).await;
+            }
             let (mut lan, alternate) = prefer_lan_connection(
                 Self::probe_lan(peer, key, token, &server, iface, direct_permission),
                 existing,
@@ -778,18 +806,28 @@ impl Client {
         if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
             let socket = if !key.is_empty() && !Config::is_proxy() && !use_ws()
                 && (direct_permission.native_upgrade || !crate::get_webrtc_enabled()) {
-                crate::p2p::ordinary_udp::ordinary_udp_socket(&rendezvous_server, false).await
+                crate::p2p::ordinary_udp::controller_socket(&rendezvous_server, key,
+                    direct_permission.native_upgrade || direct_permission.direct_only).await
             } else {
                 crate::p2p::rendezvous_punch_socket(&rendezvous_server, false).await
+                    .map(|(socket, addr)| (socket, addr, 0))
             };
-            if let Ok((socket, addr)) = socket {
-                let udp_port = Arc::new(Mutex::new(0));
-                let up_cloned = udp_port.clone();
-                let socket_cloned = socket.clone();
-                let func = async move {
-                    allow_err!(crate::p2p::udp_mapping::observe(&socket_cloned, addr, &up_cloned, stop_udp_rx).await);
-                };
-                tokio::spawn(func);
+            if let Ok((socket, addr, observed_port)) = socket {
+                if observed_port != 0 {
+                    native_stage("ordinary-udp", if addr.is_ipv6() {
+                        "NAS verified IPv4 mapping over translated IPv6"
+                    } else {
+                        "NAS verified IPv4 mapping on its IPv4 listener"
+                    });
+                }
+                let udp_port = Arc::new(Mutex::new(observed_port));
+                if observed_port == 0 {
+                    let up_cloned = udp_port.clone();
+                    let socket_cloned = socket.clone();
+                    tokio::spawn(async move {
+                        allow_err!(crate::p2p::udp_mapping::observe(&socket_cloned, addr, &up_cloned, stop_udp_rx).await);
+                    });
+                }
                 (Some(socket), Some((udp_port, addr)))
             } else {
                 #[cfg(target_os = "ios")]
@@ -868,7 +906,7 @@ impl Client {
         // relay.
         if interface.is_force_relay()
             || (udp.0.is_none() && !has_webrtc_offerer)
-            || !tcp_punch_allowed()
+            || !tcp_punch_allowed() || direct_permission.udp_upgrade_only
         {
             return fut.await;
         }
@@ -893,11 +931,10 @@ impl Client {
             direct_permission,
         )
         .boxed();
-        race_transports_prefer_webrtc(
-            preferred_fut,
-            vec![fallback_fut],
-            Self::relay_fallback_delay_ms(),
-            |result| result.0 .1,
+        transport_preference::choose(
+            [preferred_fut, fallback_fut],
+            Self::udp_preference_window(),
+            |result| transport_preference::rank(result.0.4, result.0.1),
         )
         .await
     }
@@ -998,6 +1035,10 @@ impl Client {
             Ok(secs) if secs.is_finite() && secs > 0.0 => (secs * 1000.0).round() as u64,
             _ => Self::RELAY_FALLBACK_DELAY_MS,
         }
+    }
+
+    fn udp_preference_window() -> Duration {
+        Duration::from_millis(Self::relay_fallback_delay_ms().max(3_000))
     }
 
     /// UDP-NAT-test wait when the TCP clock is implausible (see TCP_RTT_PLAUSIBLE_MIN). The
@@ -1327,7 +1368,9 @@ impl Client {
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
-        let mut allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let mut allow_tcp_punch = tcp_punch_allowed() && !direct_permission.udp_upgrade_only
+            && request_allows_tcp_punch(&webrtc_sdp_offer)
+            && (udp_nat_port == 0 || interface.is_force_relay());
         let mut family_retry_available = allow_tcp_punch
             && !interface.is_force_relay()
             && !Config::is_proxy()
@@ -1498,7 +1541,11 @@ impl Client {
                                     }
                                 } else if udp_nat_port > 0 {
                                     #[cfg(target_os = "ios")]
-                                    crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "no UDP endpoint in peer answer");
+                                    crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", if is_local {
+                                        "rendezvous returned a LAN endpoint without UDP"
+                                    } else {
+                                        "rendezvous returned a peer endpoint without UDP"
+                                    });
                                 }
                             }
                             if let Some(socket) = ipv6.0.take() {
@@ -1619,13 +1666,8 @@ impl Client {
                             );
                             connect_futures.push(
                                 async move {
-                                    let conn = fut.await?;
-                                    Ok((
-                                        conn,
-                                        None,
-                                        if use_ws() { "WebSocket" } else { "Relay" },
-                                        false,
-                                    ))
+                                    let (conn, transport) = fut.await?;
+                                    Ok((conn, None, transport, false))
                                 }
                                 .boxed(),
                             );
@@ -1652,32 +1694,19 @@ impl Client {
                                 Ok((Stream::WebRTC(raced), None, "WebRTC", !relayed))
                             }
                             .boxed();
-                            if direct_only || interface.is_policy_relay() {
-                                // Relay-only WebRTC can use only TURN, so it has no P2P advantage
-                                // over the RustDesk relay. Take the first successful relay instead
-                                // of delaying an already-ready result for the preference window.
-                                // Policy, not force_relay: under ws the offer is full ICE and a
-                                // direct path is exactly what the preference window exists for.
-                                connect_futures.push(webrtc_fut);
-                                select_ok(connect_futures).await.map(|r| r.0)
-                            } else {
-                                // The peer answered WebRTC: prefer P2P. The relay result is held
-                                // for the preference window so WebRTC can win even though a relay
-                                // TCP connect completes much faster than ICE + DTLS setup.
-                                race_transports_prefer_webrtc(
-                                    webrtc_fut,
-                                    connect_futures,
-                                    Self::relay_fallback_delay_ms(),
-                                    |result| result.3,
-                                )
-                                .await
-                            }
+                            let relay_only = interface.is_policy_relay();
+                            connect_futures.push(webrtc_fut);
+                            transport_preference::choose(connect_futures, Self::udp_preference_window(), |path| {
+                                let rank = transport_preference::rank(path.2, path.3);
+                                // Under a relay-only policy UDP relay is the best legal outcome.
+                                if relay_only && rank == transport_preference::Rank::UdpRelay {
+                                    transport_preference::Rank::UdpDirect
+                                } else { rank }
+                            }).await
                         } else {
-                            if connect_futures.is_empty() {
-                                bail!(DIRECT_ONLY_UNAVAILABLE);
-                            }
-                            // Run all connection attempts concurrently, take the first success.
-                            select_ok(connect_futures).await.map(|r| r.0)
+                            if connect_futures.is_empty() { bail!(DIRECT_ONLY_UNAVAILABLE); }
+                            transport_preference::choose(connect_futures, Self::udp_preference_window(),
+                                |path| transport_preference::rank(path.2, path.3)).await
                         };
                         if let Some(stop) = webrtc_bridge_stop {
                             let _ = stop.send(());
@@ -1713,7 +1742,7 @@ impl Client {
                                     e
                                 );
                                 drop(webrtc_guard.take());
-                                let mut relay_conn = Self::request_relay(
+                                let (mut relay_conn, relay_type) = Self::request_relay(
                                     &peer,
                                     relay_server_rr,
                                     &rendezvous_server,
@@ -1739,7 +1768,7 @@ impl Client {
                                 )
                                 .await?;
                                 conn = relay_conn;
-                                typ = if use_ws() { "WebSocket" } else { "Relay" };
+                                typ = relay_type;
                                 // The transport is now a relay: the WebRTC win it replaced must
                                 // not carry its direct flag into the return, or the relay is
                                 // reported P2P and the outer race treats it as one.
@@ -1984,9 +2013,14 @@ impl Client {
             );
         }
         if let Some((udp_socket_nat, paths)) = udp_socket_nat {
+            let probe_interface = interface.clone();
             direct_futures.push(
                 async move {
                     if let Some(paths) = paths {
+                        if conn_type == ConnType::DEFAULT_CONN {
+                            let round = crate::p2p::probe_report::id(&paths.key);
+                            probe_interface.send(Data::UdpProbeRound(round));
+                        }
                         return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout, direct_only || relay_server.is_empty()).await
                             .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
                     }
@@ -2039,13 +2073,9 @@ impl Client {
         let mut preverified = None;
         let direct_result = match (webrtc_fut, direct_futures.is_empty()) {
             (Some(webrtc_fut), false) => {
-                race_transports_prefer_webrtc(
-                    webrtc_fut,
-                    direct_futures,
-                    Self::relay_fallback_delay_ms(),
-                    |r| r.3,
-                )
-                .await
+                direct_futures.push(webrtc_fut);
+                transport_preference::choose(direct_futures, Self::udp_preference_window(),
+                    |path| transport_preference::rank(path.2, path.3)).await
             }
             (Some(webrtc_fut), true) => webrtc_fut.await,
             (None, false) if direct_permission.native_upgrade && !interface.is_force_relay() && direct_futures.len() > 1 => {
@@ -2055,12 +2085,14 @@ impl Client {
                     let pk = Self::authenticate_path(peer_id, signed, key, &mut conn, true, typ).await?;
                     Ok(((conn, kcp, typ, direct), pk))
                 }.boxed());
-                select_ok(checks).await.map(|((path, pk), _)| {
+                transport_preference::choose(checks, Self::udp_preference_window(),
+                    |(path, _)| transport_preference::rank(path.2, path.3)).await.map(|(path, pk)| {
                     preverified = Some(pk);
                     path
                 })
             }
-            (None, false) => select_ok(direct_futures).await.map(|c| c.0),
+            (None, false) => transport_preference::choose(direct_futures, Self::udp_preference_window(),
+                |path| transport_preference::rank(path.2, path.3)).await,
             (None, true) => Err(anyhow!("No direct transport available")),
         };
         let (mut conn, kcp, mut typ, mut direct) = match direct_result {
@@ -2096,13 +2128,12 @@ impl Client {
                     conn_type,
                     &switch_code,
                 )
-                .await;
+                .await.map(|(stream, relay_type)| { typ = relay_type; stream });
                 if let Err(e) = conn {
                     // this direct is mainly used by on_establish_connection_error, so we update it here before bail
                     interface.update_direct(Some(false));
                     bail!("Failed to connect via relay server: {}", e);
                 }
-                typ = "Relay";
                 direct = false;
             } else {
                 bail!("Failed to make direct connection to remote desktop");
@@ -2114,6 +2145,37 @@ impl Client {
             start.elapsed(),
             punch_type
         );
+        #[cfg(feature = "udp-relay")]
+        if direct && typ == "TCP" && !direct_only && !relay_server.is_empty() && !signed_id_pk.is_empty() {
+            let signed = &signed_id_pk;
+            let switch = interface.get_switch_code();
+            let udp = async {
+                let endpoint = check_port(relay_server, RELAY_PORT);
+                let mut stream = crate::p2p::relay::connect_udp(&endpoint, key).await
+                    .ok_or_else(|| anyhow!("UDP relay unavailable"))?;
+                let (uuid, _) = Self::relay_pair_id(peer_id, relay_server, rendezvous_server, true, key, token, &switch).await?;
+                Self::join_relay(&mut stream, peer_id, uuid, key, conn_type).await?;
+                let pk = Self::secure_connection(peer_id, signed.to_vec(), key, &mut stream).await?;
+                if pk.is_none() || !stream.is_secured() { bail!("Unverified relay peer"); }
+                Ok((stream, pk, "QUIC"))
+            };
+            let tcp = async move {
+                let pk = Self::authenticate_path(peer_id, signed, key, &mut conn, false, "TCP").await?;
+                Ok((conn, pk, "TCP"))
+            };
+            match race_transports_prefer_webrtc(udp.boxed(), vec![tcp.boxed()],
+                Self::udp_preference_window().as_millis() as u64, |p| p.2 == "QUIC").await {
+                Ok((stream, pk, transport)) => return Ok((stream, transport == "TCP", pk, None, transport)),
+                Err(err) => {
+                    // Both attempts failed. The normal relay negotiation can still use TCP.
+                    let (mut fallback, label) = Self::request_relay(peer_id, relay_server.to_owned(), rendezvous_server,
+                        true, key, token, conn_type, &interface.get_switch_code()).await
+                        .with_context(|| format!("Direct TCP and UDP relay failed: {err}"))?;
+                    let pk = Self::secure_connection(peer_id, signed_id_pk, key, &mut fallback).await?;
+                    return Ok((fallback, false, pk, None, label));
+                }
+            }
+        }
         let res = match preverified {
             Some(pk) if direct => Ok(pk),
             _ => Self::authenticate_path(peer_id, &signed_id_pk, key, &mut conn, direct_permission.native_upgrade, typ).await,
@@ -2138,13 +2200,13 @@ impl Client {
                 )
                 .await
                 {
-                    Ok(mut relay_conn) => {
+                    Ok((mut relay_conn, relay_type)) => {
                         match Self::secure_connection(peer_id, signed_id_pk, key, &mut relay_conn)
                             .await
                         {
                             Ok(pk) => {
                                 conn = relay_conn;
-                                typ = "Relay";
+                                typ = relay_type;
                                 direct = false;
                                 pk
                             }
@@ -2364,7 +2426,15 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         switch_code: &str,
-    ) -> ResultType<Stream> {
+    ) -> ResultType<(Stream, &'static str)> {
+        let (uuid, ipv4) = Self::relay_pair_id(peer, &relay_server, rendezvous_server, secure, key, token, switch_code).await?;
+        Self::create_relay(peer, uuid, relay_server, key, conn_type, ipv4).await
+    }
+
+    async fn relay_pair_id(
+        peer: &str, relay_server: &str, rendezvous_server: &str, secure: bool,
+        key: &str, token: &str, switch_code: &str,
+    ) -> ResultType<(String, bool)> {
         let mut succeed = false;
         let mut uuid = "".to_owned();
         let mut ipv4 = true;
@@ -2394,7 +2464,7 @@ impl Client {
                 id: peer.to_owned(),
                 token: token.to_owned(),
                 uuid: uuid.clone(),
-                relay_server: relay_server.clone(),
+                relay_server: relay_server.to_owned(),
                 secure,
                 switch_code: switch_code.to_owned(),
                 ..Default::default()
@@ -2416,7 +2486,7 @@ impl Client {
         if !succeed {
             bail!("Timeout");
         }
-        Self::create_relay(peer, uuid, relay_server, key, conn_type, ipv4).await
+        Ok((uuid, ipv4))
     }
 
     /// Create a relay connection to the server.
@@ -2427,17 +2497,17 @@ impl Client {
         key: &str,
         conn_type: ConnType,
         ipv4: bool,
-    ) -> ResultType<Stream> {
+    ) -> ResultType<(Stream, &'static str)> {
         crate::common::check_relay_uuid(&uuid)?;
         // The proxy's address family does not constrain the relay target.
         let relay_server = check_port(relay_server, RELAY_PORT);
-        let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
-        let mut conn = connect_tcp(
-            ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),
-            CONNECT_TIMEOUT,
-        )
-        .await
-        .with_context(|| "Failed to connect to relay server")?;
+        let (mut conn, transport) = crate::p2p::relay::connect(relay_server, key, ipv4)
+            .await.with_context(|| "Failed to connect to relay server")?;
+        Self::join_relay(&mut conn, peer, uuid, key, conn_type).await?;
+        Ok((conn, transport))
+    }
+
+    async fn join_relay(conn: &mut Stream, peer: &str, uuid: String, key: &str, conn_type: ConnType) -> ResultType<()> {
         let mut msg_out = RendezvousMessage::new();
         msg_out.set_request_relay(RequestRelay {
             licence_key: key.to_owned(),
@@ -2446,8 +2516,7 @@ impl Client {
             conn_type: conn_type.into(),
             ..Default::default()
         });
-        conn.send(&msg_out).await?;
-        Ok(conn)
+        conn.send(&msg_out).await
     }
 
     #[inline]
@@ -5652,6 +5721,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 /// Data used by the client interface.
 #[derive(Clone)]
 pub enum Data {
+    UdpProbeRound([u8; 32]),
     Close,
     RejectInsecureConnection,
     Login((String, String, String, bool)),
@@ -6099,7 +6169,10 @@ async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: A
     #[cfg(target_os = "ios")]
     let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp");
     #[cfg(target_os = "ios")]
-    if let Some(o) = observation.as_mut() { o.set_stage("checking NAS candidate pairs"); }
+    if let Some(o) = observation.as_mut() {
+        o.set_udp_round(&crate::p2p::probe_report::id(&paths.key));
+        o.set_stage("checking NAS candidate pairs");
+    }
     // With a relay to fall back on, wait no longer than the plain punch does.
     let window = Duration::from_secs(if no_relay { 6 } else { 3 });
     let (socket, _) = paths.select_within(socket, peer, false, window).await.map_err(|err| {
@@ -6522,7 +6595,7 @@ async fn relay_session_attaches_a_rendezvous_tcp_punch_without_webrtc() {
     let _receiver = wrap_native(&mut b, native::Mode::Listen(listener)).unwrap();
     let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
     ui.lc.write().unwrap().id = id;
-    let dial = Client::native_path_dialer(ui, &crate::encode64(authority.0), "", Some(identity), server);
+    let dial = Client::native_path_dialer(ui, &crate::encode64(authority.0), "", Some(identity), server, false);
     let mut path = wrap_native(&mut a, native::Mode::Call(ticket, dial)).unwrap();
     timeout(20_000, path.changed()).await.unwrap().unwrap();
     assert_eq!(*path.borrow(), Some("TCP"));

@@ -256,7 +256,8 @@ class FfiModel with ChangeNotifier {
     _cancelPendingMonitorRestore();
     _secure = null;
     _direct = null;
-    if (hadConnection && (isMobile || isWindows || isMacOS)) {
+    if (hadConnection) {
+      parent.target?.qualityMonitorModel.udpReports.clear();
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     _inputBlocked = false;
@@ -280,7 +281,7 @@ class FfiModel with ChangeNotifier {
     cachedPeerData.streamType = streamType;
     _secure = secure;
     _direct = direct;
-    if (changed && (isMobile || isWindows || isMacOS)) {
+    if (changed) {
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     try {
@@ -416,6 +417,8 @@ class FfiModel with ChangeNotifier {
         parent.target?.serverModel.addConnection(evt);
       } else if (name == 'on_client_remove') {
         parent.target?.serverModel.onClientRemove(evt);
+      } else if (name == 'udp_probe_report') {
+        parent.target?.qualityMonitorModel.addUdpReport(evt['report']);
       } else if (name == 'update_quality_status') {
         parent.target?.qualityMonitorModel.updateQualityStatus(evt);
       } else if (name == 'update_block_input_state') {
@@ -4073,17 +4076,19 @@ class QualityMonitorModel with ChangeNotifier {
 
   bool get show => _show;
   QualityMonitorData get data => _data;
+  final List<String> udpReports = [];
 
-  // Only a WebRTC session on the web names its transport here: web has no
-  // session tab to show it on (the desktop tab's tooltip already does), and
-  // WebRTC is the one path that can be direct or TURN.
-  String? get webrtcTransport {
-    if (!isWeb) return null;
-    final ffiModel = parent.target?.ffiModel;
-    if (ffiModel == null) return null;
-    final streamType = ffiModel.cachedPeerData.streamType;
-    if (!streamType.startsWith('WebRTC')) return null;
-    return ffiModel.direct == false ? '$streamType (TURN)' : streamType;
+  void addUdpReport(dynamic report) {
+    if (report is! String || report.length > 2048 || !report.startsWith('UDP #')) return;
+    final id = report.split(' ').take(2).join(' ');
+    final index = udpReports.indexWhere((entry) => entry.split(' ').take(2).join(' ') == id);
+    if (index < 0) {
+      udpReports.add(report);
+    } else {
+      udpReports[index] = report;
+    }
+    if (udpReports.length > 8) udpReports.removeAt(0);
+    notifyListeners();
   }
 
   bool? get directConnection => parent.target?.ffiModel.direct;
@@ -4092,25 +4097,7 @@ class QualityMonitorModel with ChangeNotifier {
     final model = parent.target?.ffiModel;
     final direct = model?.direct;
     if (model == null || direct == null) return null;
-    return switch (model.cachedPeerData.streamType) {
-      final transport when transport.startsWith('WebRTC') =>
-        direct ? transport : '$transport / TURN',
-      'UDP' => 'KCP / UDP',
-      'IPv6' => 'KCP / IPv6',
-      'Relay' => 'TCP',
-      '' => null,
-      final transport => transport,
-    };
-  }
-
-  String? get mobileConnection {
-    if (!isMobile) return null;
-    final direct = directConnection;
-    if (direct == null) return null;
-    final connection =
-        translate(direct ? 'Direct Connection' : 'Relay Connection');
-    final transport = activeTransport;
-    return transport == null ? connection : '$connection · $transport';
+    return connectionTransportLabel(model.cachedPeerData.streamType, direct);
   }
 
   void connectionTypeChanged() {

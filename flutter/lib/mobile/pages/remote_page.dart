@@ -1,3 +1,4 @@
+import 'package:flutter_hbb/common/widgets/peer_udp_report.dart';
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -1216,6 +1217,9 @@ class _RemotePageState extends State<RemotePage>
             }
           }));
     }
+    if (gFFI.qualityMonitorModel.udpReports.isNotEmpty) {
+      add('UDP · ${translate("Remote device")}', () => showPeerUdpReport(context, gFFI.qualityMonitorModel));
+    }
     if (recordIosP2pDiagnostics) {
       add(translate('Copy P2P diagnostics'), _copyP2pDiagnostics);
     }
@@ -2086,7 +2090,8 @@ class _RemotePageState extends State<RemotePage>
       final documents = await getApplicationDocumentsDirectory();
       final report = await readIosP2pDiagnostics(documents, _sessionOpened);
       if (!mounted || !recordIosP2pDiagnostics) return;
-      if (report == null) {
+      final peerRows = gFFI.qualityMonitorModel.udpReports.join('\n\n');
+      if (report == null && peerRows.isEmpty) {
         showToast(translate('Waiting'));
         return;
       }
@@ -2096,10 +2101,10 @@ class _RemotePageState extends State<RemotePage>
         opened: _sessionOpened, now: DateTime.now(), videoAt: quality.lastVideoSample,
         delayAt: quality.lastDelaySample, codec: data.codecFormat, chroma: data.chroma,
         fps: data.fps, delay: data.delay, target: data.targetBitrate,
-        direct: gFFI.ffiModel.direct,
+        direct: gFFI.ffiModel.direct, transport: gFFI.ffiModel.cachedPeerData.streamType,
       );
       final ready = gFFI.imageModel.imageReady.format(_sessionOpened, DateTime.now());
-      await Clipboard.setData(ClipboardData(text: '$report\n$media$ready'));
+      await Clipboard.setData(ClipboardData(text: [if (report != null) report, if (peerRows.isNotEmpty) 'controlled UDP\n$peerRows', '$media$ready'].join('\n')));
       if (mounted) showToast(translate('Copied'));
     } catch (_) {
       if (mounted) showToast(translate('Failed'));

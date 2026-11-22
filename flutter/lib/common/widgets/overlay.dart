@@ -1,3 +1,4 @@
+import 'package:flutter_hbb/common/widgets/peer_udp_report.dart';
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
@@ -640,12 +641,23 @@ class QualityMonitor extends StatelessWidget {
                       _row(
                           translate("Codec"), qualityMonitorModel.data.codecFormat ?? '-'),
                       _row("Chroma", qualityMonitorModel.data.chroma ?? '-'),
-                      if (qualityMonitorModel.mobileConnection
-                          case final connection?)
-                        _row(translate("Connection"), connection),
-                      if (!isMobile &&
-                          qualityMonitorModel.webrtcTransport != null)
-                        _row("Transport", qualityMonitorModel.webrtcTransport!),
+                      if (qualityMonitorModel.udpReports.isNotEmpty)
+                        PeerUdpButton(qualityMonitorModel, foreground: Colors.white),
+                      if (qualityMonitorModel.directConnection case final direct?)
+                        SizedBox(
+                          width: double.infinity,
+                          child: Wrap(
+                            alignment: WrapAlignment.spaceBetween,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 8,
+                            children: [
+                              Text(translate(direct ? 'Direct Connection' : 'Relay Connection'),
+                                  style: const TextStyle(color: Color(0xffbac9df))),
+                              Text(qualityMonitorModel.activeTransport ?? '—',
+                                  style: const TextStyle(color: Colors.white)),
+                            ],
+                          ),
+                        ),
                     ],
                   ),
                 )

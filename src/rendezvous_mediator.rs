@@ -1430,9 +1430,11 @@ impl RendezvousMediator {
             if !local.tickets.is_empty() {
                 let key = hbb_common::sodiumoxide::crypto::hash::sha256::hash(&msg_punch.udp_reply_token);
                 msg_punch.udp_mapping_tickets = std::mem::take(&mut local.tickets).into();
-                paths = Some(crate::p2p::udp_paths::Paths {
+                let candidates = crate::p2p::udp_paths::Paths {
                     local, ports: candidate_ports, key: hbb_common::sodiumoxide::crypto::auth::Key(key.0),
-                });
+                };
+                let report = candidates.record(&socket)?;
+                paths = Some((candidates, report));
             }
         }
         msg_out.set_punch_hole_sent(msg_punch);
@@ -1721,7 +1723,7 @@ fn symmetric_nat_requires_relay(ph: &PunchHole, local_nat: i32) -> bool {
 
 async fn udp_nat_listen(
     socket: Arc<tokio::net::UdpSocket>,
-    paths: Option<crate::p2p::udp_paths::Paths>,
+    paths: Option<(crate::p2p::udp_paths::Paths, crate::p2p::probe_report::Recording)>,
     peer_addr: SocketAddr,
     peer_addr_v4: SocketAddr,
     server: ServerPtr,
@@ -1731,9 +1733,9 @@ async fn udp_nat_listen(
     let tm = Instant::now();
     let socket_cloned = socket.clone();
     let func = async {
-        let (socket, init_packet) = if let Some(paths) = paths {
+        let (socket, init_packet) = if let Some((paths, report)) = paths {
             let advertised = crate::p2p::ordinary_udp::udp_peer_destination(&socket, peer_addr).await?;
-            let selected = paths.select(socket, advertised, true).await?;
+            let selected = paths.select_recorded(socket, advertised, true, Some(&report)).await?;
             let actual = selected.0.peer_addr()?;
             if actual.ip() != advertised.ip() && !crate::server::ip_allowed(actual.ip()) {
                 anyhow::bail!("UDP source is outside the IP whitelist");

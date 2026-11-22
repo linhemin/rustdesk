@@ -4131,6 +4131,20 @@ impl Connection {
                             }
                         }
                     }
+                    Some(misc::Union::UdpProbeQuery(id)) if self.is_remote() && self.stream.is_secured() => {
+                        if let Some(done) = crate::p2p::probe_report::take(&id) {
+                            let mut session = self.inner.clone();
+                            tokio::spawn(async move {
+                                if let Ok(report) = done.await {
+                                    let mut misc = Misc::new();
+                                    misc.set_udp_probe_report(report);
+                                    let mut message = Message::new();
+                                    message.set_misc(misc);
+                                    session.send(message.into());
+                                }
+                            });
+                        }
+                    }
                     Some(misc::Union::MessageQuery(mq)) => {
                         if let Some(msg_out) = video_service::make_display_changed_msg(
                             mq.switch_display as _,

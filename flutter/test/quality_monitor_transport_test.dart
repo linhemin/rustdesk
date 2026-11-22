@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/overlay.dart';
 import 'package:flutter_hbb/desktop/widgets/session_quality_monitor.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/models/model.dart';
@@ -24,6 +26,8 @@ class _FakeFFI implements FFI {
 }
 
 class _Options extends Fake implements RustdeskImpl {
+  _Options({this.labels = const {}});
+  final Map<String, String> labels;
   bool show = true;
 
   @override
@@ -36,18 +40,68 @@ class _Options extends Fake implements RustdeskImpl {
   @override
   String translate(
           {required String name, required String locale, dynamic hint}) =>
-      name;
+      labels[name] ?? name;
 }
 
 void main() {
-  test('the quality monitor names the WebRTC transport only on web', () {
+  testWidgets('compact quality monitor keeps the complete live transport visible',
+      (tester) async {
+    platformFFI.setBindingForTesting(_Options(labels: {
+      'Direct Connection': '直接连接',
+      'Relay Connection': '中继连接',
+    }));
     final ffi = _FakeFFI();
-    ffi.ffiModel.cachedPeerData.streamType = 'WebRTC';
-    final model = ffi.qualityMonitorModel;
-    // Off the web the session tab's tooltip already names the transport.
-    expect(isWeb, isFalse);
-    expect(model.webrtcTransport, isNull);
+    await ffi.qualityMonitorModel.checkShowQualityMonitor(_sessionId);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: MediaQuery(
+            data: const MediaQueryData(textScaler: TextScaler.linear(1.5)),
+            child: SizedBox(width: 190, child: QualityMonitor(ffi.qualityMonitorModel)),
+          ),
+        ),
+      ),
+    ));
+    for (final (direct, raw, label) in [
+      (false, 'QUIC', 'QUIC / UDP'),
+      (true, 'UDP', 'KCP / UDP'),
+      (true, 'TCP', 'TCP'),
+      (false, 'WebRTC/IPv6', 'WebRTC/IPv6 / TURN'),
+      (false, 'WebSocket', 'WebSocket'),
+    ]) {
+      ffi.ffiModel.setConnectionType('sample', true, direct, raw);
+      await tester.pump();
+      final type = find.text(direct ? '直接连接' : '中继连接');
+      expect(type, findsOneWidget);
+      final protocol = find.text(label);
+      expect(protocol, findsOneWidget);
+      final panel = tester.getRect(find.byType(QualityMonitor));
+      final value = tester.getRect(protocol);
+      expect(panel.contains(value.center), isTrue);
+      expect(value.right, lessThanOrEqualTo(panel.right));
+      expect(tester.renderObject<RenderParagraph>(protocol).didExceedMaxLines, isFalse);
+      expect(getConnectionText(true, direct, raw), endsWith('($label)'));
+    }
+    ffi.ffiModel.clear();
+    await tester.pump();
+    expect(find.text('WebSocket'), findsNothing);
   });
+  testWidgets('quality panel opens a per-port report for the same round', (tester) async {
+    platformFFI.setBindingForTesting(_Options());
+    final model = _FakeFFI().qualityMonitorModel;
+    await tester.pumpWidget(MaterialApp(home: Center(child: DesktopQualityMonitor(model))));
+    await model.checkShowQualityMonitor(_sessionId);
+    model.addUdpReport('UDP #0123456789ab');
+    model.addUdpReport('UDP #0123456789ab  RX 3  ACK TX 2\n'
+        'local port | RX | valid RX | TX | ACK TX | TX err\n51023 | 3 | 2 | 9 | 2 | 0');
+    await tester.pump();
+    expect(model.udpReports.length, 1);
+    await tester.tap(find.text('UDP #0123456789ab  RX 3  ACK TX 2'));
+    await tester.pumpAndSettle();
+    expect(find.text('51023'), findsOneWidget);
+    expect(find.text('ACK TX'), findsOneWidget);
+  });
+
   testWidgets(
       'desktop quality panel follows the session toggle and live samples',
       (tester) async {

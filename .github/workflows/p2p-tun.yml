@@ -83,7 +83,7 @@ jobs:
         run: git -C "$(dirname "$(dirname "$(which flutter)")")" apply "$GITHUB_WORKSPACE/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
-          toolchain: '1.75'
+          toolchain: '1.94'
           targets: x86_64-pc-windows-msvc
       - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
         with:
@@ -151,7 +151,7 @@ jobs:
           brew install nasm yasm
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
         with:
-          toolchain: '1.75'
+          toolchain: '1.94'
           targets: aarch64-apple-ios
       - uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2
         with:
