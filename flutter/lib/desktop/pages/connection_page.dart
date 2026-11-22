@@ -192,9 +192,11 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage({Key? key, this.devicesOnly = false, this.notices})
+  const ConnectionPage(
+      {Key? key, this.devicesOnly = false, this.notices, this.localIdentity})
       : super(key: key);
   final bool devicesOnly;
+  final Widget? localIdentity;
   final Widget? notices;
 
   @override
@@ -357,7 +359,22 @@ class _ConnectionPageState extends State<ConnectionPage>
                               onSelect: (value) =>
                                   setState(() => _mode = value)),
                           const SizedBox(height: 10),
-                          _buildRemoteIDTextField(context),
+                          LayoutBuilder(builder: (context, bounds) {
+                            final form = _buildRemoteIDTextField(context);
+                            if (bounds.maxWidth < 860 ||
+                                widget.localIdentity == null) {
+                              return form;
+                            }
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: form),
+                                const SizedBox(width: 12),
+                                SizedBox(
+                                    width: 238, child: widget.localIdentity),
+                              ],
+                            );
+                          }),
                           if (widget.notices != null) widget.notices!,
                         ]),
                   )),
@@ -705,8 +722,8 @@ class _ConnectionPageState extends State<ConnectionPage>
         title: translate('Remote ID'),
         help: Tooltip(
             message: translate('id_input_tip'),
-            child: const Icon(Icons.info_outline,
-                size: 16, color: Colors.white70)),
+            child: Icon(Icons.info_outline,
+                size: 16, color: Theme.of(context).hintColor)),
         controls: LayoutBuilder(builder: (context, bounds) {
           if (bounds.maxWidth >= 395) {
             return Row(children: [

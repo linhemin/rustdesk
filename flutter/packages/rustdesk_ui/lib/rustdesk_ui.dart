@@ -131,11 +131,11 @@ class WorkspaceStyle {
   }
 }
 
-/// Connection form shared by the desktop workspace and the iPhone home screen.
-/// The controls retain their own focus nodes, commands and autocomplete overlay.
+/// The input and actions retain their own focus, autocomplete and session state.
 class ConnectionPanel extends StatelessWidget {
   const ConnectionPanel(
       {super.key, required this.title, required this.controls, this.help});
+
   final String title;
   final Widget controls;
   final Widget? help;
@@ -143,115 +143,24 @@ class ConnectionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final heading = Row(children: [
-      Flexible(
-          child: Text(title,
-              style: theme.textTheme.titleLarge?.copyWith(
-                  color: Colors.white, fontWeight: FontWeight.w700))),
-      if (help != null) ...[const SizedBox(width: 7), help!],
-    ]);
-    final field = Material(
-        color: theme.cardColor,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: BorderSide(
-                color: theme.brightness == Brightness.dark
-                    ? const Color(0xff516781)
-                    : Colors.transparent)),
-        child: Padding(padding: const EdgeInsets.all(6), child: controls));
-    const diagram =
-        ExcludeSemantics(child: CustomPaint(painter: _ConnectionDrawing()));
-    return LayoutBuilder(builder: (context, bounds) {
-      final wide = bounds.maxWidth >= 690 &&
-          MediaQuery.textScalerOf(context).scale(16) < 24;
-      final inset = bounds.maxWidth >= 520 ? 20.0 : 12.0;
-      return Material(
-          color: WorkspaceStyle.navy,
-          borderRadius: BorderRadius.circular(14),
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-              padding: EdgeInsets.all(inset),
-              child: wide
-                  ? Row(children: [
-                      Expanded(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            heading,
-                            const SizedBox(height: 12),
-                            field,
-                          ])),
-                      const SizedBox(width: 18),
-                      Container(
-                          width: 1, height: 65, color: const Color(0xff384c66)),
-                      const SizedBox(width: 16),
-                      const SizedBox(width: 150, height: 50, child: diagram),
-                    ])
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                          Row(children: [
-                            Expanded(child: heading),
-                            const SizedBox(width: 8),
-                            const SizedBox(
-                                width: 90, height: 27, child: diagram)
-                          ]),
-                          const SizedBox(height: 10),
-                          field,
-                        ])));
-    });
+    return WorkspacePanel(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(children: [
+            Icon(Icons.north_east_rounded,
+                size: 19, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+            Flexible(child: Text(title, style: theme.textTheme.titleMedium)),
+            if (help != null) ...[const SizedBox(width: 6), help!],
+          ]),
+          const SizedBox(height: 12),
+          controls,
+        ],
+      ),
+    );
   }
-}
-
-class _ConnectionDrawing extends CustomPainter {
-  const _ConnectionDrawing();
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Both endpoints use one coordinate space to keep the trace aligned
-    // with the ports even in a narrow connection sheet.
-    const design = Size(150, 40);
-    final scale = size.width / design.width < size.height / design.height
-        ? size.width / design.width
-        : size.height / design.height;
-    canvas.save();
-    canvas.translate((size.width - design.width * scale) / 2,
-        (size.height - design.height * scale) / 2);
-    canvas.scale(scale);
-    final line = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.6
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-    line.color = const Color(0xff9bbde4);
-    for (final x in [2.0, 112.0]) {
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(
-              Rect.fromLTWH(x, 3, 36, 24), const Radius.circular(3)),
-          line);
-      final arrow = Path()
-        ..moveTo(x + 14, 12)
-        ..lineTo(x + 10, 15)
-        ..lineTo(x + 14, 18)
-        ..moveTo(x + 10, 15)
-        ..lineTo(x + 26, 15)
-        ..moveTo(x + 22, 12)
-        ..lineTo(x + 26, 15)
-        ..lineTo(x + 22, 18);
-      canvas.drawPath(arrow, line);
-      canvas.drawLine(Offset(x + 18, 27), Offset(x + 18, 33), line);
-      canvas.drawLine(Offset(x + 10, 34), Offset(x + 26, 34), line);
-    }
-    line.color = const Color(0xff6c9fde);
-    canvas.drawLine(const Offset(39, 15), const Offset(111, 15), line);
-    final glow = Paint()..color = const Color(0x394ba5ff);
-    canvas.drawCircle(const Offset(75, 15), 7, glow);
-    canvas.drawCircle(
-        const Offset(75, 15), 3, Paint()..color = const Color(0xff9fd3ff));
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_ConnectionDrawing oldDelegate) => false;
 }
 
 class WorkspacePanel extends StatelessWidget {

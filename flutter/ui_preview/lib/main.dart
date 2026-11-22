@@ -240,7 +240,7 @@ class _PreviewWorkspaceState extends State<PreviewWorkspace> {
                   controller: remoteId,
                   decoration: const InputDecoration(
                       hintText: 'Enter remote ID',
-                      border: InputBorder.none,
+                      border: OutlineInputBorder(),
                       prefixIcon: Icon(Icons.tag_rounded),
                       contentPadding: EdgeInsets.symmetric(vertical: 14)),
                   validator: (value) => value == null || value.trim().isEmpty

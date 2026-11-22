@@ -88,6 +88,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             child: IndexedStack(index: current == 2 ? 1 : 0, children: [
           ConnectionPage(
               devicesOnly: current == 1,
+              localIdentity: incoming ? _localIdentitySummary(context) : null,
               notices: current == 0
                   ? Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -176,6 +177,42 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         block: _block, mask: true, use: canBeBlocked, child: child);
   }
 
+  Widget _localIdentitySummary(BuildContext context) {
+    final theme = Theme.of(context);
+    return WorkspacePanel(
+      padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(Icons.laptop_mac_rounded, size: 19, color: theme.hintColor),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(translate('Your Desktop'),
+                  style: theme.textTheme.titleMedium)),
+        ]),
+        const SizedBox(height: 6),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: gFFI.serverModel.serverId,
+          builder: (_, value, __) => Row(children: [
+            Expanded(
+                child: SelectableText(value.text,
+                    style: theme.textTheme.titleLarge)),
+            IconButton(
+              tooltip: MaterialLocalizations.of(context).copyButtonLabel,
+              icon: const Icon(Icons.copy_rounded, size: 18),
+              onPressed:
+                  value.text.isEmpty ? null : () => _copyLocalId(value.text),
+            )
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Future<void> _copyLocalId(String id) async {
+    await Clipboard.setData(ClipboardData(text: id));
+    showToast(translate('Copied'));
+  }
+
   Widget _identityWorkspace(BuildContext context, bool visible) {
     final model = gFFI.serverModel;
     final theme = Theme.of(context);
@@ -212,12 +249,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                       icon: const Icon(Icons.copy_rounded),
                                       onPressed: value.text.isEmpty
                                           ? null
-                                          : () async {
-                                              await Clipboard.setData(
-                                                  ClipboardData(
-                                                      text: value.text));
-                                              showToast(translate('Copied'));
-                                            }),
+                                          : () => _copyLocalId(value.text)),
                                 ])),
                         const Divider(height: 24),
                         buildPasswordBoard(context),
