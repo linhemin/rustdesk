@@ -37,8 +37,13 @@ class AppleWorkspaceNavigation extends StatefulWidget {
 
 class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
   static const _viewType = 'rustdesk/apple_workspace_navigation';
+  static const _layoutChannel = MethodChannel('$_viewType/layout');
   MethodChannel? _channel;
   Brightness? _brightness;
+  bool? _hasSystemTabs;
+  double? _systemHeight;
+  Size? _viewport;
+  EdgeInsets? _viewPadding;
 
   Map<String, Object> get _configuration => {
         'labels': widget.labels,
@@ -51,8 +56,41 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       };
 
   @override
+  void initState() {
+    super.initState();
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      unawaited(_resolveSystemTabs());
+    }
+  }
+
+  Future<void> _resolveSystemTabs() async {
+    var available = false;
+    try {
+      available =
+          await _layoutChannel.invokeMethod<bool>('usesSystemTabs') ?? false;
+    } on MissingPluginException {
+      // Older native hosts continue to use the compatibility layout.
+    }
+    if (mounted) setState(() => _hasSystemTabs = available);
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      final viewport = MediaQuery.sizeOf(context);
+      final padding = MediaQuery.viewPaddingOf(context);
+      if (_viewport != viewport || _viewPadding != padding) {
+        _viewport = viewport;
+        _viewPadding = padding;
+        if (_systemHeight != null) {
+          _systemHeight = null;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _updateNativeView();
+          });
+        }
+      }
+    }
     final brightness = Theme.of(context).brightness;
     if (_brightness != brightness) {
       _brightness = brightness;
@@ -76,24 +114,40 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
   void _onPlatformViewCreated(int viewId) {
     if (!mounted) return;
     _channel?.setMethodCallHandler(null);
-    _channel = MethodChannel('$_viewType/$viewId')
-      ..setMethodCallHandler((call) async {
-        if (call.method == 'settings') {
-          widget.onSettings?.call();
-        } else if (call.method == 'select') {
-          final index = call.arguments;
-          if (index is int && index >= 0 && index < widget.labels.length) {
-            widget.onSelect(index);
-          }
+    final channel = MethodChannel('$_viewType/$viewId');
+    _channel = channel;
+    channel.setMethodCallHandler((call) async {
+      if (!mounted || _channel != channel) return;
+      if (call.method == 'settings') {
+        widget.onSettings?.call();
+      } else if (call.method == 'select') {
+        final index = call.arguments;
+        if (index is int && index >= 0 && index < widget.labels.length) {
+          widget.onSelect(index);
         }
-      });
+      } else if (call.method == 'systemHeight') {
+        _setSystemHeight(call.arguments);
+      }
+    });
     _updateNativeView();
   }
 
   void _updateNativeView() {
     if (_channel case final channel?) {
-      unawaited(channel.invokeMethod<void>('update', _configuration));
+      unawaited(_sendConfiguration(channel));
     }
+  }
+
+  Future<void> _sendConfiguration(MethodChannel channel) async {
+    final height = await channel.invokeMethod<Object>('update', _configuration);
+    if (mounted && _channel == channel) _setSystemHeight(height);
+  }
+
+  void _setSystemHeight(Object? value) {
+    if (!widget.compact || _hasSystemTabs != true || value is! num) return;
+    final height = value.toDouble();
+    if (!height.isFinite || height <= 0 || height == _systemHeight) return;
+    setState(() => _systemHeight = height);
   }
 
   @override
@@ -117,20 +171,46 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       if (caption.width + 28 > itemWidth) itemWidth = caption.width + 28;
     }
     caption.dispose();
-    // The native equal-width row has a 5pt inset at each end.
+    // Keep the compact host wide enough for the longest localized caption.
     return itemWidth * widget.labels.length + 10;
   }
+
+  UiKitView _iosView() => UiKitView(
+        key: ValueKey(widget.compact),
+        viewType: _viewType,
+        creationParams: _configuration,
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: _onPlatformViewCreated,
+      );
 
   @override
   Widget build(BuildContext context) {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      if (widget.compact && _hasSystemTabs != false) {
+        // Start with enough space to lay out UIKit. It then supplies the occupied
+        // height, including the device's bottom safe area.
+        final height =
+            _systemHeight ?? 84.0 + MediaQuery.viewPaddingOf(context).bottom;
+        return SafeArea(
+          top: false,
+          bottom: false,
+          minimum: const EdgeInsets.symmetric(horizontal: 20),
+          child: Align(
+            heightFactor: 1,
+            child: SizedBox(
+              width: _phoneWidth(context),
+              height: height,
+              child: _hasSystemTabs == true ? _iosView() : null,
+            ),
+          ),
+        );
+      }
       final landscape =
           MediaQuery.orientationOf(context) == Orientation.landscape;
       final extraTextHeight =
           (MediaQuery.textScalerOf(context).scale(11) - 11).clamp(0.0, 40.0);
-      final height = widget.compact
-          ? (landscape ? 52.0 : 63.0) + extraTextHeight
-          : 72.0;
+      final height =
+          widget.compact ? (landscape ? 52.0 : 63.0) + extraTextHeight : 72.0;
       final width = widget.compact
           ? _phoneWidth(context)
           : widget.labels.length * 124.0 + 16;
@@ -151,13 +231,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
             height: height,
             child: ClipPath.shape(
               shape: const StadiumBorder(),
-              child: UiKitView(
-                key: ValueKey(widget.compact),
-                viewType: _viewType,
-                creationParams: _configuration,
-                creationParamsCodec: const StandardMessageCodec(),
-                onPlatformViewCreated: _onPlatformViewCreated,
-              ),
+              child: _iosView(),
             ),
           ),
         ),

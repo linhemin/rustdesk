@@ -47,13 +47,15 @@ void main() {
   testWidgets(
       'floating iOS tabs leave the sides and capsule corners interactive',
       (tester) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(402, 874);
     tester.view.viewPadding = const FakeViewPadding(bottom: 34);
     tester.view.padding = const FakeViewPadding(bottom: 34);
     addTearDown(tester.view.reset);
     final messenger = tester.binding.defaultBinaryMessenger;
+    const layout = MethodChannel('rustdesk/apple_workspace_navigation/layout');
+    messenger.setMockMethodCallHandler(layout, (_) async => false);
+    addTearDown(() => messenger.setMockMethodCallHandler(layout, null));
     messenger.setMockMethodCallHandler(SystemChannels.platform_views,
         (call) async {
       if (call.method == 'create') {
@@ -87,7 +89,7 @@ void main() {
             onSelect: (_) {}),
       ),
     )));
-    await tester.pump();
+    await tester.pumpAndSettle();
     final view = find.byType(UiKitView);
     final portrait = tester.getRect(view);
     expect(portrait, const Rect.fromLTWH(90, 791, 222, 63));
@@ -115,8 +117,63 @@ void main() {
     expect(localized.left, greaterThanOrEqualTo(47));
     expect(localized.center.dx, rotated.center.dx);
     await tester.pumpWidget(const SizedBox());
-    debugDefaultTargetPlatformOverride = null;
-  });
+  }, variant: const TargetPlatformVariant({TargetPlatform.iOS}));
+
+  testWidgets('system iOS tabs use the native height and reach the window edge',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(402, 874);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 34);
+    tester.view.padding = const FakeViewPadding(bottom: 34);
+    addTearDown(tester.view.reset);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    const layout = MethodChannel('rustdesk/apple_workspace_navigation/layout');
+    messenger.setMockMethodCallHandler(layout, (_) async => true);
+    addTearDown(() => messenger.setMockMethodCallHandler(layout, null));
+    late MethodChannel native;
+    messenger.setMockMethodCallHandler(SystemChannels.platform_views,
+        (call) async {
+      if (call.method == 'create') {
+        final id = call.arguments['id'];
+        native = MethodChannel('rustdesk/apple_workspace_navigation/$id');
+        messenger.setMockMethodCallHandler(native, (_) async => 91.0);
+        addTearDown(() => messenger.setMockMethodCallHandler(native, null));
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(
+        SystemChannels.platform_views, null));
+
+    final selections = <int>[];
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        bottomNavigationBar: AppleWorkspaceNavigation(
+          labels: const ['连接', '设置'],
+          symbols: const ['display.2', 'gearshape'],
+          selected: 0,
+          compact: true,
+          onSelect: selections.add,
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    final view = find.byType(UiKitView);
+    expect(tester.getRect(view), const Rect.fromLTWH(90, 783, 222, 91));
+
+    Future<void> fromNative(String method, Object value) async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        native.name,
+        const StandardMethodCodec().encodeMethodCall(MethodCall(method, value)),
+        null,
+      );
+    }
+
+    await fromNative('systemHeight', 103.0);
+    await fromNative('select', 1);
+    await tester.pump();
+    expect(tester.getRect(view), const Rect.fromLTWH(90, 771, 222, 103));
+    expect(selections, [1]);
+  }, variant: const TargetPlatformVariant({TargetPlatform.iOS}));
 
   testWidgets('iPhone device search opens when tapped near the target edge',
       (tester) async {
