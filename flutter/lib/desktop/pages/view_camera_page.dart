@@ -18,6 +18,7 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
+import '../widgets/session_quality_monitor.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
 
@@ -472,10 +473,15 @@ class _ViewCameraPageState extends State<ViewCameraPage>
 
     paints.add(
       Positioned(
-        top: 10,
+        top: (isWindows || isMacOS) ? null : 10,
+        bottom: (isWindows || isMacOS) ? 12 : null,
         right: 10,
         child: _buildRawTouchAndPointerRegion(
-            QualityMonitor(_ffi.qualityMonitorModel), null, null),
+            (isWindows || isMacOS)
+                ? DesktopQualityMonitor(_ffi.qualityMonitorModel)
+                : QualityMonitor(_ffi.qualityMonitorModel),
+            null,
+            null),
       ),
     );
     return Stack(

@@ -849,5 +849,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Center cursor", "光标归中"),
         ("Online", "在线"),
         ("Offline", "离线"),
+        ("Delay", "延迟"),
+        ("Chroma", "色度采样"),
     ].iter().cloned().collect();
 }

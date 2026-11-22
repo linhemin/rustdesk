@@ -256,7 +256,7 @@ class FfiModel with ChangeNotifier {
     _cancelPendingMonitorRestore();
     _secure = null;
     _direct = null;
-    if (isMobile && hadConnection) {
+    if (hadConnection && (isMobile || isWindows || isMacOS)) {
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     _inputBlocked = false;
@@ -280,7 +280,7 @@ class FfiModel with ChangeNotifier {
     cachedPeerData.streamType = streamType;
     _secure = secure;
     _direct = direct;
-    if (isMobile && changed) {
+    if (changed && (isMobile || isWindows || isMacOS)) {
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     try {
@@ -4086,21 +4086,30 @@ class QualityMonitorModel with ChangeNotifier {
     return ffiModel.direct == false ? '$streamType (TURN)' : streamType;
   }
 
-  String? get mobileConnection {
-    if (!isMobile) return null;
+  bool? get directConnection => parent.target?.ffiModel.direct;
+
+  String? get activeTransport {
     final model = parent.target?.ffiModel;
     final direct = model?.direct;
     if (model == null || direct == null) return null;
-    final connection =
-        translate(direct ? 'Direct Connection' : 'Relay Connection');
-    final transport = switch (model.cachedPeerData.streamType) {
-      'WebRTC' => direct ? 'WebRTC' : 'WebRTC / TURN',
+    return switch (model.cachedPeerData.streamType) {
+      final transport when transport.startsWith('WebRTC') =>
+        direct ? transport : '$transport / TURN',
       'UDP' => 'KCP / UDP',
       'IPv6' => 'KCP / IPv6',
       'Relay' => 'TCP',
       '' => null,
       final transport => transport,
     };
+  }
+
+  String? get mobileConnection {
+    if (!isMobile) return null;
+    final direct = directConnection;
+    if (direct == null) return null;
+    final connection =
+        translate(direct ? 'Direct Connection' : 'Relay Connection');
+    final transport = activeTransport;
     return transport == null ? connection : '$connection · $transport';
   }
 

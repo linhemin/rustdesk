@@ -329,6 +329,8 @@ class ToolbarState {
 class _ToolbarTheme {
   static final nativeDesktop = isWindows || isMacOS;
   static const Color blueColor = MyTheme.button;
+  static final Color commandColor =
+      nativeDesktop ? Colors.transparent : blueColor;
   static const Color hoverBlueColor = MyTheme.accent;
   static final Color inactiveColor =
       nativeDesktop ? DesktopSessionStyle.inactive : WorkspaceStyle.slate;
@@ -344,7 +346,7 @@ class _ToolbarTheme {
   static final double buttonSize =
       nativeDesktop ? DesktopSessionStyle.buttonSize : 32;
   static final double buttonHMargin = nativeDesktop ? 3 : 2;
-  static final double buttonVMargin = nativeDesktop ? 8 : 6;
+  static final double buttonVMargin = nativeDesktop ? 5 : 6;
   static final double iconRadius =
       nativeDesktop ? DesktopSessionStyle.buttonRadius : 8;
   static const double elevation = 3;
@@ -356,6 +358,24 @@ class _ToolbarTheme {
       ? EdgeInsets.fromLTRB(4, 12, 4, 12)
       : EdgeInsets.fromLTRB(6, 14, 6, 14);
   static final double menuButtonBorderRadius = nativeDesktop ? 8 : 7;
+
+  static ({Color foreground, Color background}) buttonColors(
+      BuildContext context, Color color, Color hoverColor,
+      {required bool hover, required bool hasAsset, bool destructive = false}) {
+    if (nativeDesktop && destructive) {
+      final ink = Theme.of(context).colorScheme.error;
+      return (foreground: ink, background: ink.withOpacity(hover ? .20 : .09));
+    }
+    if (nativeDesktop && hasAsset &&
+        (color == Colors.transparent || color == inactiveColor)) {
+      final ink = Theme.of(context).colorScheme.onSurface;
+      return (
+        foreground: ink,
+        background: hover ? ink.withOpacity(.10) : Colors.transparent
+      );
+    }
+    return (foreground: Colors.white, background: hover ? hoverColor : color);
+  }
 
   static Color borderColor(BuildContext context) => nativeDesktop
       ? Theme.of(context).dividerColor
@@ -1318,7 +1338,7 @@ class _ControlMenu extends StatelessWidget {
     return _IconSubmenuButton(
         tooltip: 'Control Actions',
         svg: "assets/actions.svg",
-        color: _ToolbarTheme.blueColor,
+        color: _ToolbarTheme.commandColor,
         hoverColor: _ToolbarTheme.hoverBlueColor,
         ffi: ffi,
         menuChildrenGetter: (_) => toolbarControls(context, id, ffi).map((e) {
@@ -1822,7 +1842,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
       tooltip: 'Display Settings',
       svg: "assets/display.svg",
       ffi: widget.ffi,
-      color: _ToolbarTheme.blueColor,
+      color: _ToolbarTheme.commandColor,
       hoverColor: _ToolbarTheme.hoverBlueColor,
       menuChildrenGetter: menuChildrenGetter,
     );
@@ -2583,7 +2603,7 @@ class _KeyboardMenu extends StatelessWidget {
         tooltip: 'Keyboard Settings',
         svg: "assets/keyboard_mouse.svg",
         ffi: ffi,
-        color: _ToolbarTheme.blueColor,
+        color: _ToolbarTheme.commandColor,
         hoverColor: _ToolbarTheme.hoverBlueColor,
         menuChildrenGetter: (_) => [
               keyboardMode(),
@@ -2850,7 +2870,7 @@ class _ChatMenuState extends State<_ChatMenu> {
           key: chatButtonKey,
           svg: 'assets/chat.svg',
           ffi: widget.ffi,
-          color: _ToolbarTheme.blueColor,
+          color: _ToolbarTheme.commandColor,
           hoverColor: _ToolbarTheme.hoverBlueColor,
           menuChildrenGetter: (_) => [textChat(), voiceCall()]);
     }
@@ -2997,7 +3017,7 @@ class _RecordMenu extends StatelessWidget {
       onPressed: () => recordingModel.toggle(),
       color: recordingModel.start
           ? _ToolbarTheme.redColor
-          : _ToolbarTheme.blueColor,
+          : _ToolbarTheme.commandColor,
       hoverColor: recordingModel.start
           ? _ToolbarTheme.hoverRedColor
           : _ToolbarTheme.hoverBlueColor,
@@ -3016,6 +3036,7 @@ class _CloseMenu extends StatelessWidget {
     return _IconMenuButton(
       assetName: 'assets/close.svg',
       tooltip: 'Close',
+      destructive: true,
       onPressed: () async {
         if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
           return;
@@ -3038,6 +3059,7 @@ class _IconMenuButton extends StatefulWidget {
   final double? hMargin;
   final double? vMargin;
   final bool topLevel;
+  final bool destructive;
   final double? width;
   const _IconMenuButton({
     Key? key,
@@ -3050,6 +3072,7 @@ class _IconMenuButton extends StatefulWidget {
     this.hMargin,
     this.vMargin,
     this.topLevel = true,
+    this.destructive = false,
     this.width,
   }) : super(key: key);
 
@@ -3063,10 +3086,13 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
   @override
   Widget build(BuildContext context) {
     assert(widget.assetName != null || widget.icon != null);
+    final colors = _ToolbarTheme.buttonColors(
+        context, widget.color, widget.hoverColor,
+        hover: hover, hasAsset: widget.assetName != null, destructive: widget.destructive);
     final icon = widget.icon ??
         SvgPicture.asset(
           widget.assetName!,
-          colorFilter: ColorFilter.mode(Colors.white, BlendMode.srcIn),
+          colorFilter: ColorFilter.mode(colors.foreground, BlendMode.srcIn),
           width: _ToolbarTheme.buttonSize,
           height: _ToolbarTheme.buttonSize,
         );
@@ -3090,7 +3116,7 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
                     decoration: BoxDecoration(
                       borderRadius:
                           BorderRadius.circular(_ToolbarTheme.iconRadius),
-                      color: hover ? widget.hoverColor : widget.color,
+                      color: colors.background,
                     ),
                     child: icon)),
           )),
@@ -3148,10 +3174,13 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
   @override
   Widget build(BuildContext context) {
     assert(widget.svg != null || widget.icon != null);
+    final colors = _ToolbarTheme.buttonColors(
+        context, widget.color, widget.hoverColor,
+        hover: hover, hasAsset: widget.svg != null);
     final icon = widget.icon ??
         SvgPicture.asset(
           widget.svg!,
-          colorFilter: ColorFilter.mode(Colors.white, BlendMode.srcIn),
+          colorFilter: ColorFilter.mode(colors.foreground, BlendMode.srcIn),
           width: _ToolbarTheme.buttonSize,
           height: _ToolbarTheme.buttonSize,
         );
@@ -3173,7 +3202,7 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
                         decoration: BoxDecoration(
                           borderRadius:
                               BorderRadius.circular(_ToolbarTheme.iconRadius),
-                          color: hover ? widget.hoverColor : widget.color,
+                          color: colors.background,
                         ),
                         child: icon))),
             menuChildren: widget

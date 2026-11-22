@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
-import 'package:rustdesk_ui/desktop.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
@@ -22,6 +21,7 @@ import '../../models/shortcut_model.dart';
 import '../../common/shared_state.dart';
 import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
+import '../widgets/session_quality_monitor.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
 import 'macos_full_screen_focus_recovery.dart';
@@ -1007,12 +1007,12 @@ class _RemotePageState extends State<RemotePage>
     }
     paints.add(
       Positioned(
-        top: 10,
+        top: (isWindows || isMacOS) ? null : 10,
+        bottom: (isWindows || isMacOS) ? 12 : null,
         right: 10,
         child: _buildRawTouchAndPointerRegion(
             (isWindows || isMacOS)
-                ? SessionOverlayFrame(
-                    child: QualityMonitor(_ffi.qualityMonitorModel))
+                ? DesktopQualityMonitor(_ffi.qualityMonitorModel)
                 : QualityMonitor(_ffi.qualityMonitorModel),
             null,
             null),
