@@ -544,10 +544,32 @@ impl Client {
                 if interface.is_policy_relay() || !crate::live_direct::native::enabled() {
                     bail!("Direct transport is disabled");
                 }
-                let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only, ..Default::default() };
-                let ((stream, direct, pk, kcp, label), _, _) = Self::start_via_rendezvous(
-                    &peer, &key, &token, ConnType::DEFAULT_CONN, interface, server, Vec::new(), true, &permission
-                ).await?;
+                let udp_permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only: true, ..Default::default() };
+                let udp = Self::start_via_rendezvous(
+                    &peer, &key, &token, ConnType::DEFAULT_CONN, interface.clone(), server.clone(), Vec::new(), true, &udp_permission
+                );
+                let path = if udp_upgrade_only || !tcp_punch_allowed() {
+                    udp.await?
+                } else {
+                    // An authenticated upgrade has four seconds to present its session ticket.
+                    // Give UDP its head start before opening the fallback TCP connection.
+                    let udp_path = if crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() {
+                        tokio::time::timeout(transport_preference::tcp_wait(Self::udp_preference_window()), udp)
+                            .await.ok().and_then(Result::ok)
+                    } else {
+                        drop(udp);
+                        None
+                    };
+                    match udp_path {
+                        Some(path) => path,
+                        None => {
+                            let tcp_permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
+                            Self::_start_inner(peer, key, token, ConnType::DEFAULT_CONN, interface,
+                                (None, None), None, None, None, server, Vec::new(), true, &tcp_permission).await?
+                        }
+                    }
+                };
+                let ((stream, direct, pk, kcp, label), _, _) = path;
                 if !direct || !stream.is_secured() || pk.is_none() || pk != original_pk {
                     bail!("Native path does not match the authenticated session");
                 }

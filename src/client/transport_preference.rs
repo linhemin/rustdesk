@@ -13,6 +13,10 @@ pub(super) enum Rank {
     UdpDirect,
 }
 
+pub(super) fn tcp_wait(grace: Duration) -> Duration {
+    grace.max(Duration::from_secs(8))
+}
+
 pub(super) fn rank(label: &str, direct: bool) -> Rank {
     match (label, direct) {
         ("UDP" | "IPv6" | "WebRTC", true) => Rank::UdpDirect,
@@ -48,7 +52,7 @@ pub(super) async fn choose<'a, T: 'a>(
                     // Committing direct TCP ends this race permanently. Allow the six-second
                     // UDP check plus signaling, while an established UDP relay can upgrade live.
                     let wait = if rank < Rank::UdpRelay {
-                        grace.max(Duration::from_secs(8))
+                        tcp_wait(grace)
                     } else {
                         grace
                     };
