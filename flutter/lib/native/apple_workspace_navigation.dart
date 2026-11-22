@@ -162,7 +162,9 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       textScaler: MediaQuery.textScalerOf(context),
       maxLines: 1,
     );
-    var itemWidth = 106.0;
+    // UIKit reserves horizontal space inside the host before sizing the glass.
+    // A 222 pt host compresses the standard two-item bar by 8 pt on iPhone.
+    var itemWidth = _hasSystemTabs == true ? 110.0 : 106.0;
     for (final label in widget.labels) {
       caption.text = TextSpan(
           text: label,

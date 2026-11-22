@@ -158,7 +158,7 @@ void main() {
     ));
     await tester.pumpAndSettle();
     final view = find.byType(UiKitView);
-    expect(tester.getRect(view), const Rect.fromLTWH(90, 783, 222, 91));
+    expect(tester.getRect(view), const Rect.fromLTWH(86, 783, 230, 91));
 
     Future<void> fromNative(String method, Object value) async {
       await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
@@ -171,7 +171,7 @@ void main() {
     await fromNative('systemHeight', 103.0);
     await fromNative('select', 1);
     await tester.pump();
-    expect(tester.getRect(view), const Rect.fromLTWH(90, 771, 222, 103));
+    expect(tester.getRect(view), const Rect.fromLTWH(86, 771, 230, 103));
     expect(selections, [1]);
   }, variant: const TargetPlatformVariant({TargetPlatform.iOS}));
 
