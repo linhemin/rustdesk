@@ -724,6 +724,8 @@ message PublicKey {
   // The key exchange version the controller picked, the highest both sides speak; absent,
   // i.e. 0, is the original scheme.
   uint32 kx_version = 3;
+  // Follow the key exchange with an encrypted attachment to an existing session.
+  bool native_path_attachment = 4;
 }
 
 message SignedId { bytes id = 1; }

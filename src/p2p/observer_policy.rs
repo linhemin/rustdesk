@@ -4,6 +4,24 @@ use hbb_common::{
     timeout, ResultType, Stream,
 };
 
+/// A cold direct-only offer starts gathering before its punch request. Fetch the
+/// signed observers up front, as a relay session would before an in-session upgrade.
+pub(crate) async fn prepare_direct_ice(server: &str, key: &str) {
+    if hbb_common::webrtc::WebRTCStream::has_expanded_udp_observer() {
+        return;
+    }
+    let exchange = async {
+        let mut socket = crate::p2p::connect_rendezvous(server, None, 1_500).await?;
+        if !crate::secure_tcp_with_direct_permission(&mut socket, key, true).await? {
+            return Ok(false);
+        }
+        confirm_signed_direct_permission(&mut socket).await
+    };
+    if !matches!(timeout(1_500, exchange).await, Ok(Ok(true))) {
+        hbb_common::log::trace!("Direct ICE will use the configured STUN servers");
+    }
+}
+
 /// Confirm the signed grant on its own connection before caching its observers.
 /// hbbs keeps the connection open after this reserved request.
 pub(crate) async fn confirm_signed_direct_permission(conn: &mut Stream) -> ResultType<bool> {

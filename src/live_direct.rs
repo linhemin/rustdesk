@@ -20,6 +20,7 @@ use hbb_common::{
 use std::{collections::VecDeque, future::pending, net::IpAddr};
 
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
+pub(crate) mod native;
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const PUNCH_CAPABILITY: &str = "rustdesk_live_direct_punch_v1";
 pub(crate) const FULL_CAPABILITY: &str = "rustdesk_lite_full_punch_v2";
@@ -90,7 +91,9 @@ pub(crate) fn responder_enabled() -> bool {
     cfg!(any(target_os = "windows", target_os = "ios")) && enabled()
 }
 
-pub(crate) async fn next_path(status: &mut Option<watch::Receiver<bool>>) -> Option<bool> {
+type Path = Option<&'static str>;
+
+pub(crate) async fn next_path(status: &mut Option<watch::Receiver<Path>>) -> Option<Path> {
     let Some(path) = status.as_mut() else {
         return pending().await;
     };
@@ -218,7 +221,15 @@ impl Role {
     }
 }
 
-pub(crate) fn wrap(stream: &mut Stream, role: Role) -> ResultType<watch::Receiver<bool>> {
+pub(crate) fn wrap(stream: &mut Stream, role: Role) -> ResultType<watch::Receiver<Path>> {
+    wrap_with(stream, role, None)
+}
+
+pub(crate) fn wrap_native(stream: &mut Stream, mode: native::Mode) -> ResultType<watch::Receiver<Path>> {
+    wrap_with(stream, Role::Answerer, Some(mode))
+}
+
+fn wrap_with(stream: &mut Stream, role: Role, native: Option<native::Mode>) -> ResultType<watch::Receiver<Path>> {
     if !supported_transport(stream) {
         bail!("A live direct path requires an encrypted TCP session");
     }
@@ -246,9 +257,9 @@ pub(crate) fn wrap(stream: &mut Stream, role: Role) -> ResultType<watch::Receive
         unreachable!()
     };
     let relay = std::mem::replace(tcp, app);
-    let (path, status) = watch::channel(false);
+    let (path, status) = watch::channel(None);
     tokio::spawn(async move {
-        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), role, path).await {
+        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), role, path, native).await {
             log::debug!("Live direct bridge closed: {err}");
         }
     });
@@ -287,7 +298,7 @@ impl Drop for Rtc {
 
 struct Direct {
     id: u64,
-    rtc: Rtc,
+    lane: Lane,
     since: Instant,
     active: bool,
     ice_silent_since: Option<Instant>,
@@ -295,6 +306,45 @@ struct Direct {
     first_sent: Option<Instant>,
     first_received: Option<Instant>,
     reported: bool,
+}
+
+enum Lane {
+    WebRtc(Rtc),
+    Native(native::Lane),
+}
+
+impl Lane {
+    fn label(&self) -> &'static str {
+        match self { Self::WebRtc(_) => "WebRTC", Self::Native(n) => n.label }
+    }
+
+    async fn next(&mut self) -> Option<std::io::Result<BytesMut>> {
+        match self {
+            Self::WebRtc(rtc) => rtc.0.next().await,
+            Self::Native(n) => n.io.incoming.recv().await.map(Ok),
+        }
+    }
+
+    fn write(&self, bytes: Bytes, last: bool) -> BoxFuture<'static, (bool, ResultType<()>)> {
+        match self {
+            Self::WebRtc(rtc) => {
+                let mut stream = rtc.0.clone();
+                async move { (last, stream.send_bytes(bytes).await) }.boxed()
+            }
+            Self::Native(n) => {
+                let sender = n.io.outgoing.clone();
+                async move { (last, sender.send(bytes).await.map_err(|_| hbb_common::anyhow::anyhow!("Native path closed"))) }.boxed()
+            }
+        }
+    }
+}
+
+impl Direct {
+    fn new(id: u64, lane: Lane) -> Self {
+        let last_rx_progress = match &lane { Lane::WebRtc(rtc) => rtc.0.rx_progress(), Lane::Native(_) => 0 };
+        Self { id, lane, since: Instant::now(), active: false, ice_silent_since: None,
+            last_rx_progress, first_sent: None, first_received: None, reported: false }
+    }
 }
 
 fn ice_stalled(
@@ -354,6 +404,7 @@ impl Sequence {
 }
 
 enum SetupEvent {
+    Native(u64, Option<native::Lane>),
     Send(Bytes),
     StartPunch(u64),
     Finished(u64, Option<Rtc>, &'static str),
@@ -1204,11 +1255,11 @@ async fn relay_pending(
     relay: &Relay,
     direct: &mut Option<Direct>,
     seq: &mut Sequence,
-    path: &watch::Sender<bool>,
+    path: &watch::Sender<Path>,
     reason: Option<&'static str>,
 ) -> ResultType<()> {
     if let Some(direct) = direct.take() {
-        path.send_replace(false);
+        path.send_replace(None);
         if direct.active {
             let reason = reason.unwrap_or("peer requested fallback");
             #[cfg(target_os = "ios")]
@@ -1560,6 +1611,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_upgrades_over_native_tcp_with_webrtc_unused() {
+        let (mut controller, mut controlled) = encrypted_pair().await;
+        let listener = native::Listener::new();
+        let ticket = listener.response()[native::ACCEPT.len()..].try_into().unwrap();
+        let mut host_path = wrap_native(&mut controlled, native::Mode::Listen(listener)).unwrap();
+        let dial = Box::new(|| -> BoxFuture<'static, ResultType<_>> {
+            Box::pin(async {
+                let (first, second) = encrypted_pair().await;
+                tokio::spawn(async move { native::accept(second).await.unwrap().await.ok(); });
+                Ok((first, None, "TCP"))
+            })
+        });
+        let mut path = wrap_native(&mut controller, native::Mode::Call(ticket, dial)).unwrap();
+        controller.send_raw(b"on the relay".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"on the relay");
+        timeout(Duration::from_secs(8), async {
+            path.changed().await.unwrap();
+            host_path.changed().await.unwrap();
+        }).await.unwrap();
+        assert_eq!(*path.borrow(), Some("TCP"));
+        assert_eq!(*host_path.borrow(), Some("TCP"));
+        let frame = vec![0x37; FRAGMENT + 10];
+        controlled.send_raw(frame.clone()).await.unwrap();
+        assert_eq!(&controller.next_timeout(3_000).await.unwrap().unwrap()[..], frame);
+        controller.send_raw(b"remote input".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"remote input");
+    }
+
+    #[tokio::test]
     async fn relayed_session_keeps_legacy_and_large_bidirectional_frames() {
         let (mut first, mut second) = encrypted_pair().await;
         first
@@ -1590,7 +1670,7 @@ mod tests {
         timeout(Duration::from_secs(5), async { tokio::join!(left, right) })
             .await
             .unwrap();
-        assert!(!*one.borrow() && !*two.borrow());
+        assert!(one.borrow().is_none() && two.borrow().is_none());
     }
 
     #[tokio::test]
@@ -1637,10 +1717,10 @@ mod tests {
     async fn active_session_survives_relay_direct_relay_and_retry() {
         use std::sync::atomic::Ordering;
 
-        async fn wait_for_path(path: &mut watch::Receiver<bool>, direct: bool) {
+        async fn wait_for_path(path: &mut watch::Receiver<Path>, direct: bool) {
             timeout(Duration::from_secs(30), async {
                 loop {
-                    if *path.borrow_and_update() == direct {
+                    if path.borrow_and_update().is_some() == direct {
                         break;
                     }
                     path.changed().await.unwrap();
@@ -1688,7 +1768,8 @@ async fn run(
     mut write_pipe: FramedStream,
     mut relay: Relay,
     role: Role,
-    path: watch::Sender<bool>,
+    path: watch::Sender<Path>,
+    mut native: Option<native::Mode>,
 ) -> ResultType<()> {
     // App TX and RX can both exceed the pipe buffer (e.g. video and a clipboard image).
     // Pump them independently so an inbound delivery never blocks draining the app's writes.
@@ -1712,7 +1793,8 @@ async fn run(
     let mut setup: Option<Attempt> = None;
     let mut attempt = 0;
     let offer_mode = role.offer_mode();
-    let offerer = offer_mode.is_some();
+    let offerer = offer_mode.is_some() || matches!(native, Some(native::Mode::Call(..)));
+    let mut native_task = None;
     let mut retries = RetrySchedule::default();
     let mut accepted_lite = None;
     let mut full_plan = None;
@@ -1749,7 +1831,7 @@ async fn run(
                     }
                     Some((ACK, number, [])) => seq.acknowledge(number),
                     Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER | LITE_OFFER | FULL_OFFER), number, data))
-                        if !offerer && direct.is_none() && number > attempt
+                        if native.is_none() && !offerer && direct.is_none() && number > attempt
                             && data.len() <= MAX_SDP + usize::from(kind == FULL_OFFER) * 2
                             && if kind == FULL_OFFER {
                                 accepted_lite == number.checked_sub(1) && WebRTCStream::has_expanded_udp_observer()
@@ -1872,7 +1954,7 @@ async fn run(
             }
             from_direct = async {
                 match direct.as_mut() {
-                    Some(direct) => direct.rtc.0.next().await,
+                    Some(direct) => direct.lane.next().await,
                     None => pending().await,
                 }
             } => {
@@ -1943,15 +2025,30 @@ async fn run(
                 }
                 if let Some(route) = direct.as_ref() {
                     seq.track(bytes.clone());
-                    let mut rtc = route.rtc.0.clone();
                     // Keep polling inbound SCTP and relay acknowledgements under send backpressure.
-                    direct_write = Some(async move { (last, rtc.send_bytes(bytes).await) }.boxed());
+                    direct_write = Some(route.lane.write(bytes, last));
                 } else {
                     first_relay_data.get_or_insert_with(Instant::now);
                     relay.send(bytes).await?;
                 }
             }
+            Some((id, lane)) = async {
+                match native.as_mut() {
+                    Some(mode) => mode.incoming().await,
+                    None => pending().await,
+                }
+            } => {
+                if direct.is_none() && id > attempt {
+                    attempt = id;
+                    direct = Some(Direct::new(id, Lane::Native(lane)));
+                }
+            }
             Some(event) = events.recv() => match event {
+                SetupEvent::Native(id, lane) => {
+                    native_task = None;
+                    direct = lane.map(|lane| Direct::new(id, Lane::Native(lane)));
+                    next_attempt = Instant::now() + Duration::from_secs(10);
+                }
                 SetupEvent::Send(bytes) => {
                     if let Some((kind, id, data)) = decode(&bytes) {
                         if id != attempt || setup.is_none() {
@@ -2000,12 +2097,7 @@ async fn run(
                         }
                     }
                     if let Some(rtc) = rtc {
-                        let last_rx_progress = rtc.0.rx_progress();
-                        direct = Some(Direct {
-                            id, rtc, since: Instant::now(), active: false,
-                            ice_silent_since: None, last_rx_progress,
-                            first_sent: None, first_received: None, reported: false,
-                        });
+                        direct = Some(Direct::new(id, Lane::WebRtc(rtc)));
                     } else if offerer {
                         if current.mode == OfferMode::Lite && stage == CHECK_STAGE {
                             let reported = current.punch.as_ref().map(|p| *p.status.borrow());
@@ -2028,17 +2120,17 @@ async fn run(
             },
             _ = tick.tick() => {
                 #[cfg(test)]
-                if direct.is_some() && DROP_TEST_PATH.swap(false, std::sync::atomic::Ordering::AcqRel) {
+                if direct.as_ref().is_some_and(|d| matches!(d.lane, Lane::WebRtc(_))) && DROP_TEST_PATH.swap(false, std::sync::atomic::Ordering::AcqRel) {
                     relay_pending(&relay, &mut direct, &mut seq, &path, Some("test cut")).await?;
                 }
                 let now = Instant::now();
                 if let Some(d) = direct.as_mut() {
-                    let rx = d.rtc.0.rx_progress();
-                    let progressed = rx != d.last_rx_progress;
-                    d.last_rx_progress = rx;
-                    let ice_timeout = ice_stalled(
-                        &mut d.ice_silent_since, now, d.rtc.0.is_disconnected(), progressed,
-                    );
+                    let ice_timeout = if let Lane::WebRtc(rtc) = &d.lane {
+                        let rx = rtc.0.rx_progress();
+                        let progressed = rx != d.last_rx_progress;
+                        d.last_rx_progress = rx;
+                        ice_stalled(&mut d.ice_silent_since, now, rtc.0.is_disconnected(), progressed)
+                    } else { false };
                     let reason = if !d.active && now.duration_since(d.since) >= PATH_TIMEOUT {
                         Some("relay drain timed out")
                     } else if seq.pending.front().is_some_and(|p| now.duration_since(p.sent) >= PATH_TIMEOUT) {
@@ -2052,7 +2144,12 @@ async fn run(
                         relay_pending(&relay, &mut direct, &mut seq, &path, reason).await?;
                     }
                 }
-                if let Some(mode) = offer_mode {
+                if let Some(mode @ native::Mode::Call(..)) = &native {
+                    if direct.is_none() && now >= next_attempt && native_task.is_none() {
+                        attempt += 1;
+                        native_task = mode.start(attempt, event_tx.clone());
+                    }
+                } else if let Some(mode) = offer_mode {
                     if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
                         attempt += 1;
                         // Only an authenticated peer advertising the new capability can enter full mode.
@@ -2066,10 +2163,10 @@ async fn run(
         if let Some(direct) = direct.as_mut() {
             if !direct.active && seq.acked == seq.sent {
                 direct.active = true;
-                path.send_replace(true);
+                path.send_replace(Some(direct.lane.label()));
                 retries = RetrySchedule::default();
                 let relay_ms = first_relay_data.map(|start| start.elapsed().as_millis());
-                log::info!("Active RustDesk session switched to direct WebRTC; relayDataToSwitchMs={relay_ms:?} drainMs={}", direct.since.elapsed().as_millis());
+                log::info!("Active RustDesk session switched to direct {}; relayDataToSwitchMs={relay_ms:?} drainMs={}", direct.lane.label(), direct.since.elapsed().as_millis());
             }
             if direct.active && !direct.reported {
                 if let (Some(start), Some(tx), Some(rx)) = (first_relay_data, direct.first_sent, direct.first_received) {

@@ -358,6 +358,8 @@ type PeerConnection = (
 #[derive(Default)]
 struct DirectRetryPermission {
     direct_only: bool,
+    native_upgrade: bool,
+    punch_failed: OnceLock<()>,
     server_requires_direct: OnceLock<()>,
     checked: OnceLock<String>,
     permitted: OnceLock<String>,
@@ -519,7 +521,7 @@ async fn retry_tcp_punch_family(
 /// runs regardless. Only the switches decide that — a transport that is enabled but fails to
 /// materialize (no public v6 address, offerer setup error) leaves this alone, because the
 /// relay fallback already covers a round that ends up with no usable direct transport.
-fn tcp_punch_allowed() -> bool {
+pub(crate) fn tcp_punch_allowed() -> bool {
     crate::get_tcp_punch_enabled()
         || !(crate::get_udp_punch_enabled()
             || crate::get_ipv6_punch_enabled()
@@ -527,6 +529,31 @@ fn tcp_punch_allowed() -> bool {
 }
 
 impl Client {
+    fn native_path_dialer(interface: impl Interface, key: &str, token: &str,
+        original_pk: Option<Vec<u8>>, server: String) -> crate::live_direct::native::Dial {
+        let other_server = interface.get_lch().read().unwrap().other_server.clone();
+        let (peer, key, token) = match other_server {
+            Some((id, _, key)) => (id, key, String::new()),
+            None => (interface.get_id(), key.to_owned(), token.to_owned()),
+        };
+        Box::new(move || {
+            let (peer, key, token, server) = (peer.clone(), key.clone(), token.clone(), server.clone());
+            let (interface, original_pk) = (interface.clone(), original_pk.clone());
+            Box::pin(async move {
+                if interface.is_policy_relay() || !crate::live_direct::native::enabled() {
+                    bail!("Direct transport is disabled");
+                }
+                let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
+                let ((stream, direct, pk, kcp, label), _, _) = Self::start_via_rendezvous(
+                    &peer, &key, &token, ConnType::DEFAULT_CONN, interface, server, Vec::new(), true, &permission
+                ).await?;
+                if !direct || !stream.is_secured() || pk.is_none() || pk != original_pk {
+                    bail!("Native path does not match the authenticated session");
+                }
+                Ok((stream, kcp, label))
+            })
+        })
+    }
     const CLIENT_CLIPBOARD_NAME: &'static str = "client-clipboard";
 
     /// Start a new connection.
@@ -557,6 +584,7 @@ impl Client {
             direct_only: crate::direct_only_enabled(),
             ..Default::default()
         };
+        let mut retried_punch = false;
         let connection = loop {
             if permission.direct_only && interface.is_policy_relay() {
                 bail!("Direct-only mode conflicts with forced relay");
@@ -580,6 +608,14 @@ impl Client {
                     direct_only: true,
                     ..Default::default()
                 };
+                continue;
+            }
+            if permission.direct_only && !retried_punch
+                && matches!(&result, Err(err) if err.to_string() == DIRECT_ONLY_UNAVAILABLE)
+                && permission.punch_failed.get().is_some()
+            {
+                retried_punch = true;
+                permission = DirectRetryPermission { direct_only: true, ..Default::default() };
                 continue;
             }
             break result;
@@ -771,11 +807,12 @@ impl Client {
         // WebRTC uses its own ICE sockets and does not depend on the legacy UDP punch socket.
         // When this request carries an offer, `_start_inner` keeps its rendezvous socket solely
         // for trickle signaling; a separate offer-less request owns any TCP punch attempt.
-        let webrtc_offerer = if Self::should_create_webrtc_offerer(&interface) {
+        let webrtc_offerer = if !direct_permission.native_upgrade && Self::should_create_webrtc_offerer(&interface) {
             // ICE policy follows relay-by-POLICY, not force_relay: under WebSocket the
             // latter is set for the classic paths, but ICE opens its own sockets and may
             // still go direct - that is the only P2P path ws deployments have.
             let offer = if direct_permission.direct_only {
+                crate::p2p::observer_policy::prepare_direct_ice(&rendezvous_server, key).await;
                 WebRTCStream::new_direct_only("", CONNECT_TIMEOUT).await
             } else {
                 WebRTCStream::new("", interface.is_policy_relay(), CONNECT_TIMEOUT).await
@@ -1258,7 +1295,8 @@ impl Client {
         let authenticated_direct_offer = exchanged
             && socket.is_secured()
             && !interface.is_policy_relay()
-            && WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_offer);
+            && (WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_offer)
+                || WebRTCStream::endpoint_declares_direct_only(&webrtc_sdp_offer));
         // Every direct transport this round carries, not one of them: a round can carry several
         // at once (a NAT port and an offer and a v6 address), and since the TCP punch became a
         // switch it can carry none — a single name had to misreport both. `relay` is not a punch,
@@ -1289,7 +1327,7 @@ impl Client {
             conn_type: conn_type.into(),
             version: crate::VERSION.to_owned(),
             udp_port: udp_nat_port as _,
-            force_relay: interface.is_force_relay(),
+            force_relay: interface.is_force_relay() && !direct_permission.direct_only,
             direct_only: direct_permission.direct_only,
             socket_addr_v6: ipv6.1.unwrap_or_default(),
             switch_code,
@@ -1585,15 +1623,19 @@ impl Client {
                         // The ? / secure_connection failures below return early; webrtc_guard stays
                         // in scope and closes the offerer on any such exit (loss, error, cancellation).
                         let (mut conn, kcp, mut typ, mut direct) = race_result.map_err(|err| {
+                            if direct_only && webrtc_guard.is_some() {
+                                let _ = direct_permission.punch_failed.set(());
+                            }
                             if direct_only { anyhow!(DIRECT_ONLY_UNAVAILABLE) } else { err }
                         })?;
                         feedback = rr.feedback;
                         log::info!("{:?} used to establish {typ} connection", start.elapsed());
-                        let pk = match Self::secure_connection(
+                        let pk = match Self::secure_connection_for_path(
                             &peer,
                             signed_id_pk.clone(),
                             &key,
                             &mut conn,
+                            direct_permission.native_upgrade,
                         )
                         .await
                         {
@@ -1783,7 +1825,7 @@ impl Client {
                 webrtc_bridge_stop,
                 allow_tcp_punch,
                 &punch_type,
-                direct_permission.direct_only,
+                direct_permission,
             )
             .await?,
             (feedback, rendezvous_server),
@@ -1813,7 +1855,7 @@ impl Client {
         webrtc_bridge_stop: Option<oneshot::Sender<()>>,
         allow_tcp_punch: bool,
         punch_type: &str,
-        direct_only: bool,
+        direct_permission: &DirectRetryPermission,
     ) -> ResultType<(
         Stream,
         bool,
@@ -1824,11 +1866,14 @@ impl Client {
         // Guard the offerer for the whole of connect(): any early return — cancellation during the
         // awaits below, the relay override, or a secure_connection failure — closes its pc via the
         // guard's drop. Disarmed only once WebRTC is the confirmed winning, secured transport.
+        let direct_only = direct_permission.direct_only;
         let mut webrtc_guard = webrtc_offerer.map(OffererGuard::new);
         let direct_failures = interface.get_lch().read().unwrap().direct_failures;
         let mut connect_timeout = 0;
         const MIN: u64 = 1000;
-        if is_local || peer_nat_type == NatType::SYMMETRIC {
+        if direct_only {
+            connect_timeout = CONNECT_TIMEOUT;
+        } else if is_local || peer_nat_type == NatType::SYMMETRIC {
             connect_timeout = MIN;
         } else {
             if relay_server.is_empty() {
@@ -1921,6 +1966,7 @@ impl Client {
         // Prefer P2P: a direct result wins outright, a relayed WebRTC (TURN) is held for the
         // window so a direct punch can still land. Falls back to plain select_ok when only one
         // kind is present.
+        let attempted_direct = webrtc_fut.is_some() || !direct_futures.is_empty();
         let direct_result = match (webrtc_fut, direct_futures.is_empty()) {
             (Some(webrtc_fut), false) => {
                 race_transports_prefer_webrtc(
@@ -1951,6 +1997,9 @@ impl Client {
         // preferred outcome, not a violation.
         if (interface.is_force_relay() && typ != "WebRTC") || conn.is_err() {
             if direct_only {
+                if attempted_direct && conn.is_err() {
+                    let _ = direct_permission.punch_failed.set(());
+                }
                 bail!(DIRECT_ONLY_UNAVAILABLE);
             }
             if !relay_server.is_empty() {
@@ -1983,7 +2032,7 @@ impl Client {
             start.elapsed(),
             punch_type
         );
-        let res = Self::secure_connection(peer_id, signed_id_pk.clone(), key, &mut conn).await;
+        let res = Self::secure_connection_for_path(peer_id, signed_id_pk.clone(), key, &mut conn, direct_permission.native_upgrade).await;
         let pk: Option<Vec<u8>> = match res {
             Ok(pk) => pk,
             Err(e) if typ == "WebRTC" && !direct_only && !relay_server.is_empty() => {
@@ -2032,7 +2081,9 @@ impl Client {
             }
             Err(e) => {
                 // this direct is mainly used by on_establish_connection_error, so we update it here before bail
-                interface.update_direct(Some(direct));
+                if !direct_permission.native_upgrade {
+                    interface.update_direct(Some(direct));
+                }
                 // webrtc_guard is still armed here, so a WebRTC winner whose secure handshake
                 // failed is closed by the guard's drop as we bail (no explicit close needed).
                 bail!(e);
@@ -2063,6 +2114,12 @@ impl Client {
         signed_id_pk: Vec<u8>,
         key: &str,
         conn: &mut Stream,
+    ) -> ResultType<Option<Vec<u8>>> {
+        Self::secure_connection_for_path(peer_id, signed_id_pk, key, conn, false).await
+    }
+
+    async fn secure_connection_for_path(
+        peer_id: &str, signed_id_pk: Vec<u8>, key: &str, conn: &mut Stream, native_upgrade: bool,
     ) -> ResultType<Option<Vec<u8>>> {
         let rs_pk = get_rs_pk(if key.is_empty() {
             config::RS_PUB_KEY
@@ -2140,6 +2197,7 @@ impl Client {
                                     asymmetric_value: asymmetric_value.clone(),
                                     symmetric_value,
                                     kx_version: picked,
+                                    native_path_attachment: native_upgrade,
                                     ..Default::default()
                                 });
                                 timeout(CONNECT_TIMEOUT, conn.send(&msg_out)).await??;
@@ -6276,6 +6334,40 @@ mod tcp_family_tests;
 
 #[cfg(all(test, feature = "flutter"))]
 #[tokio::test]
+async fn strict_native_udp_waits_for_delayed_kcp_without_contacting_relay() {
+    let local = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let remote = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let (local_addr, remote_addr) = (local.local_addr().unwrap(), remote.local_addr().unwrap());
+    local.connect(remote_addr).await.unwrap();
+    remote.connect(local_addr).await.unwrap();
+    let hbbr = hbb_common::tcp::new_listener("127.0.0.1:0", false).await.unwrap();
+    let relay = hbbr.local_addr().unwrap().to_string();
+    let controlled = tokio::spawn(async move {
+        let first = crate::punch_udp(remote.clone(), true).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1700)).await;
+        let (_keep_kcp, mut stream) = KcpStream::accept(remote, Duration::from_secs(6), first).await.unwrap();
+        stream.next_timeout(3_000).await.unwrap().unwrap();
+        stream.send_raw(b"direct session".to_vec()).await.unwrap();
+        stream.next_timeout(3_000).await.unwrap().unwrap();
+    });
+    let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
+    let permission = DirectRetryPermission { direct_only: true, ..Default::default() };
+    let connect = Client::connect(local_addr, remote_addr, "123456789", Vec::new(), &relay, "", 1,
+        NatType::SYMMETRIC, 0, false, "", "", ConnType::DEFAULT_CONN, ui,
+        Some(local), None, None, None, false, "UDP", &permission);
+    let (mut stream, direct, _, _keep_kcp, protocol) = tokio::select! {
+        _ = hbbr.accept() => panic!("strict mode contacted hbbr"),
+        result = connect => result.unwrap(),
+    };
+    assert!(direct);
+    assert_eq!(protocol, "UDP");
+    assert_eq!(&stream.next_timeout(3_000).await.unwrap().unwrap()[..], b"direct session");
+    stream.send_raw(b"ack".to_vec()).await.unwrap();
+    controlled.await.unwrap();
+}
+
+#[cfg(all(test, feature = "flutter"))]
+#[tokio::test]
 async fn direct_only_declines_legacy_relay_without_contacting_hbbr() {
     use hbb_common::tcp::{new_listener, FramedStream};
     let hbbs = new_listener("127.0.0.1:0", false).await.unwrap();
@@ -6295,6 +6387,7 @@ async fn direct_only_declines_legacy_relay_without_contacting_hbbr() {
             };
             let mut reply = RendezvousMessage::new();
             if req.direct_only {
+                assert!(!req.force_relay, "WebSocket signaling must allow a direct-only offer");
                 reply.set_relay_response(RelayResponse {
                     relay_server,
                     uuid: Uuid::new_v4().to_string(),

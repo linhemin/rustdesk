@@ -91,6 +91,7 @@ pub struct ConnectionMeta {
     pub control_permissions: Option<ControlPermissions>,
     pub controlled_context: Option<ControlledContext>,
     pub direct_retry_permitted: bool,
+    pub relayed: bool,
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -229,11 +230,24 @@ pub async fn create_tcp_connection(
     };
     // Before the handshake, so its read is bounded too; lifted again at authorization.
     stream.set_max_packet_length(MAX_UNAUTHORIZED_MESSAGE);
-    tokio::select! {
+    let attach = tokio::select! {
         handshake = identity_handshake(&mut stream, secure) => handshake?,
         _ = unauthorized.evicted() => {
             bail!("evicted to make room for a newer unauthenticated connection");
         }
+    };
+    if attach {
+        if meta.relayed || !connection::ip_allowed(addr.ip()) || !crate::live_direct::native::enabled() {
+            bail!("Native direct path is not permitted");
+        }
+        let closed = tokio::select! {
+            result = timeout(4_000, crate::live_direct::native::accept(stream)) => result??,
+            _ = unauthorized.evicted() => bail!("Native path admission expired"),
+        };
+        drop(unauthorized);
+        // The calling UDP responder owns the KCP endpoint for the lifetime of this future.
+        let _ = closed.await;
+        return Ok(());
     }
 
     #[cfg(target_os = "macos")]
@@ -262,7 +276,7 @@ pub async fn create_tcp_connection(
 
 /// Our signed identity goes out and, when `secure`, the controller's reply keys `stream`.
 /// Separate so it can be raced against the connection's eviction.
-async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()> {
+async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<bool> {
     let (sk, pk) = Config::get_key_pair();
     if secure && pk.len() == sign::PUBLICKEYBYTES && sk.len() == sign::SECRETKEYBYTES {
         let mut sk_ = [0u8; sign::SECRETKEYBYTES];
@@ -332,6 +346,7 @@ async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()>
                                     picked: pk.kx_version,
                                 },
                             )?;
+                            return Ok(pk.native_path_attachment);
                         } else if pk.asymmetric_value.is_empty() {
                             Config::set_key_confirmed(false);
                             log::info!("Force to update pk");
@@ -351,7 +366,7 @@ async fn identity_handshake(stream: &mut Stream, secure: bool) -> ResultType<()>
         }
     }
 
-    Ok(())
+    Ok(false)
 }
 
 pub(crate) async fn accept_connection(
@@ -421,7 +436,7 @@ async fn create_relay_connection_(
         ..Default::default()
     });
     stream.send(&msg_out).await?;
-    create_tcp_connection(server, stream, peer_addr, secure, meta).await?;
+    create_tcp_connection(server, stream, peer_addr, secure, ConnectionMeta { relayed: true, ..meta }).await?;
     Ok(())
 }
 

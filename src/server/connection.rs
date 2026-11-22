@@ -537,6 +537,7 @@ impl Connection {
             control_permissions,
             controlled_context,
             direct_retry_permitted,
+            relayed: _,
         } = meta;
         // Android is not supported yet, so we always set control_permissions to None.
         #[cfg(target_os = "android")]
@@ -1041,6 +1042,18 @@ impl Connection {
                             Ok(bytes) => {
                                 last_recv_time = Instant::now();
                                 conn.session_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
+                                if bytes.as_ref() == crate::live_direct::native::START {
+                                    if !live_direct_started && conn.can_try_live_transport() && crate::live_direct::native::enabled() {
+                                        let listener = crate::live_direct::native::Listener::new();
+                                        if conn.stream.send_raw(listener.response()).await.is_err()
+                                            || crate::live_direct::wrap_native(&mut conn.stream, crate::live_direct::native::Mode::Listen(listener)).is_err() {
+                                            conn.on_close("Native path negotiation could not start", true).await;
+                                            break;
+                                        }
+                                        live_direct_started = true;
+                                    }
+                                    continue;
+                                }
                                 if bytes.as_ref() == crate::live_direct::START {
                                     if !live_direct_started && conn.can_try_live_direct() {
                                         if conn.stream.send_raw(crate::live_direct::ACCEPT.to_vec()).await.is_err()
@@ -1448,19 +1461,7 @@ impl Connection {
     }
 
     async fn check_whitelist(&mut self, addr: &SocketAddr) -> bool {
-        let whitelist = ip_whitelist_entries(&Config::get_option("whitelist"));
-        if !whitelist.is_empty()
-            && whitelist
-                .iter()
-                .filter(|x| x == &"0.0.0.0")
-                .next()
-                .is_none()
-            && whitelist
-                .iter()
-                .filter(|x| IpCidr::from_str(x).map_or(false, |y| y.contains(addr.ip())))
-                .next()
-                .is_none()
-        {
+        if !ip_allowed(addr.ip()) {
             self.send_login_error("Your ip is blocked by the peer")
                 .await;
             self.post_alarm_audit(
@@ -2062,6 +2063,10 @@ impl Connection {
         }
 
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        if self.can_try_live_transport() && crate::live_direct::native::enabled() {
+            platform_additions.insert(crate::live_direct::native::CAPABILITY.into(), json!(true));
+        }
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
             pi.platform_additions = serde_json::to_string(&platform_additions).unwrap_or("".into());
         }
@@ -2293,6 +2298,10 @@ impl Connection {
 
     #[inline]
     fn can_try_live_direct(&self) -> bool {
+        self.can_try_live_transport() && crate::live_direct::responder_enabled()
+    }
+
+    fn can_try_live_transport(&self) -> bool {
         self.authorized
             && self.direct_retry_permitted
             && self.file_transfer.is_none()
@@ -2300,7 +2309,6 @@ impl Connection {
             && !self.view_camera
             && !self.terminal
             && crate::live_direct::supported_transport(&self.stream)
-            && crate::live_direct::responder_enabled()
     }
 
     fn is_port_forward(&self) -> bool {
@@ -7291,6 +7299,12 @@ fn ip_whitelist_entries(option: &str) -> Vec<String> {
         .map(|x| x.trim().to_owned())
         .filter(|x| !x.is_empty())
         .collect()
+}
+
+pub(super) fn ip_allowed(ip: std::net::IpAddr) -> bool {
+    let entries = ip_whitelist_entries(&Config::get_option("whitelist"));
+    entries.is_empty() || entries.iter().any(|entry| entry == "0.0.0.0"
+        || IpCidr::from_str(entry).map_or(false, |cidr| cidr.contains(ip)))
 }
 
 #[cfg(test)]

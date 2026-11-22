@@ -115,6 +115,7 @@ struct ParsedPeerInfo {
     support_view_camera: bool,
     support_terminal: bool,
     live_direct: bool,
+    live_native: bool,
     live_direct_trickle: bool,
     live_direct_punch: bool,
     live_direct_timed: bool,
@@ -194,6 +195,7 @@ impl<T: InvokeUiSession> Remote<T> {
 
         // Capabilities must come from this connection's authenticated PeerInfo.
         self.peer_info.live_direct = false;
+        self.peer_info.live_native = false;
         self.peer_info.live_direct_trickle = false;
         self.peer_info.live_direct_punch = false;
         self.video_delivery = Default::default();
@@ -232,6 +234,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     .set_connected();
                 let is_secured = peer.is_secured();
                 let peer_verified = pk.is_some();
+                let session_pk = pk.clone();
                 let trust = crate::trusted_devices::client::Session::new(
                     &self.handler.lc.read().unwrap(),
                     is_secured,
@@ -310,6 +313,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 // Query once, only after this peer advertises live upgrades, alongside
                 // the ordinary session traffic. Older hbbs versions give no signed grant.
                 let policy_server = rendezvous_server.clone();
+                let native_server = rendezvous_server.clone();
                 let policy_key = self.handler.get_lch().read().unwrap().other_server
                     .as_ref().map(|(_, _, key)| key.clone())
                     .unwrap_or_else(|| key.to_owned());
@@ -332,27 +336,34 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut webrtc_suspect_since: Option<Instant> = None;
                 let mut last_rx_progress = peer.rx_progress();
                 let mut peer_gone = false;
+                let rtc_enabled = crate::live_direct::enabled();
+                let native_enabled = crate::live_direct::native::enabled();
                 let eligible_live_direct = !direct
                     && crate::live_direct::supported_transport(&peer)
                     && peer_verified
                     && conn_type == ConnType::DEFAULT_CONN
                     && !self.handler.is_policy_relay()
-                    && crate::live_direct::enabled();
+                    && (rtc_enabled || native_enabled);
                 let mut allow_live_direct =
                     eligible_live_direct && direct_retry_permitted == Some(true);
                 let mut check_live_permission = eligible_live_direct && direct_retry_permitted.is_none();
                 let mut waiting_for_live_direct = false;
+                let mut waiting_for_native = false;
                 let mut live_path = None;
 
                 loop {
-                    if allow_live_direct && self.peer_info.live_direct {
+                    let rtc_upgrade = self.peer_info.live_direct && rtc_enabled;
+                    let native_upgrade = self.peer_info.live_native && native_enabled;
+                    if allow_live_direct && (rtc_upgrade || native_upgrade) {
                         allow_live_direct = false;
-                        if peer.send_raw(crate::live_direct::START.to_vec()).await.is_ok() {
-                            waiting_for_live_direct = true;
+                        let start = if rtc_upgrade { crate::live_direct::START } else { crate::live_direct::native::START };
+                        if peer.send_raw(start.to_vec()).await.is_ok() {
+                            waiting_for_live_direct = rtc_upgrade;
+                            waiting_for_native = !rtc_upgrade;
                         }
                     }
                     tokio::select! {
-                        allowed = &mut check_permission, if check_live_permission && self.peer_info.live_direct => {
+                        allowed = &mut check_permission, if check_live_permission && (rtc_upgrade || native_upgrade) => {
                             check_live_permission = false;
                             allow_live_direct = allowed;
                         }
@@ -365,6 +376,22 @@ impl<T: InvokeUiSession> Remote<T> {
                                     }
                                     Ok(ref bytes) => {
                                         last_recv_time = Instant::now();
+                                        if waiting_for_native {
+                                            if let Some(ticket) = bytes.strip_prefix(crate::live_direct::native::ACCEPT)
+                                                .and_then(|raw| <[u8; 32]>::try_from(raw).ok()) {
+                                                waiting_for_native = false;
+                                                let dial = Client::native_path_dialer(self.handler.clone(), key, token, session_pk.clone(), native_server.clone());
+                                                let mode = crate::live_direct::native::Mode::Call(ticket, dial);
+                                                match crate::live_direct::wrap_native(&mut peer, mode) {
+                                                    Ok(path) => live_path = Some(path),
+                                                    Err(err) => {
+                                                        log::error!("Could not start native direct session: {err}");
+                                                        break;
+                                                    }
+                                                }
+                                                continue;
+                                            }
+                                        }
                                         if waiting_for_live_direct && bytes.as_ref() == crate::live_direct::ACCEPT {
                                             waiting_for_live_direct = false;
                                             let role = crate::live_direct::Role::offerer(
@@ -405,10 +432,10 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         path = crate::live_direct::next_path(&mut live_path) => {
-                            if let Some(direct) = path {
-                                self.handler.update_direct(Some(direct));
+                            if let Some(transport) = path {
+                                self.handler.update_direct(Some(transport.is_some()));
                                 self.handler.set_connection_type(
-                                    true, direct, if direct { "WebRTC" } else { stream_type },
+                                    true, transport.is_some(), transport.unwrap_or(stream_type),
                                 );
                             } else {
                                 live_path = None;
@@ -2731,6 +2758,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 .get(crate::live_direct::CAPABILITY)
                 .and_then(serde_json::Value::as_bool)
                 == Some(true);
+            self.peer_info.live_native = platform_additions
+                .get(crate::live_direct::native::CAPABILITY).and_then(serde_json::Value::as_bool) == Some(true);
             self.peer_info.live_direct_trickle = platform_additions
                 .get(crate::live_direct::TRICKLE_CAPABILITY)
                 .and_then(serde_json::Value::as_bool)

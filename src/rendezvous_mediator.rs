@@ -47,6 +47,7 @@ fn connection_meta(
         control_permissions,
         controlled_context,
         direct_retry_permitted: false,
+        relayed: false,
     }
 }
 
@@ -765,7 +766,8 @@ impl RendezvousMediator {
         // socket since the failed exchange may have consumed a message on this one, and the
         // controller falls back to its other transports.
         let mut webrtc_sdp_answer = webrtc_sdp_answer;
-        let eligible = secure && !force_relay && !use_ws() && crate::live_direct::responder_enabled();
+        let eligible = secure && !force_relay && !use_ws()
+            && (crate::live_direct::responder_enabled() || crate::live_direct::native::enabled());
         let carries_answer = !webrtc_sdp_answer.is_empty();
         let mut signed_grant = false;
         if carries_answer || eligible {
@@ -1032,6 +1034,9 @@ impl RendezvousMediator {
             );
             return Ok(String::new());
         };
+        if WebRTCStream::endpoint_declares_direct_only(&ph.webrtc_sdp_offer) {
+            crate::p2p::observer_policy::prepare_direct_ice(&self.host, &crate::get_key(true).await).await;
+        }
         let mut stream =
             WebRTCStream::new(&ph.webrtc_sdp_offer, relay_only_ice, CONNECT_TIMEOUT).await?;
         let answer = stream.local_endpoint().to_owned();
@@ -1256,8 +1261,8 @@ impl RendezvousMediator {
         // let ordinary relay traffic use the pool up. The v6 punch is not relayed with them - a
         // symmetric NAT on v4 says nothing about v6 - and its place is taken after the v4 one,
         // or it could be the last and leave the punch the peer counts on with none.
-        let relay_v4 = ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC)
-            || Config::get_nat_type() == NatType::SYMMETRIC as i32
+        let relay_v4 = (!direct_only && (ph.nat_type.enum_value() == Ok(NatType::SYMMETRIC)
+            || Config::get_nat_type() == NatType::SYMMETRIC as i32))
             || relay
             || (config::is_disable_tcp_listen() && ph.udp_port <= 0);
         let punch_udp = !relay_v4 && ph.udp_port > 0;
