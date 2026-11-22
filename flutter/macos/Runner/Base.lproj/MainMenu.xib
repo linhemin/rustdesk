@@ -33,7 +33,8 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="VOq-y0-SEH"/>
-                            <menuItem title="Settings…" keyEquivalent="," id="BOF-NM-1cW">
+                            <menuItem title="Settings…" id="BOF-NM-1cW">
+                                <modifierMask key="keyEquivalentModifierMask" command="YES"/>
                                 <connections>
                                     <action selector="openWorkspaceSettings:" target="QvC-M9-y7g" id="tPQ-SH-zm9"/>
                                 </connections>
@@ -342,6 +343,9 @@
                 <rect key="frame" x="0.0" y="0.0" width="800" height="600"/>
                 <autoresizingMask key="autoresizingMask"/>
             </view>
+            <connections>
+                <outlet property="settingsMenuItem" destination="BOF-NM-1cW" id="phj-Yl-XM9"/>
+            </connections>
         </window>
     </objects>
 </document>

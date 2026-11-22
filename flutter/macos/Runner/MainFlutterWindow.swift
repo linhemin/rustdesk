@@ -36,8 +36,11 @@ class RelativeMouseState {
 }
 
 class MainFlutterWindow: NSWindow {
+    @IBOutlet private weak var settingsMenuItem: NSMenuItem?
     private var settingsMenuChannel: FlutterMethodChannel?
-    private var settingsMenuAvailable = false
+    private var settingsMenuAvailable = false {
+        didSet { updateSettingsShortcut(keyWindow: isKeyWindow) }
+    }
     private static let fullscreenWorkAreaSizes = NSMapTable<NSWindow, NSValue>(
         keyOptions: [.weakMemory, .objectPointerPersonality],
         valueOptions: .strongMemory
@@ -108,6 +111,21 @@ class MainFlutterWindow: NSWindow {
     override public func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         super.order(place, relativeTo: otherWin)
         hiddenWindowAtLaunch()
+    }
+
+    override func becomeKey() {
+        super.becomeKey()
+        updateSettingsShortcut(keyWindow: true)
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        updateSettingsShortcut(keyWindow: false)
+    }
+
+    private func updateSettingsShortcut(keyWindow: Bool) {
+        // AppKit consumes a matching shortcut even when its menu item is disabled.
+        settingsMenuItem?.keyEquivalent = keyWindow && settingsMenuAvailable ? "," : ""
     }
 
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
