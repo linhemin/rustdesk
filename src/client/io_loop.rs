@@ -380,7 +380,7 @@ impl<T: InvokeUiSession> Remote<T> {
                                             if let Some(ticket) = bytes.strip_prefix(crate::live_direct::native::ACCEPT)
                                                 .and_then(|raw| <[u8; 32]>::try_from(raw).ok()) {
                                                 waiting_for_native = false;
-                                                let dial = Client::native_path_dialer(self.handler.clone(), key, token, session_pk.clone(), native_server.clone());
+                                                let dial = Client::native_path_dialer(self.handler.clone(), key, token, session_pk.clone(), native_server.clone(), stream_type == "QUIC");
                                                 let mode = crate::live_direct::native::Mode::Call(ticket, dial);
                                                 match crate::live_direct::wrap_native(&mut peer, mode) {
                                                     Ok(path) => live_path = Some(path),

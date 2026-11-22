@@ -95,6 +95,7 @@ pub use super::lang::*;
 
 mod login_method;
 mod path_rtt;
+mod transport_preference;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
@@ -358,6 +359,7 @@ type PeerConnection = (
 struct DirectRetryPermission {
     direct_only: bool,
     native_upgrade: bool,
+    udp_upgrade_only: bool,
     punch_failed: OnceLock<()>,
     server_requires_direct: OnceLock<()>,
     checked: OnceLock<String>,
@@ -529,7 +531,7 @@ pub(crate) fn tcp_punch_allowed() -> bool {
 
 impl Client {
     fn native_path_dialer(interface: impl Interface, key: &str, token: &str,
-        original_pk: Option<Vec<u8>>, server: String) -> crate::live_direct::native::Dial {
+        original_pk: Option<Vec<u8>>, server: String, udp_upgrade_only: bool) -> crate::live_direct::native::Dial {
         let other_server = interface.get_lch().read().unwrap().other_server.clone();
         let (peer, key, token) = match other_server {
             Some((id, _, key)) => (id, key, String::new()),
@@ -542,7 +544,7 @@ impl Client {
                 if interface.is_policy_relay() || !crate::live_direct::native::enabled() {
                     bail!("Direct transport is disabled");
                 }
-                let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
+                let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only, ..Default::default() };
                 let ((stream, direct, pk, kcp, label), _, _) = Self::start_via_rendezvous(
                     &peer, &key, &token, ConnType::DEFAULT_CONN, interface, server, Vec::new(), true, &permission
                 ).await?;
@@ -727,6 +729,11 @@ impl Client {
             direct_permission,
         );
         if let Some((iface, server)) = lan.zip(lan_server) {
+            if !crate::is_udp_disabled() && (crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() || crate::get_webrtc_enabled()) {
+                let lan = Self::probe_lan(peer, key, token, &server, iface, direct_permission);
+                return transport_preference::choose([existing.boxed(), lan.boxed()], Self::udp_preference_window(),
+                    |path| transport_preference::rank(path.0.4, path.0.1)).await;
+            }
             let (mut lan, alternate) = prefer_lan_connection(
                 Self::probe_lan(peer, key, token, &server, iface, direct_permission),
                 existing,
@@ -867,7 +874,7 @@ impl Client {
         // relay.
         if interface.is_force_relay()
             || (udp.0.is_none() && !has_webrtc_offerer)
-            || !tcp_punch_allowed()
+            || !tcp_punch_allowed() || direct_permission.udp_upgrade_only
         {
             return fut.await;
         }
@@ -892,11 +899,10 @@ impl Client {
             direct_permission,
         )
         .boxed();
-        race_transports_prefer_webrtc(
-            preferred_fut,
-            vec![fallback_fut],
-            Self::relay_fallback_delay_ms(),
-            |result| result.0 .1,
+        transport_preference::choose(
+            [preferred_fut, fallback_fut],
+            Self::udp_preference_window(),
+            |result| transport_preference::rank(result.0.4, result.0.1),
         )
         .await
     }
@@ -997,6 +1003,10 @@ impl Client {
             Ok(secs) if secs.is_finite() && secs > 0.0 => (secs * 1000.0).round() as u64,
             _ => Self::RELAY_FALLBACK_DELAY_MS,
         }
+    }
+
+    fn udp_preference_window() -> Duration {
+        Duration::from_millis(Self::relay_fallback_delay_ms().max(3_000))
     }
 
     /// UDP-NAT-test wait when the TCP clock is implausible (see TCP_RTT_PLAUSIBLE_MIN). The
@@ -1326,7 +1336,9 @@ impl Client {
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
-        let mut allow_tcp_punch = tcp_punch_allowed() && request_allows_tcp_punch(&webrtc_sdp_offer);
+        let mut allow_tcp_punch = tcp_punch_allowed() && !direct_permission.udp_upgrade_only
+            && request_allows_tcp_punch(&webrtc_sdp_offer)
+            && (udp_nat_port == 0 || interface.is_force_relay());
         let mut family_retry_available = allow_tcp_punch
             && !interface.is_force_relay()
             && !Config::is_proxy()
@@ -1646,32 +1658,19 @@ impl Client {
                                 Ok((Stream::WebRTC(raced), None, "WebRTC", !relayed))
                             }
                             .boxed();
-                            if direct_only || interface.is_policy_relay() {
-                                // Relay-only WebRTC can use only TURN, so it has no P2P advantage
-                                // over the RustDesk relay. Take the first successful relay instead
-                                // of delaying an already-ready result for the preference window.
-                                // Policy, not force_relay: under ws the offer is full ICE and a
-                                // direct path is exactly what the preference window exists for.
-                                connect_futures.push(webrtc_fut);
-                                select_ok(connect_futures).await.map(|r| r.0)
-                            } else {
-                                // The peer answered WebRTC: prefer P2P. The relay result is held
-                                // for the preference window so WebRTC can win even though a relay
-                                // TCP connect completes much faster than ICE + DTLS setup.
-                                race_transports_prefer_webrtc(
-                                    webrtc_fut,
-                                    connect_futures,
-                                    Self::relay_fallback_delay_ms(),
-                                    |result| result.3,
-                                )
-                                .await
-                            }
+                            let relay_only = interface.is_policy_relay();
+                            connect_futures.push(webrtc_fut);
+                            transport_preference::choose(connect_futures, Self::udp_preference_window(), |path| {
+                                let rank = transport_preference::rank(path.2, path.3);
+                                // Under a relay-only policy UDP relay is the best legal outcome.
+                                if relay_only && rank == transport_preference::Rank::UdpRelay {
+                                    transport_preference::Rank::UdpDirect
+                                } else { rank }
+                            }).await
                         } else {
-                            if connect_futures.is_empty() {
-                                bail!(DIRECT_ONLY_UNAVAILABLE);
-                            }
-                            // Run all connection attempts concurrently, take the first success.
-                            select_ok(connect_futures).await.map(|r| r.0)
+                            if connect_futures.is_empty() { bail!(DIRECT_ONLY_UNAVAILABLE); }
+                            transport_preference::choose(connect_futures, Self::udp_preference_window(),
+                                |path| transport_preference::rank(path.2, path.3)).await
                         };
                         if let Some(stop) = webrtc_bridge_stop {
                             let _ = stop.send(());
@@ -2033,13 +2032,9 @@ impl Client {
         let mut preverified = None;
         let direct_result = match (webrtc_fut, direct_futures.is_empty()) {
             (Some(webrtc_fut), false) => {
-                race_transports_prefer_webrtc(
-                    webrtc_fut,
-                    direct_futures,
-                    Self::relay_fallback_delay_ms(),
-                    |r| r.3,
-                )
-                .await
+                direct_futures.push(webrtc_fut);
+                transport_preference::choose(direct_futures, Self::udp_preference_window(),
+                    |path| transport_preference::rank(path.2, path.3)).await
             }
             (Some(webrtc_fut), true) => webrtc_fut.await,
             (None, false) if direct_permission.native_upgrade && !interface.is_force_relay() && direct_futures.len() > 1 => {
@@ -2049,12 +2044,14 @@ impl Client {
                     let pk = Self::authenticate_path(peer_id, signed, key, &mut conn, true, typ).await?;
                     Ok(((conn, kcp, typ, direct), pk))
                 }.boxed());
-                select_ok(checks).await.map(|((path, pk), _)| {
+                transport_preference::choose(checks, Self::udp_preference_window(),
+                    |(path, _)| transport_preference::rank(path.2, path.3)).await.map(|(path, pk)| {
                     preverified = Some(pk);
                     path
                 })
             }
-            (None, false) => select_ok(direct_futures).await.map(|c| c.0),
+            (None, false) => transport_preference::choose(direct_futures, Self::udp_preference_window(),
+                |path| transport_preference::rank(path.2, path.3)).await,
             (None, true) => Err(anyhow!("No direct transport available")),
         };
         let (mut conn, kcp, mut typ, mut direct) = match direct_result {
@@ -2107,6 +2104,37 @@ impl Client {
             start.elapsed(),
             punch_type
         );
+        #[cfg(feature = "udp-relay")]
+        if direct && typ == "TCP" && !direct_only && !relay_server.is_empty() && !signed_id_pk.is_empty() {
+            let signed = &signed_id_pk;
+            let switch = interface.get_switch_code();
+            let udp = async {
+                let endpoint = check_port(relay_server, RELAY_PORT);
+                let mut stream = crate::p2p::relay::connect_udp(&endpoint, key).await
+                    .ok_or_else(|| anyhow!("UDP relay unavailable"))?;
+                let (uuid, _) = Self::relay_pair_id(peer_id, relay_server, rendezvous_server, true, key, token, &switch).await?;
+                Self::join_relay(&mut stream, peer_id, uuid, key, conn_type).await?;
+                let pk = Self::secure_connection(peer_id, signed.to_vec(), key, &mut stream).await?;
+                if pk.is_none() || !stream.is_secured() { bail!("Unverified relay peer"); }
+                Ok((stream, pk, "QUIC"))
+            };
+            let tcp = async move {
+                let pk = Self::authenticate_path(peer_id, signed, key, &mut conn, false, "TCP").await?;
+                Ok((conn, pk, "TCP"))
+            };
+            match race_transports_prefer_webrtc(udp.boxed(), vec![tcp.boxed()],
+                Self::udp_preference_window().as_millis() as u64, |p| p.2 == "QUIC").await {
+                Ok((stream, pk, transport)) => return Ok((stream, transport == "TCP", pk, None, transport)),
+                Err(err) => {
+                    // Both attempts failed. The normal relay negotiation can still use TCP.
+                    let (mut fallback, label) = Self::request_relay(peer_id, relay_server.to_owned(), rendezvous_server,
+                        true, key, token, conn_type, &interface.get_switch_code()).await
+                        .with_context(|| format!("Direct TCP and UDP relay failed: {err}"))?;
+                    let pk = Self::secure_connection(peer_id, signed_id_pk, key, &mut fallback).await?;
+                    return Ok((fallback, false, pk, None, label));
+                }
+            }
+        }
         let res = match preverified {
             Some(pk) if direct => Ok(pk),
             _ => Self::authenticate_path(peer_id, &signed_id_pk, key, &mut conn, direct_permission.native_upgrade, typ).await,
@@ -6520,7 +6548,7 @@ async fn relay_session_attaches_a_rendezvous_tcp_punch_without_webrtc() {
     let _receiver = wrap_native(&mut b, native::Mode::Listen(listener)).unwrap();
     let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
     ui.lc.write().unwrap().id = id;
-    let dial = Client::native_path_dialer(ui, &crate::encode64(authority.0), "", Some(identity), server);
+    let dial = Client::native_path_dialer(ui, &crate::encode64(authority.0), "", Some(identity), server, false);
     let mut path = wrap_native(&mut a, native::Mode::Call(ticket, dial)).unwrap();
     timeout(20_000, path.changed()).await.unwrap().unwrap();
     assert_eq!(*path.borrow(), Some("TCP"));
