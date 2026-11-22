@@ -406,9 +406,10 @@ struct AwesunVirtualMouseView: View {
                     smallButton(.wheelTop).offset(y: -AwesunControlLayout.wheelOffset)
                         .accessibilityLabel("滑动滚轮")
                         .accessibilityAction { model.scroll(1, at: pointer) }
+                        .accessibilityAction(named: Text("打开圆形滚轮")) { model.openWheel() }
                     smallButton(.wheelBottom).offset(y: AwesunControlLayout.wheelOffset)
-                        .accessibilityLabel("打开圆形滚轮")
-                        .accessibilityAction { model.openWheel() }
+                        .accessibilityLabel("鼠标中键")
+                        .accessibilityAction { model.click("middle", at: pointer) }
                 }
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))

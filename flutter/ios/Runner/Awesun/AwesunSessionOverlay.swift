@@ -431,7 +431,7 @@ private final class AwesunMouseInput: UIView {
             if !model.wheelOpen { model.scroll(1, at: target) }
         case .wheelBottom:
             model.haptic()
-            model.openWheel()
+            model.click("middle", at: target)
         case .close:
             model.closeWheelOrMouse()
         default:
