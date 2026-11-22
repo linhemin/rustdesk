@@ -9,7 +9,7 @@ import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_test/flutter_test.dart' hide isWindows, isMacOS;
 import 'package:provider/provider.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
@@ -97,6 +97,21 @@ void main() {
     await mount(devicesOnly: true);
     expect(peerCardUiType.value, PeerUiType.grid);
     expect(find.byIcon(Icons.desktop_mac_outlined), findsNothing);
+    if (isWindows || isMacOS) {
+      await tester.tap(find.byTooltip('Search'));
+      await settle();
+      final search = find.byType(TextField);
+      await tester.enterText(search, 'not a sample device');
+      await settle();
+      expect(find.text('Empty'), findsOneWidget);
+      expect(find.text('Studio Mac'), findsNothing);
+      await tester.enterText(search, 'Studio');
+      await settle();
+      expect(find.text('Empty'), findsNothing);
+      expect(find.text('Studio Mac'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await settle();
+    }
     await mount();
     expect(find.byIcon(Icons.desktop_mac_outlined), findsOneWidget);
     await tester.pumpWidget(const SizedBox());

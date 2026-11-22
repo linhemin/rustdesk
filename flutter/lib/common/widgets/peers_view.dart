@@ -302,6 +302,19 @@ class _PeersViewState extends State<_PeersView>
               _curPeers.addAll(peers.map((e) => e.id));
               _queryOnlines(true);
             }
+            if ((isWindows || isMacOS) &&
+                peers.isEmpty &&
+                filters[0].value.trim().isNotEmpty) {
+              return Center(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.search_off_rounded,
+                    size: 18, color: Theme.of(context).hintColor),
+                const SizedBox(width: 8),
+                Flexible(
+                    child: Text(translate('Empty'),
+                        style: Theme.of(context).textTheme.bodyMedium)),
+              ]));
+            }
             if (compact) {
               return ListView.separated(
                   controller: _scrollController,

@@ -10,6 +10,8 @@ import 'package:percent_indicator/percent_indicator.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/desktop.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:flutter_hbb/desktop/widgets/list_search_action_listener.dart';
@@ -381,6 +383,29 @@ class _FileManagerPageState extends State<FileManagerPage>
           itemCount: jobController.jobTable.length,
         );
 
+    if (isWindows || isMacOS) {
+      return PreferredSize(
+        preferredSize: const Size(200, double.infinity),
+        child: TransferPane(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            TransferPaneHeading(
+              leading:
+                  const WorkspaceIcon(icon: Icons.swap_horiz_rounded, size: 36),
+              title: translate('Transfer file'),
+            ),
+            Expanded(
+              child: Obx(
+                () => jobController.jobTable.isEmpty
+                    ? TransferEmptyState(
+                        message: translate('No transfers in progress'))
+                    : statusListView(jobController.jobTable),
+              ),
+            ),
+          ]),
+        ),
+      );
+    }
     return PreferredSize(
       preferredSize: const Size(200, double.infinity),
       child: Container(
@@ -494,14 +519,11 @@ class _FileManagerViewState extends State<FileManagerView> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, bounds) {
       final nativeWorkspace = isWindows || isMacOS;
-      final available = nativeWorkspace ? max(1.0, bounds.maxWidth - 40) : MediaQuery.sizeOf(context).width;
+      final available = nativeWorkspace
+          ? max(1.0, bounds.maxWidth - 40)
+          : MediaQuery.sizeOf(context).width;
       _handleColumnPorportions(available, nativeWorkspace: nativeWorkspace);
-      return Container(
-      margin: const EdgeInsets.all(8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: Theme.of(context).cardColor,
-        border: Border.all(color: Theme.of(context).dividerColor), borderRadius: BorderRadius.circular(12)),
-      child: Column(
+      final content = Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           headTools(),
@@ -530,7 +552,18 @@ class _FileManagerViewState extends State<FileManagerView> {
             ),
           ),
         ],
-      ),
+      );
+      if (nativeWorkspace) {
+        return TransferPane(padding: const EdgeInsets.all(12), child: content);
+      }
+      return Container(
+        margin: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            border: Border.all(color: Theme.of(context).dividerColor),
+            borderRadius: BorderRadius.circular(12)),
+        child: content,
       );
     });
   }
@@ -571,47 +604,39 @@ class _FileManagerViewState extends State<FileManagerView> {
     var uploadButtonTapPosition = RelativeRect.fill;
     RxBool isUploadFolder =
         (bind.mainGetLocalOption(key: 'upload-folder-button') == 'Y').obs;
+    final native = isWindows || isMacOS;
+    final label = translate(isLocal ? 'Local Computer' : 'Remote Computer');
+    final platform = Container(
+      width: native ? 40 : 34,
+      height: native ? 40 : 34,
+      decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8), color: MyTheme.accent),
+      padding: const EdgeInsets.all(8),
+      child: FutureBuilder<String>(
+        future: bind.sessionGetPlatform(
+            sessionId: _ffi.sessionId, isRemote: !isLocal),
+        builder: (context, snapshot) =>
+            snapshot.hasData && snapshot.data!.isNotEmpty
+                ? getPlatformImage(snapshot.data!)
+                : CircularProgressIndicator(
+                    color: Theme.of(context).tabBarTheme.labelColor),
+      ),
+    );
     return Container(
       child: Column(
         children: [
-          // symbols
-          PreferredSize(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.all(Radius.circular(8)),
-                            color: MyTheme.accent,
-                          ),
-                          padding: EdgeInsets.all(8.0),
-                          child: FutureBuilder<String>(
-                              future: bind.sessionGetPlatform(
-                                  sessionId: _ffi.sessionId,
-                                  isRemote: !isLocal),
-                              builder: (context, snapshot) {
-                                if (snapshot.hasData &&
-                                    snapshot.data!.isNotEmpty) {
-                                  return getPlatformImage('${snapshot.data}');
-                                } else {
-                                  return CircularProgressIndicator(
-                                    color: Theme.of(context)
-                                        .tabBarTheme
-                                        .labelColor,
-                                  );
-                                }
-                              })),
-                      Expanded(child: Text(isLocal
-                              ? translate("Local Computer")
-                              : translate("Remote Computer"),
-                          style: Theme.of(context).textTheme.titleMedium)
-                          .marginOnly(left: 8.0))
-                    ],
-                  ),
-                  preferredSize: Size(double.infinity, 70))
-              .paddingOnly(bottom: 8),
+          if (native)
+            TransferPaneHeading(leading: platform, title: label)
+          else
+            Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(children: [
+                  platform,
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(label,
+                          style: Theme.of(context).textTheme.titleMedium)),
+                ])),
           // buttons
           Row(
             children: [
@@ -1551,7 +1576,12 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   Widget _buildFileBrowserHeader(BuildContext context) {
     final padding = EdgeInsets.all(1.0);
-    return SizedBox(
+    return Container(
+      decoration: isWindows || isMacOS
+          ? BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              borderRadius: BorderRadius.circular(8))
+          : null,
       key: _globalHeaderKey,
       height: kDesktopFileTransferHeaderHeight,
       child: Row(
