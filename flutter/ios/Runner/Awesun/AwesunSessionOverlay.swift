@@ -186,7 +186,7 @@ private final class AwesunTouchSurface: UIView {
 
     required init?(coder: NSCoder) { nil }
 
-    private var mouseAvailable: Bool {
+    fileprivate var mouseAvailable: Bool {
         model.active && !model.functionsOpen && (model.sheet == nil || model.isKeyboardPanel)
     }
 
@@ -206,10 +206,11 @@ private final class AwesunTouchSurface: UIView {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if !isHidden && isUserInteractionEnabled && bounds.contains(point) &&
-            mouseAvailable && point.y < mouseArea.height && !floatingControl(at: point),
-            AwesunControlLayout.mouseRegion(point, model: model, size: bounds.size) != nil {
-            if mouseInput.canStart { return mouseInput }
-            return nil
+            mouseAvailable && point.y < mouseArea.height && !floatingControl(at: point) {
+            if mouseInput.ownsCanvasTouches { return mouseInput }
+            if AwesunControlLayout.mouseRegion(point, model: model, size: bounds.size) != nil {
+                return mouseInput.canStart ? mouseInput : nil
+            }
         }
         return super.hitTest(point, with: event)
     }
@@ -234,6 +235,8 @@ private final class AwesunTouchSurface: UIView {
 private final class AwesunMouseInput: UIView {
     private weak var surface: AwesunTouchSurface?
     private var contact: UITouch?
+    private var canvasContact: UITouch?
+    private var canvasPrevious: CGPoint = .zero
     private var region: AwesunMouseRegion?
     private var start: CGPoint = .zero
     private var startingHub: CGRect = .zero
@@ -244,6 +247,11 @@ private final class AwesunMouseInput: UIView {
     private var wheelRemainder = 0.0
     private var panTimer: Timer?
     private let panInterval: TimeInterval = 1.0 / 30.0
+    private enum PanTravel {
+        case outward(peak: CGFloat)
+        case braked(low: CGFloat)
+    }
+    private var panTravel = PanTravel.outward(peak: 0)
 
     init(surface: AwesunTouchSurface) {
         self.surface = surface
@@ -253,10 +261,13 @@ private final class AwesunMouseInput: UIView {
 
     required init?(coder: NSCoder) { nil }
 
-    // The surface routes only the drawn controls here. Other touches reach Flutter.
+    // The surface assigns touches; this full-screen view does not claim them on its own.
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool { false }
 
     var canStart: Bool { contact == nil }
+    var ownsCanvasTouches: Bool {
+        (region == .hub || region == .left) && surface?.model.displayLocked == false
+    }
 
     private func geometry(_ surface: AwesunTouchSurface, center: CGPoint? = nil) -> AwesunMouseGeometry {
         AwesunControlLayout.mouseGeometry(center ?? surface.model.mouseAnchor, in: bounds.size,
@@ -273,10 +284,31 @@ private final class AwesunMouseInput: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard contact == nil, let touch = touches.first, let surface = surface else { return }
-        let point = touch.location(in: self)
-        guard let hit = AwesunControlLayout.mouseRegion(point, model: surface.model, size: bounds.size)
-        else { return }
+        guard let surface = surface else { return }
+        if contact == nil {
+            for touch in touches {
+                let point = touch.location(in: self)
+                if let hit = AwesunControlLayout.mouseRegion(point, model: surface.model, size: bounds.size) {
+                    beginMouseContact(touch, at: point, hit: hit, surface: surface)
+                    break
+                }
+            }
+        }
+        if ownsCanvasTouches, canvasContact == nil, let other = touches.first(where: {
+            $0 !== contact && AwesunControlLayout.mouseRegion(
+                $0.location(in: self), model: surface.model, size: bounds.size) == nil
+        }) {
+            canvasContact = other
+            canvasPrevious = other.location(in: self)
+            moved = true
+            hubTap?.cancel()
+            hubTap = nil
+            stopPanning(interruptCanvas: true)
+        }
+    }
+
+    private func beginMouseContact(_ touch: UITouch, at point: CGPoint, hit: AwesunMouseRegion,
+                                   surface: AwesunTouchSurface) {
         contact = touch
         region = hit
         start = point
@@ -284,7 +316,9 @@ private final class AwesunMouseInput: UIView {
         let radius = AwesunControlLayout.hub * layout.scale
         startingHub = CGRect(x: layout.center.x - radius, y: layout.center.y - radius,
                              width: 2 * radius, height: 2 * radius)
+        panTravel = .outward(peak: 0)
         moved = false
+        AwesunBridge.shared.command("interruptCanvasPan")
         let model = surface.model
         if hit != .hub {
             hubTap?.cancel()
@@ -304,8 +338,19 @@ private final class AwesunMouseInput: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = contact, touches.contains(touch),
-              let region = region, let surface = surface else { return }
+        guard let surface = surface, surface.mouseAvailable else { cancel(); return }
+        if let other = canvasContact {
+            if touches.contains(other) {
+                let point = other.location(in: self)
+                let delta = CGSize(width: point.x - canvasPrevious.x, height: point.y - canvasPrevious.y)
+                canvasPrevious = point
+                if !surface.model.displayLocked && delta != .zero {
+                    AwesunBridge.shared.virtualMove(to: pointer(surface), canvasDelta: delta)
+                }
+            }
+            return
+        }
+        guard let touch = contact, touches.contains(touch), let region = region else { return }
         let current = touch.location(in: self)
         let distance = hypot(current.x - start.x, current.y - start.y)
         moved = moved || distance >= dragThreshold
@@ -314,7 +359,6 @@ private final class AwesunMouseInput: UIView {
             if moved {
                 hubTap?.cancel()
                 hubTap = nil
-                // Keep the displacement beyond the edge until this contact returns inside.
                 let next = requestedCenter(for: current)
                 let layout = geometry(surface, center: next)
                 surface.model.moveVirtualPointer(anchor: layout.center, point: layout.pointer)
@@ -336,9 +380,14 @@ private final class AwesunMouseInput: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let other = canvasContact, touches.contains(other), let touch = contact, !touches.contains(touch) {
+            endCanvasContact()
+            return
+        }
         guard let touch = contact, touches.contains(touch),
               let region = region, let surface = surface else { return }
         let model = surface.model
+        guard surface.mouseAvailable else { cancel(); return }
         let end = touch.location(in: self)
         let tapLimit: CGFloat = region == .wheelTop ? dragThreshold : 8
         let tapped = !moved && hypot(end.x - start.x, end.y - start.y) < tapLimit
@@ -378,6 +427,19 @@ private final class AwesunMouseInput: UIView {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         if let touch = contact, touches.contains(touch) { cancel() }
+        else if let other = canvasContact, touches.contains(other) { endCanvasContact() }
+    }
+
+    private func endCanvasContact() {
+        canvasContact = nil
+        stopPanning(interruptCanvas: true)
+        guard let touch = contact, let surface = surface else { return }
+        // Resume from the still-held finger without replaying motion made during the handoff.
+        start = touch.location(in: self)
+        let layout = geometry(surface)
+        startingHub.origin = CGPoint(x: layout.center.x - startingHub.width / 2,
+                                     y: layout.center.y - startingHub.height / 2)
+        panTravel = .braked(low: panExcursion(at: start, layout: layout))
     }
 
     func cancel() {
@@ -387,8 +449,9 @@ private final class AwesunMouseInput: UIView {
     }
 
     private func finish() {
-        stopPanning()
+        stopPanning(interruptCanvas: true)
         let temporaryWheel = region == .wheelTop
+        canvasContact = nil
         contact = nil
         region = nil
         wheelAngle = nil
@@ -409,11 +472,39 @@ private final class AwesunMouseInput: UIView {
         return layout.canvasVelocity(toward: requestedCenter(for: point))
     }
 
+    private func panExcursion(at point: CGPoint, layout: AwesunMouseGeometry) -> CGFloat {
+        if region == .hub {
+            return max(0, hypot(point.x - startingHub.midX, point.y - startingHub.midY) - startingHub.width / 2)
+        }
+        let target = requestedCenter(for: point)
+        return hypot(target.x - layout.center.x, target.y - layout.center.y)
+    }
+
     private func updatePanning(at point: CGPoint, layout: AwesunMouseGeometry, locked: Bool) {
         let velocity = panVelocity(at: point, layout: layout)
         guard !locked && velocity != .zero else {
+            panTravel = .outward(peak: 0)
             stopPanning()
             return
+        }
+        // Compare against the turning point so several sub-point movements count as a pullback.
+        let excursion = panExcursion(at: point, layout: layout)
+        let reversal: CGFloat = 3
+        switch panTravel {
+        case let .outward(peak):
+            if peak - excursion >= reversal {
+                panTravel = .braked(low: excursion)
+                stopPanning()
+                return
+            }
+            panTravel = .outward(peak: max(peak, excursion))
+        case let .braked(low):
+            let low = min(low, excursion)
+            guard excursion - low >= reversal else {
+                panTravel = .braked(low: low)
+                return
+            }
+            panTravel = .outward(peak: excursion)
         }
         guard panTimer == nil else { return }
         let timer = Timer(timeInterval: panInterval, repeats: true) { [weak self] timer in
@@ -432,7 +523,8 @@ private final class AwesunMouseInput: UIView {
     }
 
     private func advancePanning() {
-        guard let surface = surface, let contact = contact, !surface.isHidden, !surface.model.displayLocked else {
+        guard let surface = surface, surface.mouseAvailable, !surface.isHidden else { cancel(); return }
+        guard let contact = contact, !surface.model.displayLocked else {
             stopPanning()
             return
         }
@@ -446,7 +538,8 @@ private final class AwesunMouseInput: UIView {
             width: velocity.width * panInterval, height: velocity.height * panInterval))
     }
 
-    private func stopPanning() {
+    private func stopPanning(interruptCanvas: Bool = false) {
+        if interruptCanvas || panTimer != nil { AwesunBridge.shared.command("interruptCanvasPan") }
         panTimer?.invalidate()
         panTimer = nil
     }
