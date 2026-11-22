@@ -346,37 +346,44 @@ class _ConnectionPageState extends State<ConnectionPage>
                 ? const SizedBox.shrink()
                 : Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SessionModePicker(
-                              choices: [
-                                for (final mode in _modes)
-                                  WorkspaceDestination(
-                                      translate(mode.$1), mode.$2)
-                              ],
-                              selected: _mode,
-                              onSelect: (value) =>
-                                  setState(() => _mode = value)),
-                          const SizedBox(height: 10),
-                          LayoutBuilder(builder: (context, bounds) {
-                            final form = _buildRemoteIDTextField(context);
-                            if (bounds.maxWidth < 860 ||
-                                widget.localIdentity == null) {
-                              return form;
-                            }
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(child: form),
-                                const SizedBox(width: 12),
-                                SizedBox(
-                                    width: 238, child: widget.localIdentity),
-                              ],
-                            );
-                          }),
-                          if (widget.notices != null) widget.notices!,
-                        ]),
+                    child: Align(
+                        alignment: AlignmentDirectional.topStart,
+                        child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 1120),
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  SessionModePicker(
+                                      choices: [
+                                        for (final mode in _modes)
+                                          WorkspaceDestination(
+                                              translate(mode.$1), mode.$2)
+                                      ],
+                                      selected: _mode,
+                                      onSelect: (value) =>
+                                          setState(() => _mode = value)),
+                                  const SizedBox(height: 10),
+                                  LayoutBuilder(builder: (context, bounds) {
+                                    final form =
+                                        _buildRemoteIDTextField(context);
+                                    if (bounds.maxWidth < 860 ||
+                                        widget.localIdentity == null) {
+                                      return form;
+                                    }
+                                    return Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(child: form),
+                                        const SizedBox(width: 12),
+                                        SizedBox(
+                                            width: 238,
+                                            child: widget.localIdentity),
+                                      ],
+                                    );
+                                  }),
+                                  if (widget.notices != null) widget.notices!,
+                                ]))),
                   )),
         SliverFillRemaining(
             hasScrollBody: true,

@@ -76,6 +76,14 @@ void main() {
     }
 
     await mount();
+    if (isWindows || isMacOS) {
+      tester.view.physicalSize = const Size(3840, 1080);
+      await settle();
+      expect(
+          tester.getRect(find.byType(TextField).first).right, lessThan(1200));
+      tester.view.physicalSize = const Size(760, 590);
+      await settle();
+    }
     final modes = [
       'Control Remote Desktop',
       'Transfer file',
