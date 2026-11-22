@@ -36,6 +36,19 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+    if target.name == 'qr_code_scanner_plus' &&
+        target.source_build_phase.files_references.any? { |ref| File.basename(ref.path) == 'NativeBarcodeScanner.swift' }
+      # Keep the camera view releasable while permission is pending. Compile
+      # the patched source inside Pods, leaving the shared pub cache untouched.
+      reference = target.source_build_phase.files_references.find { |ref| File.basename(ref.path) == 'QRView.swift' }
+      raise 'qr_code_scanner_plus QRView.swift missing' unless reference
+      output = installer.sandbox.root + 'RustDeskScanner/QRView.swift'
+      FileUtils.mkdir_p(output.dirname)
+      Pod::Executable.execute_command('patch', ['-s', '-o', output.to_s,
+          reference.real_path.to_s, File.join(__dir__, 'qr_scanner_lifecycle.patch')])
+      reference.source_tree = 'SOURCE_ROOT'
+      reference.path = 'RustDeskScanner/QRView.swift'
+    end
     target.build_configurations.each do |config|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
     end

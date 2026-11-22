@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
-import 'package:qr_code_scanner/qr_code_scanner.dart';
+import 'package:qr_code_scanner_plus/qr_code_scanner_plus.dart';
 import 'package:zxing2/qrcode.dart';
 
 import '../../common.dart';
@@ -13,6 +13,29 @@ import '../../models/platform_model.dart';
 import '../widgets/dialog.dart';
 
 class ScanPage extends StatefulWidget {
+  static Future<void> open(BuildContext context) async {
+    final result = await Navigator.of(context).push(
+        MaterialPageRoute<({String code, bool gallery})>(
+            builder: (_) => ScanPage()));
+    if (result == null || !context.mounted) return;
+    if (result.gallery && result.code.startsWith(bind.mainUriPrefixSync())) {
+      handleUriLink(uriString: result.code);
+      return;
+    }
+    if (!result.code.startsWith('config=')) {
+      showToast('Invalid QR code');
+      return;
+    }
+    final ServerConfig config;
+    try {
+      config = ServerConfig.decode(result.code.substring(7));
+    } catch (_) {
+      showToast('Invalid QR code');
+      return;
+    }
+    showServerSettingsWithValue(config, gFFI.dialogManager, null);
+  }
+
   @override
   State<ScanPage> createState() => _ScanPageState();
 }
@@ -20,7 +43,13 @@ class ScanPage extends StatefulWidget {
 class _ScanPageState extends State<ScanPage> {
   QRViewController? controller;
   final GlobalKey qrKey = GlobalKey(debugLabel: 'QR');
-  StreamSubscription? scanSubscription;
+  StreamSubscription<Barcode>? scanSubscription;
+  bool _pickingImage = false;
+
+  bool get _acceptsResult =>
+      mounted &&
+      ModalRoute.of(context)?.isCurrent == true &&
+      !Navigator.of(context).userGestureInProgress;
 
   @override
   void reassemble() {
@@ -62,33 +91,33 @@ class _ScanPageState extends State<ScanPage> {
         borderWidth: isIOS ? 4 : 10,
         cutOutSize: scanArea,
       ),
-      onPermissionSet: (ctrl, p) => _onPermissionSet(context, ctrl, p),
+      onPermissionSet: (_, granted) {
+        if (!granted && _acceptsResult) showToast('No permission');
+      },
     );
   }
 
   void _onQRViewCreated(QRViewController controller) {
-    setState(() {
-      this.controller = controller;
-    });
+    if (!mounted) return;
+    this.controller = controller;
+    scanSubscription?.cancel();
     scanSubscription = controller.scannedDataStream.listen((scanData) {
-      if (scanData.code != null) {
-        showServerSettingFromQr(scanData.code!);
+      final code = scanData.code;
+      if (!_pickingImage && code != null && _acceptsResult) {
+        Navigator.of(context).pop((code: code, gallery: false));
       }
     });
   }
 
-  void _onPermissionSet(BuildContext context, QRViewController ctrl, bool p) {
-    if (!p) {
-      showToast('No permission');
-    }
-  }
-
   Future<void> _pickImage() async {
-    final ImagePicker picker = ImagePicker();
-    final XFile? file = await picker.pickImage(source: ImageSource.gallery);
-    if (file != null) {
-      try {
-        var image = img.decodeImage(await File(file.path).readAsBytes())!;
+    if (_pickingImage) return;
+    _pickingImage = true;
+    try {
+      final file = await ImagePicker().pickImage(source: ImageSource.gallery);
+      if (file != null && _acceptsResult) {
+        final bytes = await File(file.path).readAsBytes();
+        if (!_acceptsResult) return;
+        var image = img.decodeImage(bytes)!;
         LuminanceSource source = RGBLuminanceSource(
           image.width,
           image.height,
@@ -98,14 +127,12 @@ class _ScanPageState extends State<ScanPage> {
 
         var reader = QRCodeReader();
         var result = reader.decode(bitmap);
-        if (result.text.startsWith(bind.mainUriPrefixSync())) {
-          handleUriLink(uriString: result.text);
-        } else {
-          showServerSettingFromQr(result.text);
-        }
-      } catch (e) {
-        showToast('No QR code found');
+        Navigator.of(context).pop((code: result.text, gallery: true));
       }
+    } catch (e) {
+      if (_acceptsResult) showToast('No QR code found');
+    } finally {
+      _pickingImage = false;
     }
   }
 
@@ -143,24 +170,6 @@ class _ScanPageState extends State<ScanPage> {
   @override
   void dispose() {
     scanSubscription?.cancel();
-    controller?.dispose();
     super.dispose();
-  }
-
-  void showServerSettingFromQr(String data) async {
-    closeConnection();
-    await controller?.pauseCamera();
-    if (!data.startsWith('config=')) {
-      showToast('Invalid QR code');
-      return;
-    }
-    try {
-      final sc = ServerConfig.decode(data.substring(7));
-      Timer(Duration(milliseconds: 60), () {
-        showServerSettingsWithValue(sc, gFFI.dialogManager, null);
-      });
-    } catch (e) {
-      showToast('Invalid QR code');
-    }
   }
 }

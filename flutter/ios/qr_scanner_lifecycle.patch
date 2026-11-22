@@ -1,0 +1,57 @@
+--- QRView.swift
++++ QRView.swift
+@@ -14,2 +14,3 @@
+     var scanner: NativeBarcodeScanner?
++    private var wantsToScan = true
+     var registrar: FlutterPluginRegistrar
+@@ -53,2 +54,3 @@
+             [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
++            guard self != nil else { result(nil); return }
+             switch(call.method){
+@@ -108,3 +110,4 @@
+         if (scanAreaWidth != 0 && scanAreaHeight != 0) {
+-            scanner?.onScanningStarted = {
++            scanner?.onScanningStarted = { [weak self] in
++                guard let self = self else { return }
+                 self.scanner?.scanRect = CGRect(x: Double(midX) - (scanAreaWidth / 2), y: Double(midY) - (scanAreaHeight / 2), width: scanAreaWidth, height: scanAreaHeight)
+@@ -128,3 +131,4 @@
+         }
++        guard wantsToScan, scanner != nil else { result(nil); return }
+         NativeBarcodeScanner.requestCameraPermission { [weak self] permissionGranted in
+-            guard let self = self else { return }
++            guard let self = self, self.wantsToScan else { result(nil); return }
+@@ -204,6 +208,8 @@
+                 } catch {
+-                    let scanError = FlutterError(code: "unknown-error", message: "Unable to start scanning", details: error)
++                    let scanError = FlutterError(code: "unknown-error", message: "Unable to start scanning", details: error.localizedDescription)
+                     result(scanError)
++                    return
+                 }
+             }
++            result(nil)
+         }
+@@ -212,2 +218,3 @@
+     func stopCamera(_ result: @escaping FlutterResult) {
++        wantsToScan = false
+         if let sc = self.scanner {
+@@ -217,2 +224,3 @@
+         }
++        result(nil)
+     }
+@@ -255,9 +263,5 @@
+     func pauseCamera(_ result: @escaping FlutterResult) {
+-        if let sc = self.scanner {
+-            if sc.isScanning() {
+-                sc.freezeCapture()
+-            }
+-            return result(true)
+-        }
+-        return result(FlutterError(code: "404", message: "No barcode scanner found", details: nil))
++        wantsToScan = false
++        scanner?.freezeCapture()
++        result(true)
+     }
+@@ -265,2 +269,3 @@
+     func resumeCamera(_ result: @escaping FlutterResult) {
++        wantsToScan = true
+         if let sc = self.scanner {

@@ -1346,14 +1346,7 @@ class ScanButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return IconButton(
       icon: Icon(Icons.qr_code_scanner),
-      onPressed: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) => ScanPage(),
-          ),
-        );
-      },
+      onPressed: () => ScanPage.open(context),
     );
   }
 }
