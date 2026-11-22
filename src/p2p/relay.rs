@@ -126,6 +126,34 @@ mod quic {
                 .with_no_client_auth();
         tls.alpn_protocols = vec![b"rustdesk-relay/1".to_vec()];
         let config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls)?));
+        #[cfg(target_os = "windows")]
+        if let Some(iface) = crate::p2p::Interface::configured() {
+            use hbb_common::futures_util::{future::select_ok, FutureExt};
+            let pinned = async {
+                let addr = crate::p2p::configured_server_endpoint(server, iface, 400)
+                    .await
+                    .ok_or_else(|| anyhow!("Relay is not the configured rendezvous host"))?;
+                let socket = crate::platform::bind_p2p_stun_udp(iface.address, iface.index, 0, 0)
+                    .ok_or_else(|| anyhow!("Relay interface unavailable"))?;
+                let endpoint = Endpoint::new(
+                    Default::default(),
+                    None,
+                    socket.into_std()?,
+                    Arc::new(quinn::TokioRuntime),
+                )?;
+                handshake(endpoint, addr, config.clone()).await
+            };
+            return select_ok([
+                pinned.boxed(),
+                system_routes(server, config.clone()).boxed(),
+            ])
+            .await
+            .map(|r| r.0);
+        }
+        system_routes(server, config).await
+    }
+
+    async fn system_routes(server: &str, config: ClientConfig) -> ResultType<FramedStream> {
         let mut attempts = FuturesUnordered::new();
         for addr in lookup_host(server).await?.take(8) {
             attempts.push(dial(addr, config.clone()));
@@ -147,6 +175,14 @@ mod quic {
             IpAddr::V6(Ipv6Addr::UNSPECIFIED)
         };
         let endpoint = Endpoint::client(SocketAddr::new(ip, 0))?;
+        handshake(endpoint, remote, config).await
+    }
+
+    async fn handshake(
+        endpoint: Endpoint,
+        remote: SocketAddr,
+        config: ClientConfig,
+    ) -> ResultType<FramedStream> {
         let local = endpoint.local_addr()?;
         let conn = endpoint
             .connect_with(config, remote, "relay.rustdesk.invalid")?
