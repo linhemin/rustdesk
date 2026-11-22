@@ -11,6 +11,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/mobile/session_canvas_drag.dart';
+import 'package:flutter_hbb/mobile/ios_session_gestures.dart';
 
 import './gestures.dart';
 
@@ -99,6 +100,10 @@ class _RawTouchGestureDetectorRegionState
   double _scale = 1;
   Future<bool>? _awesunLongPress;
   bool _awesunLongPressMoved = false;
+  bool _sessionObjectDrag = false;
+  bool _sessionChord = false;
+  double _wheelRemainder = 0;
+  Axis? _wheelAxis;
 
   // Workaround tap down event when two fingers are used to scale(mobile)
   TapDownDetails? _lastTapDownDetails;
@@ -153,6 +158,7 @@ class _RawTouchGestureDetectorRegionState
 
   @override
   void dispose() {
+    _releaseSessionObject();
     widget.canvasDrag?.detach();
     super.dispose();
   }
@@ -187,7 +193,7 @@ class _RawTouchGestureDetectorRegionState
   onTapUp(TapUpDetails d) async {
     final TapDownDetails? lastTapDownDetails = _lastTapDownDetails;
     _lastTapDownDetails = null;
-    if (isNotTouchBasedDevice()) {
+    if ((_usesAwesunCanvas && _sessionChord) || isNotTouchBasedDevice()) {
       return;
     }
     // Filter duplicate touch tap events on iOS (Magic Mouse issue).
@@ -208,7 +214,7 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onTap() async {
-    if (isNotTouchBasedDevice()) {
+    if ((_usesAwesunCanvas && _sessionChord) || isNotTouchBasedDevice()) {
       return;
     }
     // Filter duplicate touch tap events on iOS (Magic Mouse issue).
@@ -241,7 +247,7 @@ class _RawTouchGestureDetectorRegionState
   }
 
   onDoubleTap() async {
-    if (isNotTouchBasedDevice()) {
+    if ((_usesAwesunCanvas && _sessionChord) || isNotTouchBasedDevice()) {
       return;
     }
     if (ffiModel.touchMode && ffi.cursorModel.lastIsBlocked) {
@@ -294,7 +300,7 @@ class _RawTouchGestureDetectorRegionState
     if (_usesAwesunCanvas && _isAbsoluteCanvasTap) {
       final rightClick = _awesunLongPress;
       _awesunLongPress = null;
-      if (!_awesunLongPressMoved && rightClick != null && await rightClick) {
+      if (_awesunLongPressMoved && rightClick != null && await rightClick) {
         await inputModel.tap(MouseButtons.left);
       }
       return;
@@ -307,6 +313,10 @@ class _RawTouchGestureDetectorRegionState
   // for mobiles
   onLongPress() async {
     if (isNotTouchBasedDevice()) {
+      return;
+    }
+    if (_usesAwesunCanvas && !_isAbsoluteCanvasTap) {
+      if (!shouldBlockMouseModeEvent()) await inputModel.tap(MouseButtons.right);
       return;
     }
     if (_usesAwesunCanvas && _isAbsoluteCanvasTap) {
@@ -343,7 +353,13 @@ class _RawTouchGestureDetectorRegionState
 
   onLongPressMoveUpdate(LongPressMoveUpdateDetails d) async {
     if (_usesAwesunCanvas && _isAbsoluteCanvasTap) {
-      if (d.offsetFromOrigin.distance > 8) _awesunLongPressMoved = true;
+      _awesunLongPressMoved = d.offsetFromOrigin.distance > kTouchSlop &&
+          ffi.cursorModel.isInRemoteRect(d.localPosition) &&
+          !ffi.cursorModel.shouldBlock(d.localPosition.dx, d.localPosition.dy);
+      final rightClick = _awesunLongPress;
+      if (_awesunLongPressMoved && rightClick != null && await rightClick) {
+        await ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
+      }
       return;
     }
     if (!ffiModel.isPeerMobile || isNotTouchBasedDevice()) {
@@ -372,6 +388,16 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
 
+    if (_usesAwesunCanvas) {
+      if (!_sessionChord) return;
+      if (ffi.cursorModel.shouldBlock(
+          _doubleFinerTapPosition.dx, _doubleFinerTapPosition.dy)) return;
+      if (_isAbsoluteCanvasTap &&
+          !await ffi.cursorModel.move(
+              _doubleFinerTapPosition.dx, _doubleFinerTapPosition.dy)) return;
+      await inputModel.tap(MouseButtons.right);
+      return;
+    }
     // mobile mouse mode or desktop touch screen
     final isMobileMouseMode = isMobile && !ffiModel.touchMode;
     // We can't use `d.localPosition` here because it's always (0, 0) on desktop.
@@ -387,6 +413,13 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
+    if (_usesAwesunCanvas) {
+      final point = _isAbsoluteCanvasTap
+          ? _cacheLongPressPosition
+          : _lastTapDownPositionForMouseMode;
+      if (point != null) _pressSessionObject(point);
+      return;
+    }
     if (!handleTouch) {
       if (isSpecialHoldDragActive) return;
       await inputModel.sendMouse('down', MouseButtons.left);
@@ -395,6 +428,15 @@ class _RawTouchGestureDetectorRegionState
 
   onHoldDragUpdate(DragUpdateDetails d) async {
     if (isNotTouchBasedDevice()) {
+      return;
+    }
+    if (_usesAwesunCanvas) {
+      if (!_sessionObjectDrag) return;
+      if (_isAbsoluteCanvasTap) {
+        await ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
+      } else {
+        await ffi.cursorModel.updatePan(d.delta, d.localPosition, false);
+      }
       return;
     }
     if (!handleTouch) {
@@ -407,9 +449,74 @@ class _RawTouchGestureDetectorRegionState
     if (isNotTouchBasedDevice()) {
       return;
     }
+    if (_usesAwesunCanvas) {
+      _releaseSessionObject();
+      return;
+    }
     if (!handleTouch) {
       await inputModel.sendMouse('up', MouseButtons.left);
     }
+  }
+
+  void _pressSessionObject(Offset point) {
+    if (_sessionObjectDrag ||
+        !inputModel.keyboardPerm ||
+        inputModel.isViewOnly ||
+        ffi.cursorModel.shouldBlock(point.dx, point.dy)) return;
+    if (_isAbsoluteCanvasTap) {
+      if (!ffi.cursorModel.isInRemoteRect(point)) return;
+      ffi.cursorModel.move(point.dx, point.dy);
+    }
+    _sessionObjectDrag = true;
+    inputModel.tapDown(MouseButtons.left);
+  }
+
+  void _releaseSessionObject() {
+    if (!_sessionObjectDrag) return;
+    _sessionObjectDrag = false;
+    inputModel.releaseVirtualMouseDrag();
+  }
+
+  void _scrollSessionAt(Offset origin, Offset delta) {
+    if (delta == Offset.zero ||
+        !inputModel.keyboardPerm ||
+        inputModel.isViewOnly) return;
+    if (_wheelAxis == null) {
+      if (ffi.cursorModel.shouldBlock(origin.dx, origin.dy)) return;
+      if (_isAbsoluteCanvasTap) {
+        if (!ffi.cursorModel.isInRemoteRect(origin)) return;
+        ffi.cursorModel.move(origin.dx, origin.dy);
+      }
+      _wheelAxis =
+          delta.dx.abs() > delta.dy.abs() ? Axis.horizontal : Axis.vertical;
+    }
+    const pointsPerStep = 14.0;
+    final horizontal = _wheelAxis == Axis.horizontal;
+    _wheelRemainder += horizontal ? delta.dx : delta.dy;
+    final steps = (_wheelRemainder / pointsPerStep).truncate();
+    if (steps == 0) return;
+    _wheelRemainder -= steps * pointsPerStep;
+    inputModel.scrollTouchWheel(horizontal ? steps : 0, horizontal ? 0 : steps);
+  }
+
+  void _dragSessionCanvas(Offset origin, DragUpdateDetails update, bool held) {
+    final canvas = ffi.canvasModel;
+    if (held || (_isAbsoluteCanvasTap && canvasLocked)) {
+      _pressSessionObject(origin);
+      onHoldDragUpdate(update);
+      return;
+    }
+    if (ffiModel.touchMode) {
+      final view = canvas.getSize();
+      final fits =
+          canvas.getDisplayWidth() * canvas.scale <= view.width + 0.5 &&
+              canvas.getDisplayHeight() * canvas.scale <= view.height + 0.5;
+      if (fits) {
+        _scrollSessionAt(origin, update.delta);
+        return;
+      }
+    }
+    onOneFingerPanUpdate(update);
   }
 
   onOneFingerPanStart(BuildContext context, DragStartDetails d) async {
@@ -639,7 +746,8 @@ class _RawTouchGestureDetectorRegionState
               (instance) => instance
                 ..onHoldDragStart = onHoldDragStart
                 ..onHoldDragUpdate = onHoldDragUpdate
-                ..onHoldDragCancel = onHoldDragCancel
+                ..onHoldDragCancel =
+                    _usesAwesunCanvas ? _releaseSessionObject : onHoldDragCancel
                 ..onHoldDragEnd = onHoldDragEnd),
       DoubleFinerTapGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<DoubleFinerTapGestureRecognizer>(
@@ -648,7 +756,37 @@ class _RawTouchGestureDetectorRegionState
           ..onDoubleFinerTap = onDoubleFinerTap
           ..onDoubleFinerTapDown = onDoubleFinerTapDown;
       }),
-      CustomTouchGestureRecognizer:
+      if (_usesAwesunCanvas)
+        IosSessionScaleGestureRecognizer: GestureRecognizerFactoryWithHandlers<
+                IosSessionScaleGestureRecognizer>(
+            IosSessionScaleGestureRecognizer.new, (instance) {
+          instance
+            ..onContactDown = (chord) {
+              _sessionChord = chord;
+            }
+            ..onStart = (_) {
+              _lastTapDownDetails = null;
+              _wheelAxis = null;
+              _wheelRemainder = 0;
+            }
+            ..onEnd = (_) {
+              _releaseSessionObject();
+            }
+            ..onSingleDrag = _dragSessionCanvas
+            ..onScroll = _scrollSessionAt
+            ..onPinch = (factor, previousFocus, translation) {
+              if (canvasLocked) return;
+              if (factor != 1) {
+                ffi.canvasModel.updateScale(factor, previousFocus);
+              }
+              if (translation != Offset.zero) {
+                ffi.canvasModel.panDirectTouch(translation);
+              }
+            }
+            ..onThreeFingerDrag = onThreeFingerVerticalDragUpdate;
+        })
+      else
+        CustomTouchGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<CustomTouchGestureRecognizer>(
               () => CustomTouchGestureRecognizer(), (instance) {
         instance.onOneFingerPanStart =

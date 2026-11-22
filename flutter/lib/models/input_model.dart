@@ -1426,6 +1426,13 @@ class InputModel {
             .encode(modify({'id': id, 'type': 'wheel', 'y': y.toString()})));
   }
 
+  Future<void> scrollTouchWheel(int x, int y) async {
+    if (!keyboardPerm || isViewOnly || isViewCamera) return;
+    await bind.sessionSendMouse(
+        sessionId: sessionId,
+        msg: json.encode(modify({'type': 'wheel', 'x': '$x', 'y': '$y'})));
+  }
+
   /// Reset key modifiers to false, including [shift], [ctrl], [alt] and [command].
   void resetModifiers() {
     shift = ctrl = alt = command = false;

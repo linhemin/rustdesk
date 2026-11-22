@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/remote_input.dart';
@@ -40,6 +42,8 @@ class _TouchCursor extends Fake implements CursorModel {
   @override
   bool shouldBlock(double x, double y) => false;
   @override
+  bool get lastIsBlocked => false;
+  @override
   bool isInRemoteRect(Offset offset) => true;
   @override
   Future<bool> move(double x, double y) async {
@@ -50,6 +54,16 @@ class _TouchCursor extends Fake implements CursorModel {
 
 class _TouchInput extends Fake implements InputModel {
   final events = <(String, MouseButtons)>[];
+  final wheel = <Offset>[];
+  @override
+  bool get keyboardPerm => true;
+  @override
+  bool get isViewOnly => false;
+  @override
+  Future<void> releaseVirtualMouseDrag() => tapUp(MouseButtons.left);
+  @override
+  Future<void> scrollTouchWheel(int x, int y) async =>
+      wheel.add(Offset(x.toDouble(), y.toDouble()));
 
   @override
   bool shouldIgnoreTouchTap(Offset pos) => false;
@@ -74,7 +88,20 @@ class _TouchSession extends Fake implements FFI {
   final _TouchCursor cursorModel = _TouchCursor();
   @override
   late final canvasModel = CanvasModel(WeakReference<FFI>(this));
+  @override
+  final imageModel = _TouchImageModel();
 }
+
+class _TouchImageModel extends Fake implements ImageModel {
+  @override
+  final image = _TouchImage();
+  @override
+  double get minScale => 0.1;
+  @override
+  double get maxScale => 4;
+}
+
+class _TouchImage extends Fake implements ui.Image {}
 
 void main() {
   setUpAll(() {
@@ -179,7 +206,7 @@ void main() {
     ]);
   });
 
-  testWidgets('iPhone session canvas keeps its long press release behavior',
+  testWidgets('iPhone stationary long press leaves the context menu open',
       (tester) async {
     final originalMobile = isMobile;
     isMobile = true;
@@ -204,8 +231,143 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     expect(session.inputModel.events, [
       ('tap', MouseButtons.right),
+    ]);
+    final finger = await tester.startGesture(const Offset(100, 100));
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+    await finger.moveTo(const Offset(100, 140));
+    await finger.up();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.cursorModel.moves.last, const Offset(100, 140));
+    expect(session.inputModel.events, [
+      ('tap', MouseButtons.right),
+      ('tap', MouseButtons.right),
       ('tap', MouseButtons.left),
     ]);
+  });
+
+  testWidgets(
+      'iPhone scrolls an app at fit and separates two-finger scroll from pinch',
+      (tester) async {
+    final originalMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = originalMobile);
+    final session = _TouchSession();
+    final canvas = session.canvasModel;
+    canvas.updateMobileSessionViewport(const Size(800, 600),
+        keyboardOpen: false);
+    canvas.update(0, 250, 0.1);
+    await tester.pumpWidget(MaterialApp(
+        home: RawTouchGestureDetectorRegion(
+      ffi: session,
+      awesunCanvas: true,
+      child: const ColoredBox(color: Colors.black, child: SizedBox.expand()),
+    )));
+    final finger = await tester.startGesture(const Offset(200, 280));
+    await finger.moveBy(const Offset(0, -42));
+    await finger.moveBy(const Offset(0, -28));
+    await finger.up();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.inputModel.wheel.fold(Offset.zero, (a, b) => a + b),
+        const Offset(0, -5));
+    expect(session.cursorModel.moves, [const Offset(200, 280)]);
+    expect(canvas.y, 250);
+
+    canvas.update(-300, 0, 1);
+    session.inputModel.wheel.clear();
+    final first = await tester.startGesture(const Offset(200, 200));
+    final second = await tester.startGesture(const Offset(300, 200));
+    for (var i = 0; i < 3; i++) {
+      await first.moveBy(const Offset(14, 0));
+      await second.moveBy(const Offset(14, 0));
+    }
+    await first.up();
+    await second.moveBy(const Offset(40, 0));
+    await second.up();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.inputModel.wheel.fold(Offset.zero, (a, b) => a + b),
+        const Offset(3, 0));
+    expect(canvas.x, -300);
+    expect(canvas.scale, 1);
+    expect(session.inputModel.events, isEmpty);
+    session.inputModel.wheel.clear();
+    final left = await tester.startGesture(const Offset(200, 200));
+    final right = await tester.startGesture(const Offset(300, 200));
+    for (var i = 0; i < 3; i++) {
+      await left.moveBy(const Offset(-10, 0));
+      await right.moveBy(const Offset(10, 0));
+    }
+    await left.up();
+    await right.up();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(canvas.scale, closeTo(1.6, 0.001));
+    expect(session.inputModel.wheel, isEmpty);
+    canvas.setLocked(true);
+    final lockedOffset = Offset(canvas.x, canvas.y);
+    final drag = await tester.startGesture(const Offset(200, 200));
+    await drag.moveBy(const Offset(40, 0));
+    await drag.up();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(Offset(canvas.x, canvas.y), lockedOffset);
+    expect(session.inputModel.events,
+        [('down', MouseButtons.left), ('up', MouseButtons.left)]);
+  });
+
+  testWidgets(
+      'iPhone double tap clicks twice and tap-then-drag holds the object',
+      (tester) async {
+    final originalMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = originalMobile);
+    for (final touch in [true, false]) {
+      final session = _TouchSession(touch: touch);
+      await tester.pumpWidget(MaterialApp(
+          home: RawTouchGestureDetectorRegion(
+        ffi: session,
+        awesunCanvas: true,
+        child: const ColoredBox(color: Colors.black, child: SizedBox.expand()),
+      )));
+      const origin = Offset(200, 200);
+      await tester.tapAt(origin);
+      await tester.pump(const Duration(milliseconds: 80));
+      await tester.tapAt(origin);
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(session.inputModel.events,
+          [('tap', MouseButtons.left), ('tap', MouseButtons.left)]);
+      session.inputModel.events.clear();
+      session.cursorModel.moves.clear();
+      await tester.tapAt(origin);
+      await tester.pump(const Duration(milliseconds: 80));
+      final drag = await tester.startGesture(origin);
+      await drag.moveBy(const Offset(40, 0));
+      await drag.moveBy(const Offset(30, 0));
+      await drag.up();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(session.inputModel.events,
+          [('down', MouseButtons.left), ('up', MouseButtons.left)]);
+      expect(session.cursorModel.moves.last,
+          touch ? const Offset(270, 200) : const Offset(30, 0));
+      session.inputModel.events.clear();
+      final held = await tester.startGesture(origin);
+      await tester.pump(const Duration(milliseconds: 240));
+      await held.moveBy(const Offset(40, 0),
+          timeStamp: const Duration(milliseconds: 240));
+      await held.moveBy(const Offset(30, 0),
+          timeStamp: const Duration(milliseconds: 250));
+      await held.cancel();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(session.inputModel.events,
+          [('down', MouseButtons.left), ('up', MouseButtons.left)]);
+      expect(session.cursorModel.moves.last,
+          touch ? const Offset(270, 200) : const Offset(30, 0));
+
+      session.inputModel.events.clear();
+      final a = await tester.startGesture(origin);
+      final b = await tester.startGesture(origin + const Offset(80, 0));
+      await a.up();
+      await b.up();
+      await tester.pump(const Duration(milliseconds: 350));
+      expect(session.inputModel.events, [('tap', MouseButtons.right)]);
+    }
   });
 
   testWidgets(
