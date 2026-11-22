@@ -15,6 +15,7 @@ use std::{net::SocketAddr, sync::{atomic::Ordering::Relaxed, Arc}};
 const EXTRA_SOCKETS: usize = 3;
 const WIDE_EXTRA_SOCKETS: usize = 11;
 const RECEIPT_SIZE: usize = 38;
+pub(crate) const MAX_LOCAL_SOCKETS: usize = 1 + WIDE_EXTRA_SOCKETS + 2;
 const MAX_PEERS: usize = 8;
 
 #[derive(Debug, Default)]
@@ -115,8 +116,36 @@ impl Candidates {
                 }
             }
         }
+        if extended { result.bind_observed_ports(source).await; }
         result
     }
+
+    async fn bind_observed_ports(&mut self, source: SocketAddr) {
+        // Some NATs rewrite traffic to hbbs but preserve the local source port toward
+        // the peer. Keep the original sockets and try the port the peer already knows.
+        let mut added = 0;
+        for receipt in self.tickets.chunks_exact(RECEIPT_SIZE) {
+            let port = u16::from_be_bytes([receipt[0], receipt[1]]);
+            if port < 32768 || self.sockets.iter().any(|s| s.local_addr().is_ok_and(|a| a.port() == port)) {
+                continue;
+            }
+            if let Some(socket) = bind_observed_port(source, port).await {
+                self.sockets.push(Arc::new(socket));
+                added += 1;
+                if added == 2 { break; }
+            }
+        }
+    }
+}
+
+async fn bind_observed_port(source: SocketAddr, port: u16) -> Option<UdpSocket> {
+    #[cfg(target_os = "windows")]
+    if let Some(iface) = super::Interface::configured().filter(|i| source.ip() == std::net::IpAddr::V4(i.address)) {
+        return crate::platform::bind_p2p_stun_udp(iface.address, iface.index, port, port);
+    }
+    let mut local = source;
+    local.set_port(port);
+    UdpSocket::bind(local).await.ok()
 }
 
 pub(crate) struct Paths {
@@ -343,6 +372,35 @@ async fn check_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn direct_path_works_when_the_peer_can_only_reach_the_nas_observed_port() {
+        let peer = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let primary = Arc::new(UdpSocket::bind("127.0.0.2:0").await.unwrap());
+        let port = UdpSocket::bind("127.0.0.2:0").await.unwrap().local_addr().unwrap().port();
+        let mut local = Candidates { sockets: Vec::new(), tickets: vec![0; RECEIPT_SIZE] };
+        local.tickets[..2].copy_from_slice(&port.to_be_bytes());
+        local.bind_observed_ports(primary.local_addr().unwrap()).await;
+        let key = auth::gen_key();
+        let destination = SocketAddr::new(primary.local_addr().unwrap().ip(), port);
+        let peer_addr = peer.local_addr().unwrap();
+        let caller = Paths { local: Candidates::default(), ports: vec![], key: key.clone() };
+        let host = Paths { local, ports: vec![], key };
+        let accept = async {
+            let (sock, syn) = host.select(primary, peer_addr, true).await.unwrap();
+            assert_eq!(sock.local_addr().unwrap().port(), port);
+            KcpStream::accept(sock, Duration::from_secs(2), syn).await.unwrap()
+        };
+        let dial = async {
+            // A connected UDP socket accepts application packets only from its nominated peer.
+            peer.connect(destination).await.unwrap();
+            let (sock, _) = caller.select(peer, destination, false).await.unwrap();
+            KcpStream::connect(sock, Duration::from_secs(2)).await.unwrap()
+        };
+        let ((_a, mut client), (_b, mut server)) = tokio::join!(dial, accept);
+        client.send_raw(b"hello".to_vec()).await.unwrap();
+        assert_eq!(&server.next_timeout(2000).await.unwrap().unwrap()[..], b"hello");
+    }
 
     #[tokio::test]
     async fn controlled_report_counts_replies_on_the_receiving_port_for_one_round() {

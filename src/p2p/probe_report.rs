@@ -107,7 +107,7 @@ pub(crate) fn query(id: &Id) -> Message {
 }
 
 pub(crate) fn display(id: &Id, report: &UdpProbeReport) -> Option<String> {
-    if report.round.as_ref() != id || report.ports.is_empty() || report.ports.len() > 12 {
+    if report.round.as_ref() != id || report.ports.is_empty() || report.ports.len() > super::udp_paths::MAX_LOCAL_SOCKETS {
         return None;
     }
     let mut out = format!("UDP #{}", label(id));
