@@ -50,6 +50,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(390, 844);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 34);
     addTearDown(tester.view.reset);
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(SystemChannels.platform_views,
@@ -83,14 +84,20 @@ void main() {
     await tester.pump();
     final view = find.byType(UiKitView);
     final portrait = tester.getRect(view);
-    expect(portrait.width, lessThan(390));
+    expect(portrait.height, closeTo(76, 0.01));
+    expect(portrait.bottom, closeTo(844 - 17, 0.01));
+    expect(portrait.width, closeTo(270.75, 0.01));
     await tester.tapAt(Offset(8, portrait.center.dy));
     await tester.tapAt(portrait.topLeft + const Offset(2, 2));
     expect(taps, 2);
     tester.view.physicalSize = const Size(844, 390);
+    tester.view.viewPadding =
+        const FakeViewPadding(left: 47, right: 47, bottom: 21);
     await tester.pump();
-    expect(tester.getSize(view).height, inInclusiveRange(44, portrait.height));
-    expect(tester.getRect(view).center.dx, 422);
+    final rotated = tester.getRect(view);
+    expect(rotated.height, closeTo(60, 0.01));
+    expect(rotated.bottom, closeTo(390 - 10.5, 0.01));
+    expect(rotated.center.dx, closeTo(422, 0.01));
     await tester.pumpWidget(const SizedBox());
     debugDefaultTargetPlatformOverride = null;
   });

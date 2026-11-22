@@ -97,22 +97,18 @@ class HomePageState extends State<HomePage> {
                   (isIOS && MediaQuery.viewInsetsOf(context).bottom > 0)
               ? null
               : isIOS
-                  ? SafeArea(
-                      top: false,
-                      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                      child: AppleWorkspaceNavigation(
-                        labels: _pages
-                            .map((page) => page.title)
-                            .toList(growable: false),
-                        symbols: [
-                          for (final page in _pages)
-                            page is SettingsPage ? 'gearshape' : 'display.2'
-                        ],
-                        selected: _selectedIndex,
-                        compact: MediaQuery.sizeOf(context).shortestSide < 600,
-                        onSelect: (index) =>
-                            setState(() => _selectedIndex = index),
-                      ),
+                  ? AppleWorkspaceNavigation(
+                      labels: _pages
+                          .map((page) => page.title)
+                          .toList(growable: false),
+                      symbols: [
+                        for (final page in _pages)
+                          page is SettingsPage ? 'gearshape' : 'display.2'
+                      ],
+                      selected: _selectedIndex,
+                      compact: MediaQuery.sizeOf(context).shortestSide < 600,
+                      onSelect: (index) =>
+                          setState(() => _selectedIndex = index),
                     )
                   : BottomNavigationBar(
                       key: navigationBarKey,

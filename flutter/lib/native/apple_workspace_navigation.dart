@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 
 /// Embeds the system navigation bar on iOS or sidebar on macOS.
 ///
-/// On iOS, place this inside the bottom safe area. On macOS, give the sidebar
+/// On iOS, place this in the bottom navigation slot. On macOS, give the sidebar
 /// bounded width and height.
 class AppleWorkspaceNavigation extends StatefulWidget {
   const AppleWorkspaceNavigation({
@@ -110,19 +110,40 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       final height = widget.compact ? (landscape ? 52.0 : 64.0) : 72.0;
       final width =
           widget.labels.length * (widget.compact ? 106.0 : 124.0) + 16;
-      return Align(
+      final scale = widget.compact ? (landscape ? 60 / 52 : 76 / 64) : 1.0;
+      final bottomGap = widget.compact
+          ? (MediaQuery.viewPaddingOf(context).bottom / 2)
+              .clamp(8.0, 20.0)
+              .toDouble()
+          : 6.0;
+      return SafeArea(
+        top: false,
+        bottom: !widget.compact,
+        minimum: EdgeInsets.fromLTRB(12, 0, 12, bottomGap),
+        child: Align(
           heightFactor: 1,
           child: SizedBox(
-              width: width,
-              height: height,
-              child: ClipPath.shape(
+            width: width * scale,
+            height: height * scale,
+            // Scale the UIKit controls and glass together, including their hit targets.
+            child: FittedBox(
+              child: SizedBox(
+                width: width,
+                height: height,
+                child: ClipPath.shape(
                   shape: const StadiumBorder(),
                   child: UiKitView(
                     viewType: _viewType,
                     creationParams: _configuration,
                     creationParamsCodec: const StandardMessageCodec(),
                     onPlatformViewCreated: _onPlatformViewCreated,
-                  ))));
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
     }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
       return AppKitView(
