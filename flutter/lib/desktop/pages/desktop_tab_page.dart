@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
@@ -8,7 +9,6 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:window_manager/window_manager.dart';
-// import 'package:flutter/services.dart';
 
 import '../../common/shared_state.dart';
 
@@ -38,6 +38,7 @@ class DesktopTabPage extends StatefulWidget {
 }
 
 class _DesktopTabPageState extends State<DesktopTabPage> {
+  static const _macSettingsMenu = MethodChannel('rustdesk/settings_menu');
   final tabController = DesktopTabController(tabType: DesktopTabType.main);
 
   _DesktopTabPageState() {
@@ -68,6 +69,15 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
   @override
   void initState() {
     super.initState();
+    if (isMacOS) {
+      _macSettingsMenu.setMethodCallHandler((call) async {
+        if (call.method == 'open' && mounted && !bind.isDisableSettings()) {
+          DesktopTabPage.onAddSetting();
+        }
+      });
+      _macSettingsMenu.invokeMethod<void>(
+          'setAvailable', !bind.isDisableSettings());
+    }
     // HardwareKeyboard.instance.addHandler(_handleKeyEvent);
   }
 
@@ -83,6 +93,10 @@ class _DesktopTabPageState extends State<DesktopTabPage> {
 
   @override
   void dispose() {
+    if (isMacOS) {
+      _macSettingsMenu.setMethodCallHandler(null);
+      _macSettingsMenu.invokeMethod<void>('setAvailable', false);
+    }
     // HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     Get.delete<DesktopTabController>();
 

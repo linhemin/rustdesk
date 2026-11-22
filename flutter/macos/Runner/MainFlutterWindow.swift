@@ -36,6 +36,8 @@ class RelativeMouseState {
 }
 
 class MainFlutterWindow: NSWindow {
+    private var settingsMenuChannel: FlutterMethodChannel?
+    private var settingsMenuAvailable = false
     private static let fullscreenWorkAreaSizes = NSMapTable<NSWindow, NSValue>(
         keyOptions: [.weakMemory, .objectPointerPersonality],
         valueOptions: .strongMemory
@@ -65,6 +67,16 @@ class MainFlutterWindow: NSWindow {
         // register self method handler
         let registrar = flutterViewController.registrar(forPlugin: "RustDeskPlugin")
         setMethodHandler(registrar: registrar)
+        let settingsMenu = FlutterMethodChannel(name: "rustdesk/settings_menu", binaryMessenger: registrar.messenger)
+        settingsMenu.setMethodCallHandler { [weak self] call, result in
+            guard call.method == "setAvailable" else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            self?.settingsMenuAvailable = call.arguments as? Bool == true
+            result(nil)
+        }
+        settingsMenuChannel = settingsMenu
 
         RegisterGeneratedPlugins(registry: flutterViewController)
         AppleWorkspaceNavigationFactory.register(
@@ -96,6 +108,18 @@ class MainFlutterWindow: NSWindow {
     override public func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         super.order(place, relativeTo: otherWin)
         hiddenWindowAtLaunch()
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(openWorkspaceSettings(_:)) {
+            return isKeyWindow && settingsMenuAvailable
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    @IBAction func openWorkspaceSettings(_ sender: NSMenuItem) {
+        guard validateMenuItem(sender) else { return }
+        settingsMenuChannel?.invokeMethod("open", arguments: nil)
     }
 
     /// Override window theme.
