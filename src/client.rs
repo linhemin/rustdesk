@@ -6334,6 +6334,72 @@ mod tcp_family_tests;
 
 #[cfg(all(test, feature = "flutter"))]
 #[tokio::test]
+#[cfg(not(target_os = "ios"))]
+async fn relay_session_attaches_a_rendezvous_tcp_punch_without_webrtc() {
+    use crate::live_direct::{native, wrap_native};
+    use hbb_common::tcp::{new_listener, FramedStream, KxTranscript};
+
+    let host = new_listener("127.0.0.1:0", false).await.unwrap();
+    let addr = host.local_addr().unwrap();
+    let hbbs = new_listener("127.0.0.1:0", false).await.unwrap();
+    let server = hbbs.local_addr().unwrap().to_string();
+    let (authority, secret) = sign::gen_keypair();
+    let id = Config::get_id();
+    let identity = Config::get_key_pair().1;
+    let signed = sign::sign(&IdPk {
+        id: id.clone(), pk: identity.clone().into(), ..Default::default()
+    }.write_to_bytes().unwrap(), &secret);
+    let signaling = tokio::spawn(async move {
+        loop {
+            let (socket, source) = hbbs.accept().await.unwrap();
+            let signed = signed.clone();
+            tokio::spawn(async move {
+                let mut stream = FramedStream::from(socket, source);
+                let Some(Ok(bytes)) = stream.next_timeout(4_000).await else { return };
+                let request = RendezvousMessage::parse_from_bytes(&bytes).unwrap();
+                let request = request.punch_hole_request();
+                assert!(request.direct_only && request.webrtc_sdp_offer.is_empty() && !request.force_relay);
+                let mut reply = RendezvousMessage::new();
+                reply.set_punch_hole_response(PunchHoleResponse {
+                    socket_addr: AddrMangle::encode(addr).into(), pk: signed.into(), ..Default::default()
+                });
+                stream.send(&reply).await.unwrap();
+            });
+        }
+    });
+    let controlled = tokio::spawn(async move {
+        let (tcp, peer) = host.accept().await.unwrap();
+        crate::server::create_tcp_connection(crate::server::new_for_test(), Stream::from(tcp, addr),
+            peer, true, Default::default()).await.unwrap();
+    });
+
+    let (pipe_a, pipe_b) = tokio::io::duplex(8192);
+    let mut a = Stream::Tcp(FramedStream::from(pipe_a, addr));
+    let mut b = Stream::Tcp(FramedStream::from(pipe_b, addr));
+    let kx = KxTranscript { initiator_pk: &[1; 32], responder_pk: &[2; 32], advertised: 1, picked: 1 };
+    let seed = hbb_common::sodiumoxide::crypto::secretbox::gen_key();
+    a.set_negotiated_key(seed.clone(), true, &kx).unwrap();
+    b.set_negotiated_key(seed, false, &kx).unwrap();
+    let listener = native::Listener::new();
+    let ticket = listener.response()[native::ACCEPT.len()..].try_into().unwrap();
+    let _receiver = wrap_native(&mut b, native::Mode::Listen(listener)).unwrap();
+    let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
+    ui.lc.write().unwrap().id = id;
+    let dial = Client::native_path_dialer(ui, &crate::encode64(authority.0), "", Some(identity), server);
+    let mut path = wrap_native(&mut a, native::Mode::Call(ticket, dial)).unwrap();
+    timeout(20_000, path.changed()).await.unwrap().unwrap();
+    assert_eq!(*path.borrow(), Some("TCP"));
+    a.send_raw(b"input".to_vec()).await.unwrap();
+    assert_eq!(&b.next_timeout(3_000).await.unwrap().unwrap()[..], b"input");
+    b.send_raw(b"video".to_vec()).await.unwrap();
+    assert_eq!(&a.next_timeout(3_000).await.unwrap().unwrap()[..], b"video");
+    drop((a, b));
+    signaling.abort();
+    timeout(3_000, controlled).await.unwrap().unwrap();
+}
+
+#[cfg(all(test, feature = "flutter"))]
+#[tokio::test]
 async fn strict_native_udp_waits_for_delayed_kcp_without_contacting_relay() {
     let local = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
     let remote = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());

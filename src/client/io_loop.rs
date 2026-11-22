@@ -225,7 +225,7 @@ impl<T: InvokeUiSession> Remote<T> {
         .await
         {
             Ok((connection, direct_retry_permitted)) => {
-                let ((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server)) =
+                let ((mut peer, mut direct, pk, kcp, stream_type), (feedback, rendezvous_server)) =
                     connection;
                 self.handler
                     .connection_round_state
@@ -433,9 +433,10 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                         path = crate::live_direct::next_path(&mut live_path) => {
                             if let Some(transport) = path {
-                                self.handler.update_direct(Some(transport.is_some()));
+                                direct = transport.is_some();
+                                self.handler.update_direct(Some(direct));
                                 self.handler.set_connection_type(
-                                    true, transport.is_some(), transport.unwrap_or(stream_type),
+                                    true, direct, transport.unwrap_or(stream_type),
                                 );
                             } else {
                                 live_path = None;
