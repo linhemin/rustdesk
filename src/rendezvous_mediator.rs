@@ -1336,7 +1336,7 @@ impl RendezvousMediator {
         };
         if ph.udp_port > 0 {
             peer_addr.set_port(ph.udp_port as u16);
-            self.punch_udp_hole(peer_addr, server, msg_punch, meta, slot_udp)
+            self.punch_udp_hole(peer_addr, &ph.shared_egress_ipv4, server, msg_punch, meta, slot_udp)
                 .await?;
             return Ok(());
         }
@@ -1407,6 +1407,7 @@ impl RendezvousMediator {
     async fn punch_udp_hole(
         &self,
         peer_addr: SocketAddr,
+        shared_egress: &[u8],
         server: ServerPtr,
         msg_punch: PunchHoleSent,
         meta: ConnectionMeta,
@@ -1420,6 +1421,7 @@ impl RendezvousMediator {
         } else {
             crate::p2p::rendezvous_punch_socket(&self.host, true).await?
         };
+        let destination = crate::p2p::ordinary_udp::peer_candidate(peer_addr, addr, shared_egress);
         let data = msg_out.write_to_bytes()?;
         socket.send_to(&data, addr).await?;
         // The reply is out, and with it the answer and the v6 address: declined is the listen
@@ -1445,7 +1447,7 @@ impl RendezvousMediator {
         });
         udp_nat_listen(
             socket_cloned,
-            peer_addr,
+            destination,
             peer_addr,
             server,
             meta,
@@ -2032,6 +2034,7 @@ mod tests {
         mediator
             .punch_udp_hole(
                 host,
+                &[],
                 crate::server::new_for_test(),
                 msg_punch,
                 connection_meta(None, None),

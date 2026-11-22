@@ -56,6 +56,21 @@ pub(crate) async fn connect_udp_observer(
     socket_client::connect_tcp_local(observer, Some(local), 1_500).await
 }
 
+// Only the selected hbbs address can be an alternate. Preserve its reported
+// inside address separately so IP access checks still see the signaling peer.
+pub(crate) fn peer_candidate(peer: SocketAddr, server: SocketAddr, hint: &[u8]) -> SocketAddr {
+    if let (SocketAddr::V4(peer4), SocketAddr::V4(server4)) = (peer, server) {
+        if peer4.ip().is_private()
+            && !server4.ip().is_private()
+            && super::usable_server_ipv4(*server4.ip())
+            && hint == server4.ip().octets()
+        {
+            return SocketAddr::from((*server4.ip(), peer.port()));
+        }
+    }
+    peer
+}
+
 pub(crate) async fn connect_peer(
     socket: &tokio::net::UdpSocket,
     peer: SocketAddr,
@@ -71,15 +86,20 @@ async fn udp_peer_destination(
     socket: &tokio::net::UdpSocket,
     peer: SocketAddr,
 ) -> ResultType<SocketAddr> {
-    use hbb_common::{anyhow::Context, libc};
-    use std::{ffi::CString, net::Ipv6Addr, ptr};
-
     let SocketAddr::V4(v4) = peer else {
         return Ok(peer);
     };
     if !socket.local_addr()?.is_ipv6() {
         return Ok(peer);
     }
+    system_ipv6_destination(v4).await
+}
+
+#[cfg(target_vendor = "apple")]
+pub(crate) async fn system_ipv6_destination(v4: std::net::SocketAddrV4) -> ResultType<SocketAddr> {
+    use hbb_common::{anyhow::Context, libc};
+    use std::{ffi::CString, net::Ipv6Addr, ptr};
+
     // On DNS64 networks Darwin synthesizes a routable IPv6 address even for
     // a numeric IPv4 literal. Rust's lookup_host short-circuits numeric input.
     let lookup = tokio::task::spawn_blocking(move || -> Option<SocketAddr> {
@@ -118,12 +138,24 @@ async fn udp_peer_destination(
     });
     timeout(1_500, lookup)
         .await??
-        .context("No system IPv6 route to the IPv4 UDP peer")
+        .context("No system IPv6 route to the IPv4 peer")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_configured_rendezvous_can_supplement_a_private_peer() {
+        let inside = "192.168.5.8:48214".parse().unwrap();
+        let hbbs = "8.8.8.8:21116".parse().unwrap();
+        assert_eq!(
+            peer_candidate(inside, hbbs, &[8, 8, 8, 8]),
+            "8.8.8.8:48214".parse().unwrap()
+        );
+        assert_eq!(peer_candidate(inside, hbbs, &[1, 2, 3, 4]), inside);
+        assert_eq!(peer_candidate(inside, hbbs, &[]), inside);
+    }
 
     #[tokio::test]
     async fn signal_reuses_the_mapping_source_and_observer() {

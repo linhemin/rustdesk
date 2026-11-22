@@ -2839,29 +2839,6 @@ pub fn get_kcp_cc_enabled() -> bool {
 }
 
 // this crate https://github.com/yoshd/stun-client supports nat type
-async fn stun_ipv6_test(stun_server: String) -> ResultType<(SocketAddr, String)> {
-    use stunclient::StunClient;
-    let local_addr = SocketAddr::from(([0u16; 8], 0)); // [::]:0
-    let socket = UdpSocket::bind(&local_addr).await?;
-    // Resolve via tokio so DNS never blocks the async runtime worker.
-    let Some(stun_addr) = tokio::net::lookup_host(&stun_server)
-        .await?
-        .find(|x| x.is_ipv6())
-    else {
-        bail!(
-            "Failed to resolve STUN ipv6 server address: {}",
-            stun_server
-        );
-    };
-    let client = StunClient::new(stun_addr);
-    let addr = client.query_external_address_async(&socket).await?;
-    Ok(if addr.ip().is_ipv6() {
-        (addr, stun_server)
-    } else {
-        bail!("STUN server returned non-IPv6 address: {}", addr)
-    })
-}
-
 /// A global address to ask the kernel for a route to; libwebrtc's QueryDefaultLocalAddress asks
 /// for the same one. Nothing is ever sent to it.
 const IPV6_ROUTE_PROBE: std::net::Ipv6Addr =
@@ -2948,30 +2925,15 @@ pub async fn test_ipv6() -> Option<tokio::task::JoinHandle<()>> {
     */
 
     Some(tokio::spawn(async {
-        use hbb_common::futures::future::{select_ok, FutureExt};
-        let tests = hbb_common::webrtc::WebRTCStream::default_stun_servers()
-            .into_iter()
-            .map(|stun| stun_ipv6_test(stun).boxed())
-            .collect::<Vec<_>>();
-
-        match hbb_common::timeout(STUN_IPV6_TIMEOUT_MS, select_ok(tests)).await {
-            Ok(Ok(res)) => {
-                let mut addr = res.0 .0;
-                addr.set_port(0); // Set port to 0 to avoid conflicts
+        let server = Config::get_rendezvous_server();
+        let observed = crate::p2p::udp_mapping::observe_ipv6(&server);
+        match hbb_common::timeout(STUN_IPV6_TIMEOUT_MS, observed).await {
+            Ok(Ok(mut addr)) => {
+                addr.set_port(0);
                 PUBLIC_IPV6_ADDR.lock().unwrap().0 = Some(addr);
-                log::debug!(
-                    "Found public IPv6 address via STUN server {}: {}",
-                    res.0 .1,
-                    addr
-                );
             }
-            Ok(Err(e)) => {
-                log::error!("Failed to get public IPv6 address: {}", e);
-            }
-            Err(_) => {
-                log::warn!("No STUN server answered for IPv6 within {STUN_IPV6_TIMEOUT_MS}ms");
-            }
-        };
+            _ => log::trace!("Rendezvous did not observe a global IPv6 mapping"),
+        }
     }))
 }
 

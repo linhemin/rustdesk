@@ -293,6 +293,16 @@ pub(crate) async fn connect_punch(
     {
         return iface.connect(peer, local.port(), timeout).await;
     }
+    if local.is_ipv6() && peer.is_ipv4() {
+        // The ordinary TCP candidate needs its own IPv4 signaling socket. Do not
+        // send the peer address to an external DNS64 helper on this attempt.
+        #[cfg(target_vendor = "apple")]
+        if let SocketAddr::V4(v4) = peer {
+            let translated = ordinary_udp::system_ipv6_destination(v4).await?;
+            return socket_client::connect_tcp_local(translated, Some(local), timeout).await;
+        }
+        hbb_common::bail!("IPv4 TCP punch needs an IPv4 signaling source");
+    }
     socket_client::connect_tcp_local(peer, Some(local), timeout).await
 }
 
