@@ -806,18 +806,28 @@ impl Client {
         if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
             let socket = if !key.is_empty() && !Config::is_proxy() && !use_ws()
                 && (direct_permission.native_upgrade || !crate::get_webrtc_enabled()) {
-                crate::p2p::ordinary_udp::ordinary_udp_socket(&rendezvous_server, false).await
+                crate::p2p::ordinary_udp::controller_socket(&rendezvous_server, key,
+                    direct_permission.native_upgrade || direct_permission.direct_only).await
             } else {
                 crate::p2p::rendezvous_punch_socket(&rendezvous_server, false).await
+                    .map(|(socket, addr)| (socket, addr, 0))
             };
-            if let Ok((socket, addr)) = socket {
-                let udp_port = Arc::new(Mutex::new(0));
-                let up_cloned = udp_port.clone();
-                let socket_cloned = socket.clone();
-                let func = async move {
-                    allow_err!(crate::p2p::udp_mapping::observe(&socket_cloned, addr, &up_cloned, stop_udp_rx).await);
-                };
-                tokio::spawn(func);
+            if let Ok((socket, addr, observed_port)) = socket {
+                if observed_port != 0 {
+                    native_stage("ordinary-udp", if addr.is_ipv6() {
+                        "NAS verified IPv4 mapping over translated IPv6"
+                    } else {
+                        "NAS verified IPv4 mapping on its IPv4 listener"
+                    });
+                }
+                let udp_port = Arc::new(Mutex::new(observed_port));
+                if observed_port == 0 {
+                    let up_cloned = udp_port.clone();
+                    let socket_cloned = socket.clone();
+                    tokio::spawn(async move {
+                        allow_err!(crate::p2p::udp_mapping::observe(&socket_cloned, addr, &up_cloned, stop_udp_rx).await);
+                    });
+                }
                 (Some(socket), Some((udp_port, addr)))
             } else {
                 #[cfg(target_os = "ios")]
@@ -1531,7 +1541,11 @@ impl Client {
                                     }
                                 } else if udp_nat_port > 0 {
                                     #[cfg(target_os = "ios")]
-                                    crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", "no UDP endpoint in peer answer");
+                                    crate::ios_p2p_diagnostics::record_milestone("ordinary-udp", if is_local {
+                                        "rendezvous returned a LAN endpoint without UDP"
+                                    } else {
+                                        "rendezvous returned a peer endpoint without UDP"
+                                    });
                                 }
                             }
                             if let Some(socket) = ipv6.0.take() {

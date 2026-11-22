@@ -64,6 +64,25 @@ fn mapped_endpoint(reply: &[u8], request: &[u8; 44]) -> Option<SocketAddr> {
     None
 }
 
+pub(super) async fn observe_v4_port(socket: &UdpSocket, server: SocketAddr) -> ResultType<u16> {
+    let request = binding_request();
+    let mut reply = [0u8; 128];
+    for wait in [350, 650] {
+        socket.send_to(&request, server).await?;
+        if let Ok(Ok((n, from))) = hbb_common::timeout(wait, socket.recv_from(&mut reply)).await {
+            if from == server {
+                if let Some(addr) = mapped_endpoint(&reply[..n], &request) {
+                    if let SocketAddr::V4(v4) = hbb_common::try_into_v4(addr) {
+                        return Ok(v4.port());
+                    }
+                    hbb_common::bail!("Rendezvous observed a native IPv6 mapping");
+                }
+            }
+        }
+    }
+    hbb_common::bail!("No IPv4 mapping on the rendezvous listener")
+}
+
 pub(crate) async fn observe_ipv6(server: &str) -> ResultType<SocketAddr> {
     let server = tokio::net::lookup_host(server)
         .await?
@@ -141,6 +160,30 @@ pub(crate) async fn observe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ipv6_socket_keeps_the_port_observed_as_ipv4() {
+        let nas = UdpSocket::bind("[::1]:0").await.unwrap();
+        let client = UdpSocket::bind("[::1]:0").await.unwrap();
+        let endpoint = nas.local_addr().unwrap();
+        let caller = client.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for port in [45678u16, 45679] {
+                let mut request = [0; 44];
+                let (_, source) = nas.recv_from(&mut request).await.unwrap();
+                assert_eq!(source, caller);
+                let mut reply = vec![1, 1, 0, 12];
+                reply.extend_from_slice(&request[4..20]);
+                reply.extend_from_slice(&[0, 32, 0, 8, 0, 1]);
+                reply.extend_from_slice(&(port ^ 0x2112).to_be_bytes());
+                reply.extend_from_slice(&[0, 0, 0, 1]);
+                if port == 45678 { reply[8] ^= 1; }
+                nas.send_to(&reply, source).await.unwrap();
+            }
+        });
+        assert_eq!(observe_v4_port(&client, endpoint).await.unwrap(), 45679);
+        server.await.unwrap();
+    }
 
     #[tokio::test]
     async fn ipv6_observation_uses_the_rendezvous_transaction() {

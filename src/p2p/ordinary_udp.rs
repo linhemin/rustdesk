@@ -1,5 +1,15 @@
-use hbb_common::{config::Config, socket_client, timeout, tokio, ResultType, Stream};
+use hbb_common::{
+    anyhow::Context, config::Config, protobuf::Message as _, rendezvous_proto::{
+        rendezvous_message, RendezvousMessage, TestNatRequest,
+    }, socket_client, timeout, tokio, ResultType, Stream,
+};
 use std::{net::SocketAddr, sync::Arc};
+
+fn routed_source(peer: SocketAddr) -> std::io::Result<SocketAddr> {
+    let route = std::net::UdpSocket::bind(Config::get_any_listen_addr(peer.is_ipv4()))?;
+    route.connect(peer)?;
+    Ok(SocketAddr::new(route.local_addr()?.ip(), 0))
+}
 
 // hbbs pairs the ordinary IPv4 port with the source of the signaling connection.
 // The IPv6 direct transport negotiates its own endpoint independently.
@@ -10,11 +20,6 @@ pub(crate) async fn ordinary_udp_socket(
     let original = super::rendezvous_punch_socket(server, verify_rendezvous).await?;
     if !original.0.local_addr()?.ip().is_unspecified() {
         return Ok(original);
-    }
-    fn routed_source(peer: SocketAddr) -> std::io::Result<SocketAddr> {
-        let route = std::net::UdpSocket::bind(Config::get_any_listen_addr(peer.is_ipv4()))?;
-        route.connect(peer)?;
-        Ok(SocketAddr::new(route.local_addr()?.ip(), 0))
     }
     let mut target = original.1;
     if original.1.is_ipv6() {
@@ -40,6 +45,69 @@ pub(crate) async fn ordinary_udp_socket(
         }
     }
     Ok(original)
+}
+
+// With native IPv6 signaling, hbbs cannot associate an IPv4 peer with our UDP port.
+// Ask the authenticated hbbs for its own IPv4 listener; a STUN observer cannot carry signaling.
+async fn nas_ipv4_listener(server: SocketAddr, source: SocketAddr, key: &str) -> ResultType<std::net::SocketAddrV4> {
+    const SERIAL: i32 = -604181;
+    let mut conn = connect_udp_observer(server, source).await?;
+    if !crate::secure_tcp_with_direct_permission(&mut conn, key, true).await? || !conn.is_secured() {
+        hbb_common::bail!("No authenticated direct permission");
+    }
+    let mut request = RendezvousMessage::new();
+    request.set_test_nat_request(TestNatRequest { serial: SERIAL, ..Default::default() });
+    conn.send(&request).await?;
+    let bytes = conn.next().await.context("No rendezvous listener reply")??;
+    if let Some(rendezvous_message::Union::TestNatResponse(reply)) = RendezvousMessage::parse_from_bytes(&bytes)?.union {
+        if let Some(config) = reply.cu.into_option().filter(|v| v.serial == SERIAL) {
+            if let [endpoint] = config.rendezvous_servers.as_slice() {
+                let endpoint: std::net::SocketAddrV4 = endpoint.parse()?;
+                if endpoint.port() != 0 && (super::usable_server_ipv4(*endpoint.ip())
+                    || server.ip().is_loopback() && endpoint.ip().is_loopback()) {
+                    return Ok(endpoint);
+                }
+            }
+        }
+    }
+    hbb_common::bail!("No IPv4 rendezvous listener advertised")
+}
+
+async fn mapped_listener(target: SocketAddr) -> ResultType<(Arc<tokio::net::UdpSocket>, SocketAddr, u16)> {
+    #[cfg(target_os = "windows")]
+    let socket = if let Some(iface) = super::Interface::configured().filter(|_| target.is_ipv4()) {
+        crate::platform::bind_p2p_stun_udp(iface.address, iface.index, 0, 0)
+            .context("Selected UDP interface unavailable")?
+    } else {
+        tokio::net::UdpSocket::bind(routed_source(target)?).await?
+    };
+    #[cfg(not(target_os = "windows"))]
+    let socket = tokio::net::UdpSocket::bind(routed_source(target)?).await?;
+    let port = super::udp_mapping::observe_v4_port(&socket, target).await?;
+    Ok((Arc::new(socket), target, port))
+}
+
+pub(crate) async fn controller_socket(server: &str, key: &str, recover_ipv4: bool) -> ResultType<(Arc<tokio::net::UdpSocket>, SocketAddr, u16)> {
+    let (socket, target) = ordinary_udp_socket(server, false).await?;
+    if recover_ipv4 {
+        // A tunnel can expose an IPv4 socket locally and still reach hbbs over IPv6.
+        // Keep the socket and port only when the NAS observed the right address family.
+        if let Ok(port) = super::udp_mapping::observe_v4_port(&socket, target).await {
+            return Ok((socket, target, port));
+        }
+        if let Ok(Ok(v4)) = timeout(2_000, nas_ipv4_listener(target, socket.local_addr()?, key)).await {
+            if let Ok(mapped) = mapped_listener(SocketAddr::V4(v4)).await {
+                return Ok(mapped);
+            }
+            #[cfg(target_vendor = "apple")]
+            if let Ok(nat64) = system_ipv6_destination(v4).await {
+                if let Ok(mapped) = mapped_listener(nat64).await {
+                    return Ok(mapped);
+                }
+            }
+        }
+    }
+    Ok((socket, target, 0))
 }
 
 pub(crate) async fn connect_udp_observer(
@@ -101,7 +169,7 @@ pub(crate) async fn udp_peer_destination(_: &tokio::net::UdpSocket, peer: Socket
 
 #[cfg(target_vendor = "apple")]
 pub(crate) async fn system_ipv6_destination(v4: std::net::SocketAddrV4) -> ResultType<SocketAddr> {
-    use hbb_common::{anyhow::Context, libc};
+    use hbb_common::libc;
     use std::{ffi::CString, net::Ipv6Addr, ptr};
 
     // On DNS64 networks Darwin synthesizes a routable IPv6 address even for
