@@ -40,11 +40,14 @@ Future<String?> readIosP2pDiagnostics(
 /// Only copy a local, recent quality sample from the currently open mobile session.
 String formatIosMediaSample({
   required DateTime opened, required DateTime now, DateTime? videoAt, DateTime? delayAt,
-  String? codec, String? chroma, String? fps, String? delay, String? target, bool? direct,
+  String? codec, String? chroma, String? fps, String? delay, String? target, bool? direct, String? transport,
 }) {
   bool fresh(DateTime? t) => t != null && !t.isBefore(opened) && !now.isBefore(t) &&
       now.difference(t) <= const Duration(seconds: 5);
   final fields = <String>['media', 'path=${direct == null ? "unknown" : (direct ? "direct" : "relay")}'];
+  if (direct != null && const {'UDP', 'IPv6', 'TCP', 'Relay', 'QUIC', 'WebSocket', 'WebRTC', 'WebRTC/IPv6'}.contains(transport)) {
+    fields.add('transport=${transport == "Relay" ? "TCP" : transport}');
+  }
   if (fresh(videoAt)) {
     if (codec != null && RegExp(r'^(H\.?26[45]|VP[89]|AV1|YUV|RGB)$', caseSensitive: false).hasMatch(codec)) {
       fields.add('codec=$codec');

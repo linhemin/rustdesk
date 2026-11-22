@@ -27,7 +27,7 @@ void main() {
       target: '7000', direct: true),
       'media path=direct codec=H265 chroma=4:2:0 displayFps=[58] rttMs=48 targetKbps=7000');
     expect(formatIosMediaSample(opened: start, now: now, videoAt: start,
-      delayAt: now, fps: '60', codec: 'H265', delay: 'secret', direct: false), 'media path=relay');
+      delayAt: now, fps: '60', codec: 'H265', delay: 'secret', direct: false, transport: 'QUIC'), 'media path=relay transport=QUIC');
   });
   late Directory documents;
   late File report;

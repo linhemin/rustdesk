@@ -4097,6 +4097,7 @@ class QualityMonitorModel with ChangeNotifier {
         direct ? transport : '$transport / TURN',
       'UDP' => 'KCP / UDP',
       'IPv6' => 'KCP / IPv6',
+      'QUIC' => 'QUIC / UDP',
       'Relay' => 'TCP',
       '' => null,
       final transport => transport,

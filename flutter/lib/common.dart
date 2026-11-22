@@ -4258,6 +4258,8 @@ String getConnectionText(bool secure, bool direct, String streamType) {
   }
   if (streamType == 'Relay') {
     streamType = 'TCP';
+  } else if (streamType == 'QUIC') {
+    streamType = 'QUIC / UDP';
   }
   if (streamType.isEmpty) {
     return connectionText;

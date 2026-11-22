@@ -2096,7 +2096,7 @@ class _RemotePageState extends State<RemotePage>
         opened: _sessionOpened, now: DateTime.now(), videoAt: quality.lastVideoSample,
         delayAt: quality.lastDelaySample, codec: data.codecFormat, chroma: data.chroma,
         fps: data.fps, delay: data.delay, target: data.targetBitrate,
-        direct: gFFI.ffiModel.direct,
+        direct: gFFI.ffiModel.direct, transport: gFFI.ffiModel.cachedPeerData.streamType,
       );
       final ready = gFFI.imageModel.imageReady.format(_sessionOpened, DateTime.now());
       await Clipboard.setData(ClipboardData(text: '$report\n$media$ready'));
