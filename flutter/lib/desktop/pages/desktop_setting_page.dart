@@ -2038,11 +2038,12 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
     final hideWebSocket = isWeb ||
         bind.mainGetBuildinOption(key: kOptionHideWebSocketSetting) == 'Y';
     final showP2pInterface = !hideServer && !isWeb && isWindows;
+    final showDirectOnly = (isWindows || isMacOS) && !bind.isIncomingOnly();
     final p2pInterface = showP2pInterface
         ? bind.mainGetOptionSync(key: kOptionP2pInterfaceIp)
         : '';
 
-    if (hideServer && hideProxy && hideWebSocket) {
+    if (hideServer && hideProxy && hideWebSocket && !showDirectOnly) {
       return Offstage();
     }
 
@@ -2136,6 +2137,28 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                   title: 'ID/Relay Server',
                   onTap: () => showServerSettings(gFFI.dialogManager, setState),
                 ),
+              if (showDirectOnly) ...[
+                if (!hideServer) divider,
+                ListTileTheme.merge(
+                  minLeadingWidth: 0,
+                  horizontalTitleGap: 10,
+                  child: SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    secondary: const Icon(Icons.link_rounded, color: _accentColor),
+                    title: Text(translate('Direct connections only'),
+                        style: const TextStyle(fontSize: _kContentFontSize)),
+                    subtitle: Text(translate('direct-only-tip'),
+                        style: Theme.of(context).textTheme.bodySmall),
+                    value: mainGetLocalBoolOptionSync(kOptionDirectOnly),
+                    onChanged: locked || isOptionFixed(kOptionDirectOnly)
+                        ? null
+                        : (value) async {
+                            await mainSetLocalBoolOption(kOptionDirectOnly, value);
+                            if (mounted) setState(() {});
+                          },
+                  ),
+                ),
+              ],
               if (showP2pInterface) ...[
                 divider,
                 listTile(
@@ -2148,14 +2171,14 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                       : _selectP2pInterface,
                 ),
               ],
-              if (!hideProxy && !hideServer) divider,
+              if (!hideProxy && (!hideServer || showDirectOnly)) divider,
               if (!hideProxy)
                 listTile(
                   icon: Icons.network_ping_outlined,
                   title: 'Socks5/Http(s) Proxy',
                   onTap: changeSocks5Proxy,
                 ),
-              if (!hideWebSocket && (!hideServer || !hideProxy)) divider,
+              if (!hideWebSocket && (!hideServer || !hideProxy || showDirectOnly)) divider,
               if (!hideWebSocket)
                 switchWidget(
                     Icons.web_asset_outlined,
@@ -2171,7 +2194,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                     } else {
                       return Column(
                         children: [
-                          if (!hideServer || !hideProxy || !hideWebSocket)
+                          if (!hideServer || !hideProxy || !hideWebSocket || showDirectOnly)
                             divider,
                           switchWidget(
                               Icons.no_encryption_outlined,

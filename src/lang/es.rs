@@ -848,5 +848,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Offline", "Sin conexión"),
         ("Delay", "Latencia"),
         ("Chroma", "Submuestreo de croma"),
+        ("Direct connections only", ""),
+        ("direct-only-tip", ""),
+        ("Direct connection required by server", ""),
+        ("Direct connection unavailable in direct-only mode", ""),
+        ("Direct-only mode conflicts with forced relay", ""),
     ].iter().cloned().collect();
 }

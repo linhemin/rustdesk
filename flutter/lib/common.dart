@@ -1627,6 +1627,7 @@ bool option2bool(String option, String value) {
   if (option.startsWith("enable-")) {
     res = value != "N";
   } else if (option.startsWith("allow-") ||
+      option == kOptionDirectOnly ||
       option == kOptionStopService ||
       option == kOptionDirectServer ||
       option == kOptionForceAlwaysRelay) {

@@ -848,5 +848,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Offline", "Hors ligne"),
         ("Delay", "Latence"),
         ("Chroma", "Sous-échantillonnage chromatique"),
+        ("Direct connections only", "Connexions directes uniquement"),
+        ("direct-only-tip", "Tente une connexion directe à l’autre appareil par perforation NAT. Si aucun chemin direct n’est disponible, la tentative se termine sans passer par un relais."),
+        ("Direct connection required by server", "Le serveur exige une connexion directe"),
+        ("Direct connection unavailable in direct-only mode", "La connexion directe est indisponible en mode direct uniquement"),
+        ("Direct-only mode conflicts with forced relay", "Le mode direct uniquement est incompatible avec le relais forcé"),
     ].iter().cloned().collect();
 }

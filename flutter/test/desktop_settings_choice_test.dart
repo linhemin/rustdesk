@@ -1,8 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common.dart' show bool2option, option2bool;
+import 'package:flutter_hbb/consts.dart' show kOptionDirectOnly;
 import 'package:flutter_hbb/desktop/widgets/settings_workspace.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('direct-only is opt-in and stores an explicit Y or N', () {
+    for (final stored in ['', 'N', 'yes']) {
+      expect(option2bool(kOptionDirectOnly, stored), isFalse);
+    }
+    expect(option2bool(kOptionDirectOnly, 'Y'), isTrue);
+    expect(bool2option(kOptionDirectOnly, true), 'Y');
+    expect(bool2option(kOptionDirectOnly, false), 'N');
+  });
+
   testWidgets(
       'an unavailable saved setting can be replaced without writing a default',
       (tester) async {

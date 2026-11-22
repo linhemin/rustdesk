@@ -293,5 +293,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("android-logs-folder-tip", "Choose Android → media to store log files."),
         ("install-directory-not-empty-tip", "The selected folder is not empty. Installation may delete existing data. Consider choosing a different folder."),
         ("username-login-disabled-oidc-unavailable", "Username and password login is disabled, and no OIDC login methods are available."),
+        ("direct-only-tip", "Try to connect directly to the other device using hole punching. If a direct path is unavailable, the connection ends without using a relay."),
     ].iter().cloned().collect();
 }

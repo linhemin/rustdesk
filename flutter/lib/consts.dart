@@ -177,6 +177,7 @@ const String kOptionStopService = "stop-service";
 const String kOptionDirectxCapture = "enable-directx-capture";
 const String kOptionAllowRemoteCmModification = "allow-remote-cm-modification";
 const String kOptionEnableTcpPunch = "enable-tcp-punch";
+const String kOptionDirectOnly = "direct-only";
 const String kOptionEnableUdpPunch = "enable-udp-punch";
 const String kOptionEnableIpv6Punch = "enable-ipv6-punch";
 const String kOptionAllowSyncClipboardBetweenSessions =

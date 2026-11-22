@@ -851,5 +851,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Offline", "离线"),
         ("Delay", "延迟"),
         ("Chroma", "色度采样"),
+        ("Direct connections only", "仅使用直连"),
+        ("direct-only-tip", "尝试打洞直连对方设备。无法直连时会结束连接，不会改用中继。"),
+        ("Direct connection required by server", "服务器要求使用直连"),
+        ("Direct connection unavailable in direct-only mode", "已启用仅直连模式，无法与对方设备建立直连"),
+        ("Direct-only mode conflicts with forced relay", "仅直连模式与强制中继设置冲突"),
     ].iter().cloned().collect();
 }

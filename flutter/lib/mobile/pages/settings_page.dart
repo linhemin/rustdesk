@@ -309,6 +309,19 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   List<AbstractSettingsTile> _networkTiles(
           bool disabledSettings, bool incomingOnly, bool outgoingOnly) =>
       <AbstractSettingsTile>[
+        if (Theme.of(context).platform == TargetPlatform.iOS &&
+            !disabledSettings && !_hideNetwork && !incomingOnly)
+          SettingsTile.switchTile(
+            title: Text(translate('Direct connections only')),
+            description: Text(translate('direct-only-tip')),
+            initialValue: mainGetLocalBoolOptionSync(kOptionDirectOnly),
+            onToggle: isOptionFixed(kOptionDirectOnly)
+                ? null
+                : (value) async {
+                    await mainSetLocalBoolOption(kOptionDirectOnly, value);
+                    if (mounted) setState(() {});
+                  },
+          ),
         if (!_hideNetwork && !_hideProxy)
           SettingsTile(
               title: Text(translate('Socks5/Http(s) Proxy')),
