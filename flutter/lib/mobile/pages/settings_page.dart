@@ -17,6 +17,7 @@ import '../../common/widgets/login.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
+import '../widgets/apple_settings_list.dart';
 import '../widgets/deploy_dialog.dart';
 import '../../models/shortcut_model.dart';
 import '../widgets/dialog.dart';
@@ -24,7 +25,19 @@ import 'home_page.dart';
 import 'mobile_keyboard_shortcuts_page.dart';
 import 'scan_page.dart';
 
+Widget _mobileSettingsList(BuildContext context,
+        {required List<AbstractSettingsSection> sections}) =>
+    Theme.of(context).platform == TargetPlatform.iOS
+        ? AppleSettingsList(sections: sections)
+        : SettingsList(sections: sections);
+
 class SettingsPage extends StatefulWidget implements PageShape {
+  SettingsPage() : _networkOnly = false;
+
+  SettingsPage._network() : _networkOnly = true;
+
+  final bool _networkOnly;
+
   @override
   final title = translate("Settings");
 
@@ -160,6 +173,13 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    if (widget._networkOnly) {
+      _isUsingPublicServer = true;
+      bind.mainIsUsingPublicServer().then((value) {
+        if (mounted) setState(() => _isUsingPublicServer = value);
+      });
+      return;
+    }
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -238,7 +258,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         _isUsingPublicServer = isUsingPublicServer;
       }
 
-      if (update) {
+      if (update && mounted) {
         setState(() {});
       }
     });
@@ -246,7 +266,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    if (!widget._networkOnly) WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -286,11 +306,161 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     }
   }
 
+  List<AbstractSettingsTile> _networkTiles(
+          bool disabledSettings, bool incomingOnly, bool outgoingOnly) =>
+      <AbstractSettingsTile>[
+        if (!_hideNetwork && !_hideProxy)
+          SettingsTile(
+              title: Text(translate('Socks5/Http(s) Proxy')),
+              leading: Icon(Icons.network_ping),
+              onPressed: (context) {
+                changeSocks5Proxy();
+              }),
+        if (isAndroid && !bind.isOutgoingOnly())
+          SettingsTile(
+              title: Text(translate('Deploy')),
+              leading: Icon(Icons.cloud_upload),
+              onPressed: (context) {
+                showDeployDialog();
+              }),
+        if (!disabledSettings && !_hideNetwork && !_hideWebSocket)
+          SettingsTile.switchTile(
+            title: Text(translate('Use WebSocket')),
+            initialValue: _allowWebSocket,
+            onToggle: isOptionFixed(kOptionAllowWebSocket)
+                ? null
+                : (v) async {
+                    await mainSetBoolOption(kOptionAllowWebSocket, v);
+                    final newValue =
+                        await mainGetBoolOption(kOptionAllowWebSocket);
+                    setState(() {
+                      _allowWebSocket = newValue;
+                    });
+                  },
+          ),
+        if (!_isUsingPublicServer)
+          SettingsTile.switchTile(
+            title: Text(translate('Allow insecure TLS fallback')),
+            initialValue: _allowInsecureTlsFallback,
+            onToggle: isOptionFixed(kOptionAllowInsecureTLSFallback)
+                ? null
+                : (v) async {
+                    await mainSetBoolOption(kOptionAllowInsecureTLSFallback, v);
+                    final newValue =
+                        mainGetBoolOptionSync(kOptionAllowInsecureTLSFallback);
+                    setState(() {
+                      _allowInsecureTlsFallback = newValue;
+                    });
+                  },
+          ),
+        if (isAndroid && !outgoingOnly && !_isUsingPublicServer)
+          SettingsTile.switchTile(
+            title: Text(translate('Disable UDP')),
+            initialValue: _disableUdp,
+            onToggle: isOptionFixed(kOptionDisableUdp)
+                ? null
+                : (v) async {
+                    await bind.mainSetOption(
+                        key: kOptionDisableUdp, value: v ? 'Y' : 'N');
+                    final newValue =
+                        bind.mainGetOptionSync(key: kOptionDisableUdp) == 'Y';
+                    setState(() {
+                      _disableUdp = newValue;
+                    });
+                  },
+          ),
+        if (!incomingOnly)
+          SettingsTile.switchTile(
+            title: Text(translate('Enable TCP hole punching')),
+            initialValue: _enableTcpPunch,
+            onToggle: isOptionFixed(kOptionEnableTcpPunch)
+                ? null
+                : (v) async {
+                    await mainSetLocalBoolOption(kOptionEnableTcpPunch, v);
+                    final newValue =
+                        mainGetLocalBoolOptionSync(kOptionEnableTcpPunch);
+                    setState(() {
+                      _enableTcpPunch = newValue;
+                    });
+                  },
+          ),
+        if (!incomingOnly)
+          SettingsTile.switchTile(
+            title: Text(translate('Enable UDP hole punching')),
+            initialValue: _enableUdpPunch,
+            onToggle: isOptionFixed(kOptionEnableUdpPunch)
+                ? null
+                : (v) async {
+                    await mainSetLocalBoolOption(kOptionEnableUdpPunch, v);
+                    final newValue =
+                        mainGetLocalBoolOptionSync(kOptionEnableUdpPunch);
+                    setState(() {
+                      _enableUdpPunch = newValue;
+                    });
+                  },
+          ),
+        if (!incomingOnly)
+          SettingsTile.switchTile(
+            title: Text(translate('Enable IPv6 P2P connection')),
+            initialValue: _enableIpv6Punch,
+            onToggle: isOptionFixed(kOptionEnableIpv6Punch)
+                ? null
+                : (v) async {
+                    await mainSetLocalBoolOption(kOptionEnableIpv6Punch, v);
+                    final newValue =
+                        mainGetLocalBoolOptionSync(kOptionEnableIpv6Punch);
+                    setState(() {
+                      _enableIpv6Punch = newValue;
+                    });
+                  },
+          ),
+        if (!incomingOnly)
+          SettingsTile.switchTile(
+            title: Text(translate('Enable WebRTC P2P connection')),
+            initialValue: _enableWebrtc,
+            onToggle: isOptionFixed(kOptionEnableWebrtc)
+                ? null
+                : (v) async {
+                    await mainSetLocalBoolOption(kOptionEnableWebrtc, v);
+                    final newValue =
+                        mainGetLocalBoolOptionSync(kOptionEnableWebrtc);
+                    setState(() {
+                      _enableWebrtc = newValue;
+                    });
+                  },
+          ),
+        if (isIOS)
+          SettingsTile.switchTile(
+            title: Text(translate('Record P2P diagnostics')),
+            initialValue: recordIosP2pDiagnostics,
+            onToggle: (value) async {
+              await bind.mainSetLocalOption(
+                  key: kOptionRecordP2pDiagnostics, value: value ? 'Y' : 'N');
+              recordIosP2pDiagnostics =
+                  bind.mainGetLocalOption(key: kOptionRecordP2pDiagnostics) ==
+                      'Y';
+              if (!recordIosP2pDiagnostics) {
+                gFFI.imageModel.imageReady.reset();
+                gFFI.qualityMonitorModel.lastVideoSample = null;
+                gFFI.qualityMonitorModel.lastDelaySample = null;
+              }
+              if (mounted) setState(() {});
+            },
+          ),
+      ];
+
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
     final outgoingOnly = bind.isOutgoingOnly();
     final incomingOnly = bind.isIncomingOnly();
+    if (widget._networkOnly) {
+      return AppleSettingsList(sections: [
+        SettingsSection(
+            tiles: _networkTiles(
+                bind.isDisableSettings(), incomingOnly, outgoingOnly)),
+      ]);
+    }
     final customClientSection = CustomSettingsSection(
         child: Column(
       children: [
@@ -733,18 +903,102 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     final disabledSettings = bind.isDisableSettings();
     final hideSecuritySettings =
         bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) == 'Y';
-    final palette = Theme.of(context);
-    final settingsTheme = isIOS ? SettingsThemeData(
-      settingsListBackground: palette.scaffoldBackgroundColor,
-      settingsSectionBackground: palette.cardColor,
-      leadingIconsColor: palette.colorScheme.primary, titleTextColor: palette.hintColor,
-      dividerColor: palette.dividerColor,
-    ) : null;
-    final settings = SettingsList(
-      contentPadding: isIOS
-          ? EdgeInsets.only(top: 20, bottom: MediaQuery.paddingOf(context).bottom + 20)
-          : null,
-      lightTheme: settingsTheme, darkTheme: settingsTheme,
+    final apple = Theme.of(context).platform == TargetPlatform.iOS;
+    final server = <AbstractSettingsTile>[
+      if (!disabledSettings && !_hideNetwork && !_hideServer)
+        SettingsTile(
+            title: Text(translate('ID/Relay Server')),
+            leading: Icon(Icons.cloud),
+            onPressed: (context) {
+              showServerSettings(gFFI.dialogManager, (callback) async {
+                _isUsingPublicServer = await bind.mainIsUsingPublicServer();
+                setState(callback);
+              });
+            }),
+    ];
+    final network = _networkTiles(disabledSettings, incomingOnly, outgoingOnly);
+    final appearance = <AbstractSettingsTile>[
+      SettingsTile(
+          title: Text(translate('Language')),
+          leading: Icon(Icons.translate),
+          onPressed: (context) {
+            showLanguageSettings(gFFI.dialogManager);
+          }),
+      SettingsTile(
+        title: Text(translate(apple
+            ? 'Theme'
+            : Theme.of(context).brightness == Brightness.light
+                ? 'Light Theme'
+                : 'Dark Theme')),
+        value: apple
+            ? Text(translate(Theme.of(context).brightness == Brightness.light
+                ? 'Light Theme'
+                : 'Dark Theme'))
+            : null,
+        leading: Icon(apple
+            ? Icons.contrast_rounded
+            : Theme.of(context).brightness == Brightness.light
+                ? Icons.dark_mode
+                : Icons.light_mode),
+        onPressed: (context) {
+          showThemeSettings(gFFI.dialogManager);
+        },
+      ),
+    ];
+    final shortcuts = <AbstractSettingsTile>[
+      if (!disabledSettings)
+        SettingsTile.navigation(
+          leading: Icon(Icons.keyboard_outlined),
+          title: Text(translate('Keyboard shortcuts')),
+          description: Text(
+              ShortcutModel.isEnabled() ? translate('On') : translate('Off')),
+          trailing: Icon(Icons.arrow_forward_ios),
+          onPressed: (context) {
+            Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const MobileKeyboardShortcutsPage(),
+                )).then((_) {
+              if (mounted) setState(() {});
+            });
+          },
+        ),
+    ];
+    final preferences = <AbstractSettingsTile>[
+      if (!bind.isDisableAccount())
+        SettingsTile.switchTile(
+          title: Text(translate('note-at-conn-end-tip')),
+          initialValue: _allowAskForNoteAtEndOfConnection,
+          onToggle: (v) async {
+            if (v && !gFFI.userModel.isLogin) {
+              final res = await loginDialog();
+              if (res != true) return;
+            }
+            await mainSetLocalBoolOption(
+                kOptionAllowAskForNoteAtEndOfConnection, v);
+            final newValue = mainGetLocalBoolOptionSync(
+                kOptionAllowAskForNoteAtEndOfConnection);
+            setState(() {
+              _allowAskForNoteAtEndOfConnection = newValue;
+            });
+          },
+        ),
+      if (!incomingOnly)
+        SettingsTile.switchTile(
+          title: Text(translate('keep-awake-during-outgoing-sessions-label')),
+          initialValue: _preventSleepWhileConnected,
+          onToggle: (v) async {
+            await mainSetLocalBoolOption(
+                kOptionKeepAwakeDuringOutgoingSessions, v);
+            setState(() {
+              _preventSleepWhileConnected = v;
+            });
+          },
+        ),
+    ];
+
+    return _mobileSettingsList(
+      context,
       sections: [
         customClientSection,
         if (!bind.isDisableAccount())
@@ -752,9 +1006,21 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             title: Text(translate('Account')),
             tiles: [
               SettingsTile(
-                title: Obx(() => Text(gFFI.userModel.userName.value.isEmpty
-                    ? translate('Login')
-                    : '${translate('Logout')} (${gFFI.userModel.accountLabelWithHandle})')),
+                title: Obx(() {
+                  if (!gFFI.userModel.isLogin) return Text(translate('Login'));
+                  final label = gFFI.userModel.accountLabelWithHandle;
+                  if (!apple) return Text('${translate('Logout')} ($label)');
+                  return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label),
+                        Text(translate('Logout'),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall!
+                                .copyWith(color: Theme.of(context).hintColor)),
+                      ]);
+                }),
                 leading: Obx(() {
                   final avatar = bind.mainResolveAvatarUrl(
                       avatar: gFFI.userModel.avatar.value);
@@ -776,224 +1042,40 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               ),
             ],
           ),
-        SettingsSection(title: Text(translate("Settings")), tiles: [
-          if (!disabledSettings && !_hideNetwork && !_hideServer)
-            SettingsTile(
-                title: Text(translate('ID/Relay Server')),
-                leading: Icon(Icons.cloud),
-                onPressed: (context) {
-                  showServerSettings(gFFI.dialogManager, (callback) async {
-                    _isUsingPublicServer = await bind.mainIsUsingPublicServer();
-                    setState(callback);
-                  });
-                }),
-          if (!_hideNetwork && !_hideProxy)
-            SettingsTile(
-                title: Text(translate('Socks5/Http(s) Proxy')),
-                leading: Icon(Icons.network_ping),
-                onPressed: (context) {
-                  changeSocks5Proxy();
-                }),
-          if (isAndroid && !bind.isOutgoingOnly())
-            SettingsTile(
-                title: Text(translate('Deploy')),
-                leading: Icon(Icons.cloud_upload),
-                onPressed: (context) {
-                  showDeployDialog();
-                }),
-          if (!disabledSettings && !_hideNetwork && !_hideWebSocket)
-            SettingsTile.switchTile(
-              title: Text(translate('Use WebSocket')),
-              initialValue: _allowWebSocket,
-              onToggle: isOptionFixed(kOptionAllowWebSocket)
-                  ? null
-                  : (v) async {
-                      await mainSetBoolOption(kOptionAllowWebSocket, v);
-                      final newValue =
-                          await mainGetBoolOption(kOptionAllowWebSocket);
-                      setState(() {
-                        _allowWebSocket = newValue;
-                      });
-                    },
-            ),
-          if (!_isUsingPublicServer)
-            SettingsTile.switchTile(
-              title: Text(translate('Allow insecure TLS fallback')),
-              initialValue: _allowInsecureTlsFallback,
-              onToggle: isOptionFixed(kOptionAllowInsecureTLSFallback)
-                  ? null
-                  : (v) async {
-                      await mainSetBoolOption(
-                          kOptionAllowInsecureTLSFallback, v);
-                      final newValue = mainGetBoolOptionSync(
-                          kOptionAllowInsecureTLSFallback);
-                      setState(() {
-                        _allowInsecureTlsFallback = newValue;
-                      });
-                    },
-            ),
-          if (isAndroid && !outgoingOnly && !_isUsingPublicServer)
-            SettingsTile.switchTile(
-              title: Text(translate('Disable UDP')),
-              initialValue: _disableUdp,
-              onToggle: isOptionFixed(kOptionDisableUdp)
-                  ? null
-                  : (v) async {
-                      await bind.mainSetOption(
-                          key: kOptionDisableUdp, value: v ? 'Y' : 'N');
-                      final newValue =
-                          bind.mainGetOptionSync(key: kOptionDisableUdp) == 'Y';
-                      setState(() {
-                        _disableUdp = newValue;
-                      });
-                    },
-            ),
-          if (!incomingOnly)
-            SettingsTile.switchTile(
-              title: Text(translate('Enable TCP hole punching')),
-              initialValue: _enableTcpPunch,
-              onToggle: isOptionFixed(kOptionEnableTcpPunch)
-                  ? null
-                  : (v) async {
-                      await mainSetLocalBoolOption(kOptionEnableTcpPunch, v);
-                      final newValue =
-                          mainGetLocalBoolOptionSync(kOptionEnableTcpPunch);
-                      setState(() {
-                        _enableTcpPunch = newValue;
-                      });
-                    },
-            ),
-          if (!incomingOnly)
-            SettingsTile.switchTile(
-              title: Text(translate('Enable UDP hole punching')),
-              initialValue: _enableUdpPunch,
-              onToggle: isOptionFixed(kOptionEnableUdpPunch)
-                  ? null
-                  : (v) async {
-                      await mainSetLocalBoolOption(kOptionEnableUdpPunch, v);
-                      final newValue =
-                          mainGetLocalBoolOptionSync(kOptionEnableUdpPunch);
-                      setState(() {
-                        _enableUdpPunch = newValue;
-                      });
-                    },
-            ),
-          if (!incomingOnly)
-            SettingsTile.switchTile(
-              title: Text(translate('Enable IPv6 P2P connection')),
-              initialValue: _enableIpv6Punch,
-              onToggle: isOptionFixed(kOptionEnableIpv6Punch)
-                  ? null
-                  : (v) async {
-                      await mainSetLocalBoolOption(kOptionEnableIpv6Punch, v);
-                      final newValue =
-                          mainGetLocalBoolOptionSync(kOptionEnableIpv6Punch);
-                      setState(() {
-                        _enableIpv6Punch = newValue;
-                      });
-                    },
-            ),
-          if (!incomingOnly)
-            SettingsTile.switchTile(
-              title: Text(translate('Enable WebRTC P2P connection')),
-              initialValue: _enableWebrtc,
-              onToggle: isOptionFixed(kOptionEnableWebrtc)
-                  ? null
-                  : (v) async {
-                      await mainSetLocalBoolOption(kOptionEnableWebrtc, v);
-                      final newValue =
-                          mainGetLocalBoolOptionSync(kOptionEnableWebrtc);
-                      setState(() {
-                        _enableWebrtc = newValue;
-                      });
-                    },
-            ),
-          if (isIOS)
-            SettingsTile.switchTile(
-              title: Text(translate('Record P2P diagnostics')),
-              initialValue: recordIosP2pDiagnostics,
-              onToggle: (value) async {
-                await bind.mainSetLocalOption(
-                    key: kOptionRecordP2pDiagnostics, value: value ? 'Y' : 'N');
-                recordIosP2pDiagnostics = bind.mainGetLocalOption(
-                        key: kOptionRecordP2pDiagnostics) ==
-                    'Y';
-                if (!recordIosP2pDiagnostics) {
-                  gFFI.imageModel.imageReady.reset();
-                  gFFI.qualityMonitorModel.lastVideoSample = null;
-                  gFFI.qualityMonitorModel.lastDelaySample = null;
-                }
-                if (mounted) setState(() {});
-              },
-            ),
-          SettingsTile(
-              title: Text(translate('Language')),
-              leading: Icon(Icons.translate),
-              onPressed: (context) {
-                showLanguageSettings(gFFI.dialogManager);
-              }),
-          SettingsTile(
-            title: Text(translate(
-                Theme.of(context).brightness == Brightness.light
-                    ? 'Light Theme'
-                    : 'Dark Theme')),
-            leading: Icon(Theme.of(context).brightness == Brightness.light
-                ? Icons.dark_mode
-                : Icons.light_mode),
-            onPressed: (context) {
-              showThemeSettings(gFFI.dialogManager);
-            },
-          ),
-          if (!disabledSettings)
-            SettingsTile.navigation(
-              leading: Icon(Icons.keyboard_outlined),
-              title: Text(translate('Keyboard shortcuts')),
-              description: Text(ShortcutModel.isEnabled()
-                  ? translate('On')
-                  : translate('Off')),
-              trailing: Icon(Icons.arrow_forward_ios),
-              onPressed: (context) {
-                Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const MobileKeyboardShortcutsPage(),
-                    )).then((_) {
-                  if (mounted) setState(() {});
-                });
-              },
-            ),
-          if (!bind.isDisableAccount())
-            SettingsTile.switchTile(
-              title: Text(translate('note-at-conn-end-tip')),
-              initialValue: _allowAskForNoteAtEndOfConnection,
-              onToggle: (v) async {
-                if (v && !gFFI.userModel.isLogin) {
-                  final res = await loginDialog();
-                  if (res != true) return;
-                }
-                await mainSetLocalBoolOption(
-                    kOptionAllowAskForNoteAtEndOfConnection, v);
-                final newValue = mainGetLocalBoolOptionSync(
-                    kOptionAllowAskForNoteAtEndOfConnection);
-                setState(() {
-                  _allowAskForNoteAtEndOfConnection = newValue;
-                });
-              },
-            ),
-          if (!incomingOnly)
-            SettingsTile.switchTile(
-              title:
-                  Text(translate('keep-awake-during-outgoing-sessions-label')),
-              initialValue: _preventSleepWhileConnected,
-              onToggle: (v) async {
-                await mainSetLocalBoolOption(
-                    kOptionKeepAwakeDuringOutgoingSessions, v);
-                setState(() {
-                  _preventSleepWhileConnected = v;
-                });
-              },
-            ),
-        ]),
+        if (apple) ...[
+          if (server.isNotEmpty ||
+              !incomingOnly ||
+              shortcuts.isNotEmpty ||
+              network.isNotEmpty)
+            SettingsSection(title: Text(translate('Connection')), tiles: [
+              ...server,
+              if (!incomingOnly) ...defaultDisplaySection().tiles,
+              ...shortcuts,
+              if (network.isNotEmpty)
+                SettingsTile.navigation(
+                  title: Text(translate('Network')),
+                  leading: const Icon(Icons.hub_outlined),
+                  onPressed: (context) => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                        builder: (_) => Scaffold(
+                              appBar: AppBar(title: Text(translate('Network'))),
+                              body: SettingsPage._network(),
+                            )),
+                  ),
+                ),
+            ]),
+          SettingsSection(title: Text(translate('General')), tiles: [
+            ...appearance,
+            ...preferences,
+          ]),
+        ] else
+          SettingsSection(title: Text(translate('Settings')), tiles: [
+            ...server,
+            ...network,
+            ...appearance,
+            ...shortcuts,
+            ...preferences,
+          ]),
         if (isAndroid)
           SettingsSection(title: Text(translate('Hardware Codec')), tiles: [
             SettingsTile.switchTile(
@@ -1076,7 +1158,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             title: Text(translate("Share screen")),
             tiles: shareScreenTiles,
           ),
-        if (!bind.isIncomingOnly()) defaultDisplaySection(),
+        if (!apple && !incomingOnly) defaultDisplaySection(),
         if (isAndroid &&
             !disabledSettings &&
             !outgoingOnly &&
@@ -1093,6 +1175,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                   await launchUrl(Uri.parse(url));
                 },
                 title: Text('${translate('Version')}: $version'),
+                trailing: apple ? const Icon(Icons.open_in_new_rounded) : null,
                 value: Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Text('rustdesk.com',
@@ -1119,6 +1202,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                   leading: Icon(Icons.fingerprint)),
             SettingsTile(
                 onPressed: (context) => onCopyId(_myId),
+                trailing: apple ? const Icon(Icons.copy_rounded) : null,
                 title: Text(translate("ID")),
                 value: Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
@@ -1127,6 +1211,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 leading: Icon(Icons.perm_identity)),
             SettingsTile(
               title: Text(translate("Privacy Statement")),
+              trailing: apple ? const Icon(Icons.open_in_new_rounded) : null,
               onPressed: (context) =>
                   launchUrlString('https://rustdesk.com/privacy.html'),
               leading: Icon(Icons.privacy_tip),
@@ -1135,7 +1220,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
       ],
     );
-    return settings;
   }
 
   Future<bool> canStartOnBoot() async {
@@ -1149,7 +1233,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     return true;
   }
 
-  defaultDisplaySection() {
+  SettingsSection defaultDisplaySection() {
     return SettingsSection(
       title: Text(translate("Display Settings")),
       tiles: [
@@ -1298,13 +1382,15 @@ class __DisplayPageState extends State<_DisplayPage> {
     RxBool showCustomImageQuality = false.obs;
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(
-            onPressed: () => Navigator.pop(context),
-            icon: Icon(Icons.arrow_back_ios)),
+        leading: Theme.of(context).platform == TargetPlatform.iOS
+            ? null
+            : IconButton(
+                onPressed: () => Navigator.pop(context),
+                icon: Icon(Icons.arrow_back_ios)),
         title: Text(translate('Display Settings')),
         centerTitle: true,
       ),
-      body: SettingsList(sections: [
+      body: _mobileSettingsList(context, sections: [
         SettingsSection(
           tiles: [
             _getPopupDialogRadioEntry(
