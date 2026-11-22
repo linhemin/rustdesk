@@ -6283,32 +6283,52 @@ async fn direct_only_declines_legacy_relay_without_contacting_hbbr() {
     let host = hbbs.local_addr().unwrap().to_string();
     let relay_server = hbbr.local_addr().unwrap().to_string();
     let signaling = tokio::spawn(async move {
-        let (socket, addr) = hbbs.accept().await.unwrap();
-        let mut stream = FramedStream::from(socket, addr);
-        let request = stream.next().await.unwrap().unwrap();
-        let msg = RendezvousMessage::parse_from_bytes(&request).unwrap();
-        assert!(matches!(msg.union, Some(rendezvous_message::Union::PunchHoleRequest(r)) if r.direct_only));
-        let mut msg = RendezvousMessage::new();
-        msg.set_relay_response(RelayResponse {
-            relay_server,
-            uuid: Uuid::new_v4().to_string(),
-            ..Default::default()
-        });
-        stream.send(&msg).await.unwrap();
+        let mut asked_to_upgrade = false;
+        loop {
+            let (socket, addr) = hbbs.accept().await.unwrap();
+            let mut stream = FramedStream::from(socket, addr);
+            // An offer-bearing socket is closed when this stub cannot do secure signaling.
+            let Some(Ok(request)) = stream.next().await else { continue };
+            let msg = RendezvousMessage::parse_from_bytes(&request).unwrap();
+            let Some(rendezvous_message::Union::PunchHoleRequest(req)) = msg.union else {
+                panic!("unexpected rendezvous request");
+            };
+            let mut reply = RendezvousMessage::new();
+            if req.direct_only {
+                reply.set_relay_response(RelayResponse {
+                    relay_server,
+                    uuid: Uuid::new_v4().to_string(),
+                    ..Default::default()
+                });
+                stream.send(&reply).await.unwrap();
+                return asked_to_upgrade;
+            }
+            assert!(!asked_to_upgrade, "client retried without adopting the server policy");
+            asked_to_upgrade = true;
+            reply.set_punch_hole_response(PunchHoleResponse {
+                other_failure: DIRECT_ONLY_REQUIRED.into(),
+                ..Default::default()
+            });
+            stream.send(&reply).await.unwrap();
+        }
     });
     let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
-    let policy = DirectRetryPermission { direct_only: true, ..Default::default() };
-    let attempt = Client::_start_inner(
-        "123456789".into(), String::new(), String::new(), ConnType::DEFAULT_CONN,
-        ui, (None, None), None, None, None, host, Vec::new(), true, &policy,
-    );
+    let id = "123456789";
+    {
+        let mut lc = ui.lc.write().unwrap();
+        lc.id = id.into();
+        lc.other_server = Some((id.into(), host, "invalid-test-key".into()));
+        // As on WebSocket signaling, skip classic TCP/UDP legs while permitting direct ICE.
+        lc.force_relay = true;
+    }
+    let attempt = Client::start_with_direct_permission(id, "", "", ConnType::FILE_TRANSFER, ui, None);
     tokio::select! {
         biased;
         _ = hbbr.accept() => panic!("direct-only contacted the relay"),
         res = attempt => assert_eq!(res.err().unwrap().to_string(), DIRECT_ONLY_UNAVAILABLE),
-        _ = tokio::time::sleep(Duration::from_secs(5)) => panic!("no policy decision"),
+        _ = tokio::time::sleep(Duration::from_secs(20)) => panic!("no policy decision"),
     }
-    signaling.await.unwrap();
+    assert_eq!(signaling.await.unwrap(), !crate::direct_only_enabled());
 }
 
 #[cfg(test)]
