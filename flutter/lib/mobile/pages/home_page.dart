@@ -75,6 +75,7 @@ class HomePageState extends State<HomePage> {
           return false;
         },
         child: Scaffold(
+          extendBody: isIOS && _pages.length > 1,
           // backgroundColor: MyTheme.grayBg,
           appBar: AppBar(
             centerTitle: !isIOS,
@@ -92,11 +93,13 @@ class HomePageState extends State<HomePage> {
                 : appTitle(),
             actions: _pages.elementAt(_selectedIndex).appBarActions,
           ),
-          bottomNavigationBar: _pages.length < 2
+          bottomNavigationBar: _pages.length < 2 ||
+                  (isIOS && MediaQuery.viewInsetsOf(context).bottom > 0)
               ? null
               : isIOS
                   ? SafeArea(
                       top: false,
+                      minimum: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                       child: AppleWorkspaceNavigation(
                         labels: _pages
                             .map((page) => page.title)

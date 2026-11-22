@@ -422,42 +422,48 @@ class IPhoneDeviceWorkspace extends StatelessWidget {
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           if (!compactKeyboard)
             Padding(
-                padding: const EdgeInsetsDirectional.fromSTEB(18, 4, 18, 8),
-                child: Text(translate('Accessible devices'),
-                    style: theme.textTheme.headlineSmall
-                        ?.copyWith(fontWeight: FontWeight.w700))),
-          if (!compactKeyboard)
-            Padding(
-                padding: const EdgeInsetsDirectional.fromSTEB(16, 0, 16, 12),
+                padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 16, 14),
                 child: Material(
-                    color: theme.colorScheme.surface,
+                    color: theme.brightness == Brightness.dark
+                        ? const Color(0xff223653)
+                        : WorkspaceStyle.navy,
                     shape: RoundedRectangleBorder(
-                        side: BorderSide(color: theme.dividerColor),
-                        borderRadius: BorderRadius.circular(16)),
+                        borderRadius: BorderRadius.circular(20)),
                     clipBehavior: Clip.antiAlias,
                     child: InkWell(
                         onTap: onEnterId,
                         child: Padding(
-                            padding: const EdgeInsetsDirectional.fromSTEB(
-                                16, 6, 6, 6),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 18, vertical: 16),
                             child: Row(children: [
                               Expanded(
-                                  child: Text(translate('Enter Remote ID'),
-                                      style: theme.textTheme.titleMedium
-                                          ?.copyWith(color: theme.hintColor))),
-                              const SizedBox(width: 8),
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text(translate('New Connection'),
+                                        style: theme.textTheme.titleLarge
+                                            ?.copyWith(color: Colors.white)),
+                                    const SizedBox(height: 3),
+                                    Text(translate('Enter Remote ID'),
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                                color:
+                                                    const Color(0xffc3d3eb))),
+                                  ])),
+                              const SizedBox(width: 12),
                               Container(
-                                  width: 40,
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                      color: WorkspaceStyle.blue,
-                                      borderRadius: BorderRadius.circular(11)),
+                                  width: 44,
+                                  height: 44,
+                                  decoration: const BoxDecoration(
+                                      color: Color(0xff324e76),
+                                      shape: BoxShape.circle),
                                   child: const Icon(Icons.north_east_rounded,
-                                      color: Colors.white, size: 21)),
+                                      color: Colors.white, size: 22)),
                             ]))))),
           Expanded(
               child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: devices)),
         ]));
   }

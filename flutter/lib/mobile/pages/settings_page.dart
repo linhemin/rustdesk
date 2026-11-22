@@ -741,6 +741,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       dividerColor: palette.dividerColor,
     ) : null;
     final settings = SettingsList(
+      contentPadding: isIOS
+          ? EdgeInsets.only(top: 20, bottom: MediaQuery.paddingOf(context).bottom + 20)
+          : null,
       lightTheme: settingsTheme, darkTheme: settingsTheme,
       sections: [
         customClientSection,

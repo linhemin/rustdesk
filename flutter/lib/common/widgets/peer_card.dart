@@ -203,6 +203,16 @@ class _PeerCardState extends State<_PeerCard>
 
   Widget _buildPortrait() {
     final peer = super.widget.peer;
+    if (!isWeb && Theme.of(context).platform == TargetPlatform.iOS) {
+      return DecoratedBox(
+          decoration: BoxDecoration(
+              border: Border(
+                  bottom: BorderSide(color: Theme.of(context).dividerColor))),
+          child: gestureDetector(
+              child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 9),
+                  child: _buildPeerTile(context, peer, null))));
+    }
     return Card(
         margin: EdgeInsets.symmetric(horizontal: 2),
         child: gestureDetector(
@@ -376,69 +386,77 @@ class _PeerCardState extends State<_PeerCard>
       if (name.isNotEmpty) formatID(peer.id),
       if (host.isNotEmpty && host != name) host,
     ];
-    return Row(children: [
-      Container(
-        width: 44,
-        height: 44,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(13)),
-        child: Icon(_deviceIcon(peer),
-            color: theme.colorScheme.primary,
-            size: 24,
-            semanticLabel: peer.platform),
-      ),
-      const SizedBox(width: 12),
-      Expanded(
-          child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            Flexible(
-                child: Text(name.isEmpty ? formatID(peer.id) : name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium)),
-            if (_shouldBuildPasswordIcon(peer)) ...[
-              const SizedBox(width: 4),
-              const Icon(Icons.key_rounded, size: 14),
-            ],
-          ]),
-          if (details.isNotEmpty)
-            Text(details.join(' · '),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.hintColor)),
-          if (_showNote(peer))
-            Text(peer.note,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall),
-          const SizedBox(height: 3),
-          Row(children: [
-            DecoratedBox(
-                decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: peer.online
-                        ? (theme.brightness == Brightness.dark
-                            ? const Color(0xff73d8ad)
-                            : const Color(0xff177856))
-                        : theme.hintColor),
-                child: const SizedBox.square(dimension: 6)),
-            const SizedBox(width: 5),
-            Flexible(
-                child: Text(status,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.hintColor))),
-          ]),
-        ],
-      )),
-      checkBoxOrActionMorePortrait(peer),
+    final statusLabel = Row(mainAxisSize: MainAxisSize.min, children: [
+      Icon(peer.online ? Icons.circle : Icons.circle_outlined,
+          size: 8,
+          color: peer.online
+              ? (theme.brightness == Brightness.dark
+                  ? const Color(0xff73d8ad)
+                  : const Color(0xff177856))
+              : theme.hintColor),
+      const SizedBox(width: 5),
+      Flexible(
+          child: Text(status,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall
+                  ?.copyWith(color: theme.hintColor))),
     ]);
+    return LayoutBuilder(builder: (context, bounds) {
+      final statusAtEnd = bounds.maxWidth >= 342 &&
+          MediaQuery.textScalerOf(context).scale(14) <= 16;
+      return Row(children: [
+        Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(13)),
+          child: Icon(_deviceIcon(peer),
+              color: theme.colorScheme.primary,
+              size: 24,
+              semanticLabel: peer.platform),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+            child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Flexible(
+                  child: Text(name.isEmpty ? formatID(peer.id) : name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleMedium)),
+              if (_shouldBuildPasswordIcon(peer)) ...[
+                const SizedBox(width: 4),
+                const Icon(Icons.key_rounded, size: 14),
+              ],
+            ]),
+            if (details.isNotEmpty)
+              Text(details.join(' · '),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.hintColor)),
+            if (_showNote(peer))
+              Text(peer.note,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall),
+            if (!statusAtEnd) statusLabel,
+          ],
+        )),
+        if (statusAtEnd) ...[
+          const SizedBox(width: 6),
+          ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: bounds.maxWidth * .25),
+              child: statusLabel),
+        ],
+        checkBoxOrActionMorePortrait(peer),
+      ]);
+    });
   }
 
   IconData _deviceIcon(Peer peer) => switch (peer.platform) {

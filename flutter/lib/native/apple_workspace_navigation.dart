@@ -6,9 +6,8 @@ import 'package:flutter/services.dart';
 
 /// Embeds the system navigation bar on iOS or sidebar on macOS.
 ///
-/// On iOS, place this inside the bottom safe area. It uses 64 logical pixels
-/// in compact mode and 72 otherwise. On macOS, give the sidebar bounded width
-/// and height. Callers supply their existing navigation on other platforms.
+/// On iOS, place this inside the bottom safe area. On macOS, give the sidebar
+/// bounded width and height.
 class AppleWorkspaceNavigation extends StatefulWidget {
   const AppleWorkspaceNavigation({
     super.key,
@@ -94,15 +93,24 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
   @override
   Widget build(BuildContext context) {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-      return SizedBox(
-        height: widget.compact ? 64 : 72,
-        child: UiKitView(
-          viewType: _viewType,
-          creationParams: _configuration,
-          creationParamsCodec: const StandardMessageCodec(),
-          onPlatformViewCreated: _onPlatformViewCreated,
-        ),
-      );
+      final landscape =
+          MediaQuery.orientationOf(context) == Orientation.landscape;
+      final height = widget.compact ? (landscape ? 52.0 : 64.0) : 72.0;
+      final width =
+          widget.labels.length * (widget.compact ? 106.0 : 124.0) + 16;
+      return Align(
+          heightFactor: 1,
+          child: SizedBox(
+              width: width,
+              height: height,
+              child: ClipPath.shape(
+                  shape: const StadiumBorder(),
+                  child: UiKitView(
+                    viewType: _viewType,
+                    creationParams: _configuration,
+                    creationParamsCodec: const StandardMessageCodec(),
+                    onPlatformViewCreated: _onPlatformViewCreated,
+                  ))));
     }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
       return AppKitView(

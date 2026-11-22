@@ -39,10 +39,17 @@ private final class AppleWorkspaceTabBar: NSObject, FlutterPlatformView, UITabBa
             name: "rustdesk/apple_workspace_navigation/\(viewId)", binaryMessenger: messenger
         )
         super.init()
-        let content = makeSurface()
+        root.backgroundColor = .clear
+        root.isOpaque = false
         tabBar.delegate = self
-        tabBar.isTranslucent = true
-        pin(tabBar, inside: content)
+        if #unavailable(iOS 26) {
+            let appearance = UITabBarAppearance()
+            appearance.configureWithDefaultBackground()
+            appearance.shadowColor = .clear
+            tabBar.standardAppearance = appearance
+            tabBar.scrollEdgeAppearance = appearance
+        }
+        pin(tabBar, inside: root)
         update(arguments)
         channel.setMethodCallHandler { [weak self] call, result in
             guard call.method == "update" else {
@@ -59,23 +66,6 @@ private final class AppleWorkspaceTabBar: NSObject, FlutterPlatformView, UITabBa
     }
 
     func view() -> UIView { root }
-
-    private func makeSurface() -> UIView {
-#if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            let effect = UIGlassEffect(style: .regular)
-            effect.isInteractive = true
-            let glass = UIVisualEffectView(effect: effect)
-            let appearance = UITabBarAppearance()
-            appearance.configureWithTransparentBackground()
-            tabBar.standardAppearance = appearance
-            tabBar.scrollEdgeAppearance = appearance
-            pin(glass, inside: root)
-            return glass.contentView
-        }
-#endif
-        return root
-    }
 
     private func pin(_ child: UIView, inside parent: UIView) {
         child.translatesAutoresizingMaskIntoConstraints = false

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/peer_tab_page.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
@@ -7,6 +9,7 @@ import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/mobile/pages/connection_page.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/native/apple_workspace_navigation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
@@ -39,6 +42,57 @@ void main() {
     expect(peerSort.value, PeerSortType.remoteId);
     expect(bind.getLocalFlutterOption(k: kOptionPeerSorting),
         PeerSortType.remoteId);
+  });
+
+  testWidgets(
+      'floating iOS tabs leave the sides and capsule corners interactive',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(390, 844);
+    addTearDown(tester.view.reset);
+    final messenger = tester.binding.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform_views,
+        (call) async {
+      if (call.method == 'create') {
+        final id = call.arguments['id'];
+        final channel =
+            MethodChannel('rustdesk/apple_workspace_navigation/$id');
+        messenger.setMockMethodCallHandler(channel, (_) async => null);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      }
+      return null;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(
+        SystemChannels.platform_views, null));
+    var taps = 0;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+      extendBody: true,
+      body: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => taps++,
+          child: const SizedBox.expand()),
+      bottomNavigationBar: AppleWorkspaceNavigation(
+          labels: const ['Connection', 'Settings'],
+          symbols: const ['display.2', 'gearshape'],
+          selected: 0,
+          compact: true,
+          onSelect: (_) {}),
+    )));
+    await tester.pump();
+    final view = find.byType(UiKitView);
+    final portrait = tester.getRect(view);
+    expect(portrait.width, lessThan(390));
+    await tester.tapAt(Offset(8, portrait.center.dy));
+    await tester.tapAt(portrait.topLeft + const Offset(2, 2));
+    expect(taps, 2);
+    tester.view.physicalSize = const Size(844, 390);
+    await tester.pump();
+    expect(tester.getSize(view).height, inInclusiveRange(44, portrait.height));
+    expect(tester.getRect(view).center.dx, 422);
+    await tester.pumpWidget(const SizedBox());
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('iPhone device search opens when tapped near the target edge',
