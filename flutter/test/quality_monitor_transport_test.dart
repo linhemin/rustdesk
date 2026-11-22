@@ -86,6 +86,22 @@ void main() {
     await tester.pump();
     expect(find.text('WebSocket'), findsNothing);
   });
+  testWidgets('quality panel opens a per-port report for the same round', (tester) async {
+    platformFFI.setBindingForTesting(_Options());
+    final model = _FakeFFI().qualityMonitorModel;
+    await tester.pumpWidget(MaterialApp(home: Center(child: DesktopQualityMonitor(model))));
+    await model.checkShowQualityMonitor(_sessionId);
+    model.addUdpReport('UDP #0123456789ab');
+    model.addUdpReport('UDP #0123456789ab  RX 3  ACK TX 2\n'
+        'local port | RX | valid RX | TX | ACK TX | TX err\n51023 | 3 | 2 | 9 | 2 | 0');
+    await tester.pump();
+    expect(model.udpReports.length, 1);
+    await tester.tap(find.text('UDP #0123456789ab  RX 3  ACK TX 2'));
+    await tester.pumpAndSettle();
+    expect(find.text('51023'), findsOneWidget);
+    expect(find.text('ACK TX'), findsOneWidget);
+  });
+
   testWidgets(
       'desktop quality panel follows the session toggle and live samples',
       (tester) async {

@@ -1,4 +1,4 @@
-use crate::kcp_stream::KcpStream;
+use crate::{kcp_stream::KcpStream, p2p::probe_report::{self, Port, Recording}};
 use hbb_common::{
     bytes::BytesMut,
     futures_util::{stream::FuturesUnordered, StreamExt},
@@ -10,7 +10,7 @@ use hbb_common::{
     },
     ResultType,
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::{atomic::Ordering::Relaxed, Arc}};
 
 const EXTRA_SOCKETS: usize = 3;
 const WIDE_EXTRA_SOCKETS: usize = 11;
@@ -136,11 +136,23 @@ fn packet(kind: u8, nonce: &[u8], key: &auth::Key) -> [u8; 45] {
 }
 
 impl Paths {
-    pub async fn select(
+    pub(crate) fn record(&self, primary: &UdpSocket) -> ResultType<Recording> {
+        let ports = std::iter::once(primary).chain(self.local.sockets.iter().map(AsRef::as_ref))
+            .map(|s| s.local_addr().map(|a| a.port())).collect::<std::io::Result<Vec<_>>>()?;
+        Ok(Recording::start(probe_report::id(&self.key), ports.into_iter()))
+    }
+
+    pub async fn select(self, primary: Arc<UdpSocket>, peer: SocketAddr, listen: bool)
+        -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
+        self.select_recorded(primary, peer, listen, None).await
+    }
+
+    pub(crate) async fn select_recorded(
         self,
         primary: Arc<UdpSocket>,
         peer: SocketAddr,
         listen: bool,
+        report: Option<&Recording>,
     ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
         let peer = super::ordinary_udp::udp_peer_destination(&primary, peer).await?;
         let mut destinations = vec![peer];
@@ -160,7 +172,8 @@ impl Paths {
         let count = self.local.sockets.len() + 1;
         let mut jobs: FuturesUnordered<_> = std::iter::once(primary)
             .chain(self.local.sockets)
-            .map(|s| check_socket(s, destinations.clone(), listen, &key))
+            .enumerate()
+            .map(|(i, s)| check_socket(s, destinations.clone(), listen, &key, report.and_then(|r| r.ports.get(i))))
             .collect();
         let mut totals = Counts {
             sockets: count,
@@ -201,11 +214,23 @@ struct PendingAddress {
     retry_challenge: bool,
 }
 
+async fn probe_send(socket: &UdpSocket, packet: &[u8; 45], to: SocketAddr, row: Option<&Port>) -> std::io::Result<usize> {
+    let sent = socket.send_to(packet, to).await;
+    if let Some(row) = row {
+        if sent.is_ok() {
+            row.tx.fetch_add(1, Relaxed);
+            if matches!(packet[4], 1 | 3) { row.replies.fetch_add(1, Relaxed); }
+        } else { row.errors.fetch_add(1, Relaxed); }
+    }
+    sent
+}
+
 async fn check_socket(
     socket: Arc<UdpSocket>,
     mut peers: Vec<SocketAddr>,
     listen: bool,
     key: &auth::Key,
+    row: Option<&Port>,
 ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
     let ip = peers[0].ip();
     let mut nonce = [0; 8];
@@ -233,7 +258,7 @@ async fn check_socket(
             }
             _ = tokio::time::sleep_until(next) => {
                 for _ in 0..peers.len().min(4) {
-                    match socket.send_to(&probe, peers[cursor]).await { Ok(_) => sent += 1, Err(_) => errors += 1 }
+                    match probe_send(&socket, &probe, peers[cursor], row).await { Ok(_) => sent += 1, Err(_) => errors += 1 }
                     cursor = (cursor + 1) % peers.len();
                 }
                 next = Instant::now() + Duration::from_millis(if start.elapsed().as_millis() < 250 { 90 } else { 350 });
@@ -244,6 +269,7 @@ async fn check_socket(
                     Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionRefused) => continue,
                     Err(e) => return Err(e.into()),
                 };
+                if let Some(row) = row { row.rx.fetch_add(1, Relaxed); }
                 traffic.received = traffic.received.saturating_add(1);
                 if listen && !buf[..n].starts_with(b"RDU2") && authenticated.contains(&from) {
                     if let Some(syn) = KcpStream::incoming_syn(&buf[..n]) {
@@ -254,6 +280,7 @@ async fn check_socket(
                 if n != 45 || &buf[..4] != b"RDU2" { continue; }
                 let Some(tag) = auth::Tag::from_slice(&buf[13..45]) else { continue };
                 if !auth::verify(&tag, &buf[..13], key) { continue; }
+                if let Some(row) = row { row.verified.fetch_add(1, Relaxed); }
                 let known = peers.contains(&from);
                 if !known && from.ip() != ip {
                     traffic.valid_foreign = traffic.valid_foreign.saturating_add(1);
@@ -272,9 +299,9 @@ async fn check_socket(
                             traffic.verified_foreign += 1;
                             if let Some(original) = candidate.request {
                                 authenticated.push(from);
-                                socket.send_to(&packet((kind ^ 2) + 1, &original, key), from).await?;
+                                probe_send(&socket, &packet((kind ^ 2) + 1, &original, key), from, row).await?;
                             }
-                            socket.send_to(&probe, from).await?;
+                            probe_send(&socket, &probe, from, row).await?;
                         } else if request {
                             let candidate = &mut pending[index];
                             candidate.request = Some(incoming);
@@ -284,7 +311,7 @@ async fn check_socket(
                                 packet(buf[4] + 1, &incoming, key)
                             };
                             candidate.retry_challenge = !candidate.retry_challenge;
-                            socket.send_to(&response, from).await?;
+                            probe_send(&socket, &response, from, row).await?;
                         }
                     } else if peers.len() + pending.len() < max_peers
                         && (request || (buf[4] == kind + 1 && incoming == nonce)) {
@@ -293,7 +320,7 @@ async fn check_socket(
                         pending.push(PendingAddress {
                             addr: from, challenge, request: request.then_some(incoming), retry_challenge: false,
                         });
-                        socket.send_to(&packet(kind, &challenge, key), from).await?;
+                        probe_send(&socket, &packet(kind, &challenge, key), from, row).await?;
                     }
                     continue;
                 }
@@ -301,13 +328,13 @@ async fn check_socket(
                 if buf[4] == (kind ^ 2) {
                     if !authenticated.contains(&from) { authenticated.push(from); }
                     let reply = packet(buf[4] + 1, &buf[5..13], key);
-                    socket.send_to(&reply, from).await?;
+                    probe_send(&socket, &reply, from, row).await?;
                 } else if buf[4] == kind + 1 && buf[5..13] == nonce && known && !listen {
                     socket.connect(from).await?;
                     return Ok((socket, None));
                 } else if buf[4] != kind + 1 || buf[5..13] != nonce { continue; }
                 // A valid packet from a different source port supplies a peer-reflexive candidate.
-                if !known { peers.push(from); socket.send_to(&probe, from).await?; }
+                if !known { peers.push(from); probe_send(&socket, &probe, from, row).await?; }
             }
         }
     }
@@ -316,6 +343,34 @@ async fn check_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn controlled_report_counts_replies_on_the_receiving_port_for_one_round() {
+        let remote = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let controlled = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let addr = controlled.local_addr().unwrap();
+        let extra = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let key = auth::gen_key();
+        let id = probe_report::id(&key);
+        let paths = Paths { key: key.clone(), ports: vec![],
+            local: Candidates { sockets: vec![extra], tickets: vec![] } };
+        let recording = paths.record(&controlled).unwrap();
+        assert!(probe_report::take(&[0; 32]).is_none());
+        let done = probe_report::take(&id).unwrap();
+        assert!(probe_report::take(&id).is_none());
+        remote.send_to(&packet(0, &[7; 8], &key), addr).await.unwrap();
+        remote.send_to(b"invalid", addr).await.unwrap();
+        let _ = paths.select_recorded(controlled, remote.local_addr().unwrap(), true, Some(&recording)).await.unwrap_err();
+        drop(recording);
+        let report = done.await.unwrap();
+        let first = &report.ports[0];
+        assert_eq!((first.local_port, first.received, first.verified, first.replies),
+            (u32::from(addr.port()), 2, 1, 1));
+        assert!(first.sent > first.replies);
+        assert_eq!((report.ports[1].received, report.ports[1].replies), (0, 0));
+        assert!(probe_report::display(&id, &report).is_some());
+        assert!(probe_report::display(&[0; 32], &report).is_none());
+    }
 
     #[tokio::test]
     async fn peer_on_a_different_source_ip_must_return_the_tuple_challenge_before_kcp() {

@@ -104,6 +104,7 @@ pub struct Remote<T: InvokeUiSession> {
     last_record_state: bool,
     sent_close_reason: bool,
     cursor_dedupe: CursorDedupe,
+    udp_probe_rounds: std::collections::VecDeque<crate::p2p::probe_report::Id>,
     trusted_device: crate::trusted_devices::client::Session,
 }
 
@@ -142,6 +143,7 @@ impl<T: InvokeUiSession> Remote<T> {
             audio_sender: crate::client::start_audio_thread(),
             receiver,
             sender,
+            udp_probe_rounds: Default::default(),
             read_jobs: Vec::new(),
             write_jobs: Vec::new(),
             remove_jobs: Default::default(),
@@ -876,6 +878,14 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut Stream) -> bool {
         match data {
+            Data::UdpProbeRound(id) => {
+                if self.udp_probe_rounds.len() >= 8 { self.udp_probe_rounds.pop_front(); }
+                self.udp_probe_rounds.push_back(id);
+                self.handler.update_udp_probe(&format!("UDP #{}", crate::p2p::probe_report::label(&id)));
+                if self.is_connected && peer.is_secured() {
+                    allow_err!(peer.send(&crate::p2p::probe_report::query(&id)).await);
+                }
+            }
             Data::Close => {
                 self.send_close_reason(peer, "").await;
                 return false;
@@ -1951,6 +1961,11 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
 
                         self.is_connected = true;
+                        if peer.is_secured() {
+                            for id in &self.udp_probe_rounds {
+                                allow_err!(peer.send(&crate::p2p::probe_report::query(id)).await);
+                            }
+                        }
                     }
                     _ => {}
                 },
@@ -2396,6 +2411,14 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
+                    Some(misc::Union::UdpProbeReport(report)) if self.is_connected && peer.is_secured() => {
+                        if let Some(index) = self.udp_probe_rounds.iter().position(|id| report.round.as_ref() == id) {
+                            if let Some(text) = crate::p2p::probe_report::display(&self.udp_probe_rounds[index], &report) {
+                                self.udp_probe_rounds.remove(index);
+                                self.handler.update_udp_probe(&text);
+                            }
+                        }
+                    }
                     Some(misc::Union::AudioFormat(f)) => {
                         self.audio_sender.send(MediaData::AudioFormat(f)).ok();
                     }

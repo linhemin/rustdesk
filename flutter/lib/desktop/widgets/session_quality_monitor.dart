@@ -1,3 +1,4 @@
+import 'package:flutter_hbb/common/widgets/peer_udp_report.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/model.dart';
@@ -87,6 +88,7 @@ class DesktopQualityMonitor extends StatelessWidget {
                   detail(translate('Bitrate'), bitrate),
                   detail(translate('Codec'), data.codecFormat ?? '—'),
                   detail(translate('Chroma'), data.chroma ?? '—'),
+                  if (model.udpReports.isNotEmpty) PeerUdpButton(model),
                   if (model.directConnection case final direct?) ...[
                     const Divider(height: 12),
                     detail(

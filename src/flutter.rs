@@ -709,6 +709,10 @@ impl InvokeUiSession for FlutterHandler {
     // unused in flutter
     fn close_success(&self) {}
 
+    fn update_udp_probe(&self, report: &str) {
+        self.push_event("udp_probe_report", &[("report", report)], &[]);
+    }
+
     fn update_quality_status(&self, status: QualityStatus) {
         const NULL: String = String::new();
         self.push_event(

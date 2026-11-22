@@ -1,3 +1,4 @@
+import 'package:flutter_hbb/common/widgets/peer_udp_report.dart';
 import 'package:auto_size_text/auto_size_text.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
@@ -640,6 +641,8 @@ class QualityMonitor extends StatelessWidget {
                       _row(
                           translate("Codec"), qualityMonitorModel.data.codecFormat ?? '-'),
                       _row("Chroma", qualityMonitorModel.data.chroma ?? '-'),
+                      if (qualityMonitorModel.udpReports.isNotEmpty)
+                        PeerUdpButton(qualityMonitorModel, foreground: Colors.white),
                       if (qualityMonitorModel.directConnection case final direct?)
                         SizedBox(
                           width: double.infinity,

@@ -285,6 +285,7 @@ mod recorder {
         latest: Option<(Instant, String)>,
         punch: Option<tokio::sync::watch::Receiver<crate::live_direct::PunchStatus>>,
         stage: &'static str,
+        round: Option<String>,
         ended: bool,
     }
 
@@ -316,6 +317,7 @@ mod recorder {
                 env!("CARGO_PKG_VERSION"), BUILD.load(Ordering::Relaxed), self.phase, self.start_path,
                 path_label(), self.started.elapsed().as_millis(), progress.stage,
             );
+            if let Some(round) = &progress.round { entry.push_str(&format!("round={round}\n")); }
             match &progress.latest {
                 Some((at, text)) => {
                     entry.push_str(&format!("sample_age_ms={}\n", at.elapsed().as_millis()));
@@ -355,6 +357,7 @@ mod recorder {
                 latest: None,
                 punch: None,
                 stage: "starting",
+                round: None,
                 ended: false,
             };
             attempt.publish(&progress, "in-progress");
@@ -398,6 +401,10 @@ mod recorder {
                     state.punch = None;
                 }
             }));
+        }
+
+        pub(crate) fn set_udp_round(&mut self, id: &crate::p2p::probe_report::Id) {
+            if let Ok(mut state) = self.progress.lock() { state.round = Some(crate::p2p::probe_report::label(id)); }
         }
 
         pub(crate) fn set_stage(&mut self, stage: &'static str) {

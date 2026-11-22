@@ -2013,9 +2013,12 @@ impl Client {
             );
         }
         if let Some((udp_socket_nat, paths)) = udp_socket_nat {
+            let probe_interface = interface.clone();
             direct_futures.push(
                 async move {
                     if let Some(paths) = paths {
+                        let round = crate::p2p::probe_report::id(&paths.key);
+                        probe_interface.send(Data::UdpProbeRound(round));
                         return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout).await
                             .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
                     }
@@ -5716,6 +5719,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 /// Data used by the client interface.
 #[derive(Clone)]
 pub enum Data {
+    UdpProbeRound([u8; 32]),
     Close,
     RejectInsecureConnection,
     Login((String, String, String, bool)),
@@ -6163,7 +6167,10 @@ async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: A
     #[cfg(target_os = "ios")]
     let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp");
     #[cfg(target_os = "ios")]
-    if let Some(o) = observation.as_mut() { o.set_stage("checking NAS candidate pairs"); }
+    if let Some(o) = observation.as_mut() {
+        o.set_udp_round(&crate::p2p::probe_report::id(&paths.key));
+        o.set_stage("checking NAS candidate pairs");
+    }
     let (socket, _) = paths.select(socket, peer, false).await.map_err(|err| {
         #[cfg(target_os = "ios")]
         if let Some(o) = observation.as_mut() { o.finish_candidates(&err); }

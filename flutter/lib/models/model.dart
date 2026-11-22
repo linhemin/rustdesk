@@ -416,6 +416,8 @@ class FfiModel with ChangeNotifier {
         parent.target?.serverModel.addConnection(evt);
       } else if (name == 'on_client_remove') {
         parent.target?.serverModel.onClientRemove(evt);
+      } else if (name == 'udp_probe_report') {
+        parent.target?.qualityMonitorModel.addUdpReport(evt['report']);
       } else if (name == 'update_quality_status') {
         parent.target?.qualityMonitorModel.updateQualityStatus(evt);
       } else if (name == 'update_block_input_state') {
@@ -4073,6 +4075,20 @@ class QualityMonitorModel with ChangeNotifier {
 
   bool get show => _show;
   QualityMonitorData get data => _data;
+  final List<String> udpReports = [];
+
+  void addUdpReport(dynamic report) {
+    if (report is! String || report.length > 2048 || !report.startsWith('UDP #')) return;
+    final id = report.split(' ').take(2).join(' ');
+    final index = udpReports.indexWhere((entry) => entry.split(' ').take(2).join(' ') == id);
+    if (index < 0) {
+      udpReports.add(report);
+    } else {
+      udpReports[index] = report;
+    }
+    if (udpReports.length > 8) udpReports.removeAt(0);
+    notifyListeners();
+  }
 
   bool? get directConnection => parent.target?.ffiModel.direct;
 
@@ -4575,6 +4591,7 @@ class FFI {
     await imageModel.update(null);
     cursorModel.clear();
     ffiModel.clear();
+    qualityMonitorModel.udpReports.clear();
     canvasModel.clear();
     inputModel.resetModifiers();
     // Dispose relative mouse mode resources to ensure cursor is restored
