@@ -5,6 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 #[path = "p2p/observer_policy.rs"]
 pub(crate) mod observer_policy;
 pub(crate) mod ordinary_udp;
+pub(crate) mod relay;
 pub(crate) mod udp_paths;
 #[path = "p2p/udp_mapping.rs"]
 pub(crate) mod udp_mapping;

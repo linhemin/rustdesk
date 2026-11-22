@@ -19,10 +19,8 @@ use hbb_common::{
     log,
     protobuf::{Enum, Message as _},
     rendezvous_proto::*,
-    socket_client,
     sodiumoxide::crypto::{box_, sign},
     timeout, tokio,
-    websocket::{check_ws, is_ws_endpoint},
     ResultType, Stream,
 };
 use base::message_proto::*;
@@ -423,14 +421,9 @@ async fn create_relay_connection_(
 ) -> ResultType<()> {
     // The proxy's address family does not constrain the relay target.
     let relay_server = crate::check_port(relay_server, RELAY_PORT);
-    let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
-    let mut stream = socket_client::connect_tcp(
-        socket_client::ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),
-        CONNECT_TIMEOUT,
-    )
-    .await?;
-    let mut msg_out = RendezvousMessage::new();
     let licence_key = crate::get_key(true).await;
+    let (mut stream, _) = crate::p2p::relay::connect(relay_server, &licence_key, ipv4).await?;
+    let mut msg_out = RendezvousMessage::new();
     msg_out.set_request_relay(RequestRelay {
         licence_key,
         uuid,

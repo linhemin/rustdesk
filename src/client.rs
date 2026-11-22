@@ -56,7 +56,7 @@ use hbb_common::{
     rand,
     rendezvous_proto::*,
     sha2::{Digest, Sha256},
-    socket_client::{connect_tcp, connect_tcp_local, ipv4_to_ipv6},
+    socket_client::{connect_tcp, connect_tcp_local},
     sodiumoxide::{base64, crypto::sign},
     timeout,
     tokio::{
@@ -69,7 +69,6 @@ use hbb_common::{
         time::{interval, Duration, Instant},
     },
     webrtc::WebRTCStream,
-    websocket::{check_ws, is_ws_endpoint},
     AddrMangle, ResultType, Stream,
 };
 use base::{
@@ -1619,13 +1618,8 @@ impl Client {
                             );
                             connect_futures.push(
                                 async move {
-                                    let conn = fut.await?;
-                                    Ok((
-                                        conn,
-                                        None,
-                                        if use_ws() { "WebSocket" } else { "Relay" },
-                                        false,
-                                    ))
+                                    let (conn, transport) = fut.await?;
+                                    Ok((conn, None, transport, false))
                                 }
                                 .boxed(),
                             );
@@ -1713,7 +1707,7 @@ impl Client {
                                     e
                                 );
                                 drop(webrtc_guard.take());
-                                let mut relay_conn = Self::request_relay(
+                                let (mut relay_conn, relay_type) = Self::request_relay(
                                     &peer,
                                     relay_server_rr,
                                     &rendezvous_server,
@@ -1739,7 +1733,7 @@ impl Client {
                                 )
                                 .await?;
                                 conn = relay_conn;
-                                typ = if use_ws() { "WebSocket" } else { "Relay" };
+                                typ = relay_type;
                                 // The transport is now a relay: the WebRTC win it replaced must
                                 // not carry its direct flag into the return, or the relay is
                                 // reported P2P and the outer race treats it as one.
@@ -2096,13 +2090,12 @@ impl Client {
                     conn_type,
                     &switch_code,
                 )
-                .await;
+                .await.map(|(stream, relay_type)| { typ = relay_type; stream });
                 if let Err(e) = conn {
                     // this direct is mainly used by on_establish_connection_error, so we update it here before bail
                     interface.update_direct(Some(false));
                     bail!("Failed to connect via relay server: {}", e);
                 }
-                typ = "Relay";
                 direct = false;
             } else {
                 bail!("Failed to make direct connection to remote desktop");
@@ -2138,13 +2131,13 @@ impl Client {
                 )
                 .await
                 {
-                    Ok(mut relay_conn) => {
+                    Ok((mut relay_conn, relay_type)) => {
                         match Self::secure_connection(peer_id, signed_id_pk, key, &mut relay_conn)
                             .await
                         {
                             Ok(pk) => {
                                 conn = relay_conn;
-                                typ = "Relay";
+                                typ = relay_type;
                                 direct = false;
                                 pk
                             }
@@ -2364,7 +2357,15 @@ impl Client {
         token: &str,
         conn_type: ConnType,
         switch_code: &str,
-    ) -> ResultType<Stream> {
+    ) -> ResultType<(Stream, &'static str)> {
+        let (uuid, ipv4) = Self::relay_pair_id(peer, &relay_server, rendezvous_server, secure, key, token, switch_code).await?;
+        Self::create_relay(peer, uuid, relay_server, key, conn_type, ipv4).await
+    }
+
+    async fn relay_pair_id(
+        peer: &str, relay_server: &str, rendezvous_server: &str, secure: bool,
+        key: &str, token: &str, switch_code: &str,
+    ) -> ResultType<(String, bool)> {
         let mut succeed = false;
         let mut uuid = "".to_owned();
         let mut ipv4 = true;
@@ -2394,7 +2395,7 @@ impl Client {
                 id: peer.to_owned(),
                 token: token.to_owned(),
                 uuid: uuid.clone(),
-                relay_server: relay_server.clone(),
+                relay_server: relay_server.to_owned(),
                 secure,
                 switch_code: switch_code.to_owned(),
                 ..Default::default()
@@ -2416,7 +2417,7 @@ impl Client {
         if !succeed {
             bail!("Timeout");
         }
-        Self::create_relay(peer, uuid, relay_server, key, conn_type, ipv4).await
+        Ok((uuid, ipv4))
     }
 
     /// Create a relay connection to the server.
@@ -2427,17 +2428,17 @@ impl Client {
         key: &str,
         conn_type: ConnType,
         ipv4: bool,
-    ) -> ResultType<Stream> {
+    ) -> ResultType<(Stream, &'static str)> {
         crate::common::check_relay_uuid(&uuid)?;
         // The proxy's address family does not constrain the relay target.
         let relay_server = check_port(relay_server, RELAY_PORT);
-        let use_ws_proxy = Config::is_proxy() && is_ws_endpoint(&check_ws(&relay_server));
-        let mut conn = connect_tcp(
-            ipv4_to_ipv6(relay_server, ipv4 || use_ws_proxy),
-            CONNECT_TIMEOUT,
-        )
-        .await
-        .with_context(|| "Failed to connect to relay server")?;
+        let (mut conn, transport) = crate::p2p::relay::connect(relay_server, key, ipv4)
+            .await.with_context(|| "Failed to connect to relay server")?;
+        Self::join_relay(&mut conn, peer, uuid, key, conn_type).await?;
+        Ok((conn, transport))
+    }
+
+    async fn join_relay(conn: &mut Stream, peer: &str, uuid: String, key: &str, conn_type: ConnType) -> ResultType<()> {
         let mut msg_out = RendezvousMessage::new();
         msg_out.set_request_relay(RequestRelay {
             licence_key: key.to_owned(),
@@ -2446,8 +2447,7 @@ impl Client {
             conn_type: conn_type.into(),
             ..Default::default()
         });
-        conn.send(&msg_out).await?;
-        Ok(conn)
+        conn.send(&msg_out).await
     }
 
     #[inline]
