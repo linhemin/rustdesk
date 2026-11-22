@@ -13,6 +13,7 @@ use hbb_common::{
 use std::{net::SocketAddr, sync::Arc};
 
 const EXTRA_SOCKETS: usize = 3;
+const WIDE_EXTRA_SOCKETS: usize = 11;
 const RECEIPT_SIZE: usize = 38;
 const MAX_PEERS: usize = 8;
 
@@ -23,6 +24,9 @@ pub(crate) struct Counts {
     pub sent: u32,
     pub errors: u32,
     pub authenticated: usize,
+    pub received: u32,
+    pub valid_foreign: u32,
+    pub verified_foreign: u32,
 }
 
 impl std::fmt::Display for Counts {
@@ -39,7 +43,7 @@ pub(crate) struct Candidates {
     pub tickets: Vec<u8>,
 }
 
-async fn observed_socket(source: SocketAddr, nas: SocketAddr) -> Option<(Arc<UdpSocket>, Vec<u8>)> {
+async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool) -> Option<(Arc<UdpSocket>, Vec<u8>, bool)> {
     let local = SocketAddr::new(source.ip(), 0);
     #[cfg(target_os = "windows")]
     let pinned =
@@ -57,6 +61,7 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr) -> Option<(Arc<Udp
     randombytes::randombytes_into(&mut request[8..20]);
     request[20..24].copy_from_slice(&[0, 0x26, 0, 72]);
     request[24..32].copy_from_slice(b"RD-PATH1");
+    if wide { request[32..40].copy_from_slice(b"RD-WIDE1"); }
     let mut buf = [0; 128];
     for wait in [250, 450] {
         socket.send_to(&request, nas).await.ok()?;
@@ -76,10 +81,12 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr) -> Option<(Arc<Udp
                 [0, 0x20, 0, 20] => 44,
                 _ => continue,
             };
-            if n == pos + 44 && buf[pos..pos + 4] == [0xc0, 0x51, 0, 38] {
+            let expanded = wide && n == pos + 52 && buf[pos + 44..n] == [0xc0, 0x52, 0, 4, 0, 0, 0, 11];
+            if (n == pos + 44 || expanded) && buf[pos..pos + 4] == [0xc0, 0x51, 0, 38] {
                 return Some((
                     Arc::new(socket),
                     buf[pos + 4..pos + 4 + RECEIPT_SIZE].to_vec(),
+                    expanded,
                 ));
             }
             return None; // An older hbbs supplied a standard binding response.
@@ -89,18 +96,23 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr) -> Option<(Arc<Udp
 }
 
 impl Candidates {
-    pub async fn gather(source: SocketAddr, nas: SocketAddr) -> Self {
+    pub async fn gather(source: SocketAddr, nas: SocketAddr, wide: bool) -> Self {
         let mut result = Self::default();
         if source.ip().is_unspecified() {
             return result;
         }
         let mut jobs: FuturesUnordered<_> = (0..EXTRA_SOCKETS)
-            .map(|_| observed_socket(source, nas))
+            .map(|_| observed_socket(source, nas, wide))
             .collect();
+        let mut extended = false;
         while let Some(candidate) = jobs.next().await {
-            if let Some((socket, ticket)) = candidate {
+            if let Some((socket, ticket, supported)) = candidate {
                 result.sockets.push(socket);
                 result.tickets.extend(ticket);
+                if supported && !extended {
+                    extended = true;
+                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(|_| observed_socket(source, nas, wide)));
+                }
             }
         }
         result
@@ -135,7 +147,7 @@ impl Paths {
         for port in self
             .ports
             .iter()
-            .take(EXTRA_SOCKETS)
+            .take(WIDE_EXTRA_SOCKETS)
             .filter_map(|p| u16::try_from(*p).ok())
         {
             let mut addr = peer;
@@ -164,6 +176,9 @@ impl Paths {
                         totals.sent += c.sent;
                         totals.errors += c.errors;
                         totals.authenticated += c.authenticated;
+                        totals.received += c.received;
+                        totals.valid_foreign += c.valid_foreign;
+                        totals.verified_foreign += c.verified_foreign;
                     } else {
                         socket_error = Some(e);
                     }
@@ -179,6 +194,13 @@ impl Paths {
     }
 }
 
+struct PendingAddress {
+    addr: SocketAddr,
+    challenge: [u8; 8],
+    request: Option<[u8; 8]>,
+    retry_challenge: bool,
+}
+
 async fn check_socket(
     socket: Arc<UdpSocket>,
     mut peers: Vec<SocketAddr>,
@@ -191,21 +213,28 @@ async fn check_socket(
     let kind = if listen { 2 } else { 0 };
     let probe = packet(kind, &nonce, key);
     let mut authenticated = Vec::new();
+    // A NAT or a second interface can use a different source IP for the peer than for hbbs.
+    // Require a fresh challenge for that exact tuple before adding it to the periodic checks.
+    let mut pending: Vec<PendingAddress> = Vec::new();
     let mut buf = [0; 1500];
     let start = Instant::now();
     let deadline = start + Duration::from_secs(6);
     let mut next = start;
+    let max_peers = MAX_PEERS.max(peers.len() + 4);
+    let mut cursor = 0;
     let mut sent = 0u32;
     let mut errors = 0u32;
+    let mut traffic = Counts::default();
     loop {
         tokio::select! {
             biased;
             _ = tokio::time::sleep_until(deadline) => {
-                return Err(Counts { sent, errors, authenticated: authenticated.len(), ..Default::default() }.into());
+                return Err(Counts { sent, errors, authenticated: authenticated.len(), ..traffic }.into());
             }
             _ = tokio::time::sleep_until(next) => {
-                for peer in &peers {
-                    match socket.send_to(&probe, peer).await { Ok(_) => sent += 1, Err(_) => errors += 1 }
+                for _ in 0..peers.len().min(4) {
+                    match socket.send_to(&probe, peers[cursor]).await { Ok(_) => sent += 1, Err(_) => errors += 1 }
+                    cursor = (cursor + 1) % peers.len();
                 }
                 next = Instant::now() + Duration::from_millis(if start.elapsed().as_millis() < 250 { 90 } else { 350 });
             }
@@ -215,7 +244,7 @@ async fn check_socket(
                     Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionRefused) => continue,
                     Err(e) => return Err(e.into()),
                 };
-                if from.ip() != ip { continue; }
+                traffic.received = traffic.received.saturating_add(1);
                 if listen && !buf[..n].starts_with(b"RDU2") && authenticated.contains(&from) {
                     if let Some(syn) = KcpStream::incoming_syn(&buf[..n]) {
                         socket.connect(from).await?;
@@ -226,7 +255,49 @@ async fn check_socket(
                 let Some(tag) = auth::Tag::from_slice(&buf[13..45]) else { continue };
                 if !auth::verify(&tag, &buf[..13], key) { continue; }
                 let known = peers.contains(&from);
-                if !known && peers.len() >= MAX_PEERS { continue; }
+                if !known && from.ip() != ip {
+                    traffic.valid_foreign = traffic.valid_foreign.saturating_add(1);
+                    if from.ip().is_unspecified() || from.ip().is_multicast()
+                        || (from.ip().is_loopback() && !ip.is_loopback())
+                        || from.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::BROADCAST) {
+                        continue;
+                    }
+                    let incoming = <[u8; 8]>::try_from(&buf[5..13])?;
+                    let request = buf[4] == (kind ^ 2);
+                    if let Some(index) = pending.iter().position(|p| p.addr == from) {
+                        if buf[4] == kind + 1 && incoming == pending[index].challenge {
+                            let candidate = pending.swap_remove(index);
+                            if peers.len() >= max_peers { continue; }
+                            peers.push(from);
+                            traffic.verified_foreign += 1;
+                            if let Some(original) = candidate.request {
+                                authenticated.push(from);
+                                socket.send_to(&packet((kind ^ 2) + 1, &original, key), from).await?;
+                            }
+                            socket.send_to(&probe, from).await?;
+                        } else if request {
+                            let candidate = &mut pending[index];
+                            candidate.request = Some(incoming);
+                            let response = if candidate.retry_challenge {
+                                packet(kind, &candidate.challenge, key)
+                            } else {
+                                packet(buf[4] + 1, &incoming, key)
+                            };
+                            candidate.retry_challenge = !candidate.retry_challenge;
+                            socket.send_to(&response, from).await?;
+                        }
+                    } else if peers.len() + pending.len() < max_peers
+                        && (request || (buf[4] == kind + 1 && incoming == nonce)) {
+                        let mut challenge = [0; 8];
+                        randombytes::randombytes_into(&mut challenge);
+                        pending.push(PendingAddress {
+                            addr: from, challenge, request: request.then_some(incoming), retry_challenge: false,
+                        });
+                        socket.send_to(&packet(kind, &challenge, key), from).await?;
+                    }
+                    continue;
+                }
+                if !known && peers.len() >= max_peers { continue; }
                 if buf[4] == (kind ^ 2) {
                     if !authenticated.contains(&from) { authenticated.push(from); }
                     let reply = packet(buf[4] + 1, &buf[5..13], key);
@@ -247,16 +318,50 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn peer_on_a_different_source_ip_must_return_the_tuple_challenge_before_kcp() {
+        let left = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let right = Arc::new(UdpSocket::bind("127.0.0.2:0").await.unwrap());
+        let unreachable = UdpSocket::bind("127.0.0.3:0").await.unwrap();
+        let outsider = UdpSocket::bind("127.0.0.4:0").await.unwrap();
+        let target = left.local_addr().unwrap();
+        let key = auth::gen_key();
+        let paths = || Paths { local: Candidates::default(), ports: vec![], key: key.clone() };
+        let controller = async {
+            let (socket, _) = paths().select(left, unreachable.local_addr().unwrap(), false).await.unwrap();
+            assert_eq!(socket.peer_addr().unwrap(), right.local_addr().unwrap());
+            KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
+        };
+        let controlled = async {
+            let mut probe = [0; 45];
+            unreachable.recv_from(&mut probe).await.unwrap();
+            // A copy of an ACK for the advertised address cannot nominate a different source.
+            outsider.send_to(&packet(1, &probe[5..13], &key), target).await.unwrap();
+            let (n, _) = timeout(Duration::from_secs(1), outsider.recv_from(&mut probe)).await.unwrap().unwrap();
+            assert_eq!((n, probe[4]), (45, 0));
+            let (socket, syn) = paths().select(right.clone(), target, true).await.unwrap();
+            KcpStream::accept(socket, Duration::from_secs(2), syn).await.unwrap()
+        };
+        let ((_a, mut client), (_b, mut host)) = tokio::join!(controller, controlled);
+        client.send_raw(vec![42; 4500]).await.unwrap();
+        assert_eq!(host.next_timeout(2000).await.unwrap().unwrap().as_ref(), &[42; 4500]);
+        host.send_raw(vec![17; 4500]).await.unwrap();
+        assert_eq!(client.next_timeout(2000).await.unwrap().unwrap().as_ref(), &[17; 4500]);
+    }
+
+    #[tokio::test]
     async fn direct_kcp_recovers_when_the_observer_ports_do_not_reach_either_primary_socket() {
         async fn bind() -> Arc<UdpSocket> {
             Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap())
         }
         let (left, right, alternate) = (bind().await, bind().await, bind().await);
         let (unreachable_left, unreachable_right) = (bind().await, bind().await);
+        let stale = [bind().await, bind().await, bind().await];
+        let mut ports: Vec<_> = stale.iter().map(|s| u32::from(s.local_addr().unwrap().port())).collect();
+        ports.push(u32::from(alternate.local_addr().unwrap().port()));
         let key = auth::gen_key();
         let controller = Paths {
             local: Candidates::default(),
-            ports: vec![u32::from(alternate.local_addr().unwrap().port())],
+            ports,
             key: key.clone(),
         };
         let responder = Paths {

@@ -7301,7 +7301,7 @@ fn ip_whitelist_entries(option: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn ip_allowed(ip: std::net::IpAddr) -> bool {
+pub(crate) fn ip_allowed(ip: std::net::IpAddr) -> bool {
     let entries = ip_whitelist_entries(&Config::get_option("whitelist"));
     entries.is_empty() || entries.iter().any(|entry| entry == "0.0.0.0"
         || IpCidr::from_str(entry).map_or(false, |cidr| cidr.contains(ip)))

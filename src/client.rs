@@ -1311,7 +1311,8 @@ impl Client {
         let mut udp_candidates = if let Some((nas, source)) = mapped.filter(|_| {
             udp_nat_port > 0 && handshake_grant && socket.is_secured() && udp.0.is_some()
         }) {
-            crate::p2p::udp_paths::Candidates::gather(source, nas).await
+            crate::p2p::udp_paths::Candidates::gather(source, nas,
+                direct_permission.native_upgrade || direct_permission.direct_only).await
         } else {
             Default::default()
         };

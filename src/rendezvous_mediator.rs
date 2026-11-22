@@ -1426,7 +1426,7 @@ impl RendezvousMediator {
         let destination = crate::p2p::ordinary_udp::peer_candidate(peer_addr, addr, shared_egress);
         let mut paths = None;
         if ordinary_v4 && slot.is_some() && !candidate_ports.is_empty() && msg_punch.udp_reply_token.len() == 16 {
-            let mut local = crate::p2p::udp_paths::Candidates::gather(socket.local_addr()?, addr).await;
+            let mut local = crate::p2p::udp_paths::Candidates::gather(socket.local_addr()?, addr, candidate_ports.len() > 3).await;
             if !local.tickets.is_empty() {
                 let key = hbb_common::sodiumoxide::crypto::hash::sha256::hash(&msg_punch.udp_reply_token);
                 msg_punch.udp_mapping_tickets = std::mem::take(&mut local.tickets).into();
@@ -1732,7 +1732,12 @@ async fn udp_nat_listen(
     let socket_cloned = socket.clone();
     let func = async {
         let (socket, init_packet) = if let Some(paths) = paths {
-            paths.select(socket, peer_addr, true).await?
+            let selected = paths.select(socket, peer_addr, true).await?;
+            let actual = selected.0.peer_addr()?;
+            if actual.ip() != peer_addr.ip() && !crate::server::ip_allowed(actual.ip()) {
+                anyhow::bail!("UDP source is outside the IP whitelist");
+            }
+            selected
         } else {
             crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await?;
             if peer_addr.is_ipv4() {

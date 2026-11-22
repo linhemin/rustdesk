@@ -425,8 +425,9 @@ mod recorder {
                 self.result = "timeout";
                 if let Ok(mut state) = self.progress.lock() {
                     state.latest = Some((Instant::now(), format!(
-                        "nativeUdp [localSockets,nasPorts,sent,sendErrors,authenticatedPairs]=[{},{},{},{},{}]",
-                        c.sockets, c.ports, c.sent, c.errors, c.authenticated
+                        "nativeUdp [localSockets,nasPorts,sent,sendErrors,authenticatedPairs]=[{},{},{},{},{}]\nnativeUdpIngress [datagrams,validUnlistedIpPackets,verifiedUnlistedIpPaths]=[{},{},{}]",
+                        c.sockets, c.ports, c.sent, c.errors, c.authenticated,
+                        c.received, c.valid_foreign, c.verified_foreign
                     )));
                 }
             }
