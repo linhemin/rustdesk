@@ -205,9 +205,10 @@ private final class SystemWorkspaceTabView: NSObject, FlutterPlatformView {
         if labels != settings.labels || symbols != settings.symbols {
             labels = settings.labels
             symbols = settings.symbols
-            root.controller.setItems(labels: labels, symbols: symbols)
+            root.controller.setItems(labels: labels, symbols: symbols, selected: settings.selected)
+        } else {
+            root.controller.select(settings.selected)
         }
-        root.controller.select(settings.selected)
     }
 }
 
@@ -252,9 +253,11 @@ private final class SystemWorkspaceTabs: UITabBarController, UITabBarControllerD
         tabBarMinimizeBehavior = .never
     }
 
-    func setItems(labels: [String], symbols: [String]) {
+    func setItems(labels: [String], symbols: [String], selected: Int) {
+        // UIKit auto-selects the first tab when replacing the list.
+        delegate = nil
+        defer { delegate = self }
         mode = .tabBar
-        delegate = self
         setTabs(labels.enumerated().map { index, label in
             UITab(
                 title: label,
@@ -269,6 +272,7 @@ private final class SystemWorkspaceTabs: UITabBarController, UITabBarControllerD
                 return content
             }
         }, animated: false)
+        select(selected)
     }
 
     func select(_ index: Int) {
