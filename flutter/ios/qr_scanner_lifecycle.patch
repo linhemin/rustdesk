@@ -1,26 +1,63 @@
 --- QRView.swift
 +++ QRView.swift
-@@ -14,2 +14,3 @@
+@@ -10,10 +10,11 @@
+ import AVFoundation
+ 
+ public class QRView:NSObject,FlutterPlatformView {
+     var previewView: UIView
      var scanner: NativeBarcodeScanner?
 +    private var wantsToScan = true
      var registrar: FlutterPluginRegistrar
-@@ -53,2 +54,3 @@
+     var channel: FlutterMethodChannel
+     var cameraFacing: CameraPosition
+ 
+     // Codabar, maxicode, rss14 & rssexpanded not supported. Replaced with qr.
+@@ -49,10 +50,11 @@
+     }
+ 
+     public func view() -> UIView {
+         channel.setMethodCallHandler({
              [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) -> Void in
 +            guard self != nil else { result(nil); return }
              switch(call.method){
-@@ -108,3 +110,4 @@
+                 case "setDimensions":
+                     let arguments = call.arguments as! Dictionary<String, Double>
+                     self?.setDimensions(result,
+                                         width: arguments["width"] ?? 0,
+@@ -104,11 +106,12 @@
+             scanner = NativeBarcodeScanner(previewView: previewView, cameraPosition: cameraFacing)
+         }
+ 
+         // Set scanArea if provided.
          if (scanAreaWidth != 0 && scanAreaHeight != 0) {
 -            scanner?.onScanningStarted = {
 +            scanner?.onScanningStarted = { [weak self] in
 +                guard let self = self else { return }
                  self.scanner?.scanRect = CGRect(x: Double(midX) - (scanAreaWidth / 2), y: Double(midY) - (scanAreaHeight / 2), width: scanAreaWidth, height: scanAreaHeight)
-@@ -128,3 +131,4 @@
+ 
+                 // Set offset if provided.
+                 if (scanAreaOffset != 0) {
+                     let reversedOffset = -scanAreaOffset
+@@ -124,12 +127,13 @@
+         // Check for allowed barcodes
+         var allowedBarcodeTypes: Array<AVMetadataObject.ObjectType> = []
+         arguments.forEach { arg in
+             allowedBarcodeTypes.append( QRCodeTypes[arg]!)
          }
 +        guard wantsToScan, scanner != nil else { result(nil); return }
          NativeBarcodeScanner.requestCameraPermission { [weak self] permissionGranted in
 -            guard let self = self else { return }
 +            guard let self = self, self.wantsToScan else { result(nil); return }
-@@ -204,6 +208,8 @@
+ 
+             self.channel.invokeMethod("onPermissionSet", arguments: permissionGranted)
+ 
+             if permissionGranted {
+                 do {
+@@ -200,23 +204,27 @@
+ 
+                         }
+                     }
+                     try self.scanner?.startScanning()
                  } catch {
 -                    let scanError = FlutterError(code: "unknown-error", message: "Unable to start scanning", details: error)
 +                    let scanError = FlutterError(code: "unknown-error", message: "Unable to start scanning", details: error.localizedDescription)
@@ -30,15 +67,26 @@
              }
 +            result(nil)
          }
-@@ -212,2 +218,3 @@
+     }
+ 
      func stopCamera(_ result: @escaping FlutterResult) {
 +        wantsToScan = false
          if let sc = self.scanner {
-@@ -217,2 +224,3 @@
+             if sc.isScanning() {
+                 sc.stopScanning()
+             }
          }
 +        result(nil)
      }
-@@ -255,9 +263,5 @@
+ 
+     func getCameraInfo(_ result: @escaping FlutterResult) {
+         result(self.cameraFacing.rawValue)
+     }
+@@ -251,20 +259,17 @@
+         }
+         return result(FlutterError(code: "404", message: "No barcode scanner found", details: nil))
+     }
+ 
      func pauseCamera(_ result: @escaping FlutterResult) {
 -        if let sc = self.scanner {
 -            if sc.isScanning() {
@@ -51,7 +99,11 @@
 +        scanner?.freezeCapture()
 +        result(true)
      }
-@@ -265,2 +269,3 @@
+ 
      func resumeCamera(_ result: @escaping FlutterResult) {
 +        wantsToScan = true
          if let sc = self.scanner {
+             if !sc.isScanning() {
+                 sc.unfreezeCapture()
+             }
+             return result(true)
