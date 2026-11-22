@@ -217,6 +217,8 @@ async fn predict(
                         totals.sent += c.sent;
                         totals.errors += c.errors;
                         totals.authenticated += c.authenticated;
+                    } else {
+                        totals.errors += 1;
                     }
                 }
             },
