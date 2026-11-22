@@ -545,6 +545,7 @@ class _AppState extends State<App> with WidgetsBindingObserver {
 }
 
 Widget _keepScaleBuilder(BuildContext context, Widget? child) {
+  if (isIOS) return child ?? const SizedBox.shrink();
   return MediaQuery(
     data: MediaQuery.of(context).copyWith(
       textScaler: TextScaler.linear(1.0),

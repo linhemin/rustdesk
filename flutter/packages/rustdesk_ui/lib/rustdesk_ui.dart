@@ -27,6 +27,7 @@ class WorkspaceStyle {
 
   static ThemeData apply(ThemeData base) {
     final dark = base.brightness == Brightness.dark;
+    final ios = !kIsWeb && base.platform == TargetPlatform.iOS;
     final paper = dark ? slate : Colors.white;
     final background = dark ? night : const Color(0xfff6f8fb);
     final ink = dark ? const Color(0xffedf3fd) : navy;
@@ -37,6 +38,9 @@ class WorkspaceStyle {
         RoundedRectangleBorder(borderRadius: BorderRadius.circular(12));
     final outlinedShape = shape.copyWith(side: BorderSide(color: line));
     final text = base.textTheme.apply(bodyColor: ink, displayColor: ink);
+    // Material 2 uses bodyLarge for rows and titleMedium for text fields.
+    final iosRow =
+        text.bodyLarge?.copyWith(fontSize: 16, fontWeight: FontWeight.w500);
     final fields = base.inputDecorationTheme;
     return base.copyWith(
       primaryColor: accent,
@@ -62,9 +66,12 @@ class WorkspaceStyle {
         surfaceContainerHighest: dark ? const Color(0xff29364a) : mist,
       ),
       textTheme: text.copyWith(
+        bodyLarge: ios ? iosRow : null,
         titleLarge: text.titleLarge?.copyWith(
             fontSize: 21, letterSpacing: -.45, fontWeight: FontWeight.w700),
-        titleMedium: text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+        titleMedium: ios
+            ? iosRow
+            : text.titleMedium?.copyWith(fontWeight: FontWeight.w600),
         labelLarge: text.labelLarge
             ?.copyWith(fontSize: 14, fontWeight: FontWeight.w600, color: ink),
       ),
@@ -81,6 +88,10 @@ class WorkspaceStyle {
       cardTheme: base.cardTheme
           .copyWith(color: paper, elevation: 0, shape: outlinedShape),
       dialogTheme: base.dialogTheme.copyWith(
+          titleTextStyle: ios
+              ? iosRow?.copyWith(fontSize: 17, fontWeight: FontWeight.w600)
+              : null,
+          contentTextStyle: ios ? text.bodyMedium : null,
           backgroundColor: paper,
           elevation: 6,
           shape: RoundedRectangleBorder(

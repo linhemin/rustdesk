@@ -1,10 +1,57 @@
 import 'package:flutter/cupertino.dart' show CupertinoSwitch;
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common.dart' show CustomAlertDialog;
 import 'package:flutter_hbb/mobile/widgets/apple_settings_list.dart';
+import 'package:flutter_hbb/mobile/widgets/dialog.dart'
+    show serverSettingsTextFormField;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 void main() {
+  testWidgets(
+      'iPhone server fields match settings rows at the system text size',
+      (tester) async {
+    final theme = WorkspaceStyle.apply(
+        ThemeData(useMaterial3: false, platform: TargetPlatform.iOS));
+    final controller = TextEditingController(text: 'example.invalid');
+    addTearDown(controller.dispose);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.6;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(MaterialApp(
+      theme: theme,
+      home: Scaffold(
+          body: Stack(children: [
+        AppleSettingsList(sections: [
+          SettingsSection(
+              tiles: [SettingsTile(title: const Text('Connection'))]),
+        ]),
+        CustomAlertDialog(
+          title: const Text('ID / Relay Server'),
+          content: serverSettingsTextFormField(
+              label: 'ID Server', controller: controller, errorMsg: ''),
+        ),
+      ])),
+    ));
+    await tester.pumpAndSettle();
+    final row =
+        DefaultTextStyle.of(tester.element(find.text('Connection'))).style;
+    final title =
+        DefaultTextStyle.of(tester.element(find.text('ID / Relay Server')))
+            .style;
+    final input = tester.widget<EditableText>(find.byType(EditableText));
+    expect(input.style.fontSize, row.fontSize);
+    expect(input.style.fontWeight, row.fontWeight);
+    final renderedInput = tester
+        .state<EditableTextState>(find.byType(EditableText))
+        .renderEditable;
+    expect(renderedInput.textScaler.scale(input.style.fontSize!),
+        closeTo(25.6, .01));
+    expect(title.fontSize, greaterThan(row.fontSize!));
+    expect(
+        title.fontSize, lessThan(theme.appBarTheme.titleTextStyle!.fontSize!));
+  });
+
   testWidgets('settings retain actions and fixed switches at large text sizes',
       (tester) async {
     tester.view.devicePixelRatio = 1;

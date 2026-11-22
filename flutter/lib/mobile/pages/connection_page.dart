@@ -573,7 +573,8 @@ class _IPhoneConnectionFormState extends State<IPhoneConnectionForm> {
                       child: Row(children: [
                     Expanded(
                         child: Text(translate('New Connection'),
-                            style: theme.textTheme.titleLarge)),
+                            style: theme.dialogTheme.titleTextStyle ??
+                                theme.textTheme.titleLarge)),
                     IconButton(
                         onPressed: widget.onCancel,
                         tooltip: translate('Close'),
