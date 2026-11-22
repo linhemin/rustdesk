@@ -51,6 +51,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     tester.view.physicalSize = const Size(402, 874);
     tester.view.viewPadding = const FakeViewPadding(bottom: 34);
+    tester.view.padding = const FakeViewPadding(bottom: 34);
     addTearDown(tester.view.reset);
     final messenger = tester.binding.defaultBinaryMessenger;
     messenger.setMockMethodCallHandler(SystemChannels.platform_views,
@@ -67,6 +68,8 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(
         SystemChannels.platform_views, null));
     var taps = 0;
+    final labels = ValueNotifier(<String>['连接', '设置']);
+    addTearDown(labels.dispose);
     await tester.pumpWidget(MaterialApp(
         home: Scaffold(
       extendBody: true,
@@ -74,29 +77,43 @@ void main() {
           behavior: HitTestBehavior.opaque,
           onTap: () => taps++,
           child: const SizedBox.expand()),
-      bottomNavigationBar: AppleWorkspaceNavigation(
-          labels: const ['Connection', 'Settings'],
-          symbols: const ['display.2', 'gearshape'],
-          selected: 0,
-          compact: true,
-          onSelect: (_) {}),
+      bottomNavigationBar: ValueListenableBuilder<List<String>>(
+        valueListenable: labels,
+        builder: (_, items, __) => AppleWorkspaceNavigation(
+            labels: items,
+            symbols: List.filled(items.length, 'display.2'),
+            selected: 0,
+            compact: true,
+            onSelect: (_) {}),
+      ),
     )));
     await tester.pump();
     final view = find.byType(UiKitView);
     final portrait = tester.getRect(view);
-    expect(portrait, const Rect.fromLTWH(20, 791, 362, 63));
+    expect(portrait, const Rect.fromLTWH(90, 791, 222, 63));
     await tester.tapAt(Offset(8, portrait.center.dy));
     await tester.tapAt(portrait.topLeft + const Offset(2, 2));
     expect(taps, 2);
     tester.view.physicalSize = const Size(844, 390);
     tester.view.viewPadding =
         const FakeViewPadding(left: 47, right: 47, bottom: 21);
+    tester.view.padding =
+        const FakeViewPadding(left: 47, right: 47, bottom: 21);
     await tester.pump();
     final rotated = tester.getRect(view);
-    expect(rotated.width, 440);
+    expect(rotated.width, 222);
     expect(rotated.height, 52);
     expect(rotated.bottom, closeTo(390 - 12.6, 0.01));
     expect(rotated.center.dx, closeTo(422, 0.01));
+    labels.value = ['连接', '设置', '文件'];
+    await tester.pump();
+    expect(tester.getRect(view).width, 328);
+    labels.value = ['Connection preferences for this workspace', 'Settings'];
+    await tester.pump();
+    final localized = tester.getRect(view);
+    expect(localized.width, greaterThan(222));
+    expect(localized.left, greaterThanOrEqualTo(47));
+    expect(localized.center.dx, rotated.center.dx);
     await tester.pumpWidget(const SizedBox());
     debugDefaultTargetPlatformOverride = null;
   });

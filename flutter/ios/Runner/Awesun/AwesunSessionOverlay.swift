@@ -80,8 +80,13 @@ final class AwesunSessionOverlay {
         ])
         host.didMove(toParent: flutterVC)
         let accessory = UIHostingController(rootView: AwesunKeyboardAccessory(model: model))
+        if #available(iOS 16.4, *) {
+            // UIKit already positions the full 38pt strip above the keyboard.
+            accessory.safeAreaRegions = []
+        }
         accessory.view.backgroundColor = .clear
         accessory.view.isOpaque = false
+        accessory.view.clipsToBounds = true
         accessory.view.translatesAutoresizingMaskIntoConstraints = false
         let clip = surface.accessoryClip
         clip.clipsToBounds = true
@@ -90,8 +95,8 @@ final class AwesunSessionOverlay {
         surface.insertSubview(clip, belowSubview: host.view)
         clip.addSubview(accessory.view)
         NSLayoutConstraint.activate([
-            clip.leadingAnchor.constraint(equalTo: surface.leadingAnchor),
-            clip.trailingAnchor.constraint(equalTo: surface.trailingAnchor),
+            clip.leadingAnchor.constraint(equalTo: surface.safeAreaLayoutGuide.leadingAnchor),
+            clip.trailingAnchor.constraint(equalTo: surface.safeAreaLayoutGuide.trailingAnchor),
             clip.bottomAnchor.constraint(equalTo: flutterVC.view.keyboardLayoutGuide.topAnchor),
             clip.heightAnchor.constraint(equalToConstant: AwesunKeyboardAccessory.height),
             accessory.view.leadingAnchor.constraint(equalTo: clip.leadingAnchor),
@@ -132,12 +137,21 @@ final class AwesunSessionOverlay {
         clip.accessibilityElementsHidden = !visible
         let transform = visible ? CGAffineTransform.identity
             : CGAffineTransform(translationX: 0, y: AwesunKeyboardAccessory.height)
+        if duration <= 0 || UIAccessibility.isReduceMotionEnabled {
+            view.layer.removeAllAnimations()
+            view.transform = transform
+            clip.isHidden = !visible
+            return
+        }
+        if visible { clip.isHidden = false }
         guard view.transform != transform else { return }
         // The layout guide follows UIKit, including interactive movement. Only reveal or
         // retract the strip inside its clipped bounds, starting with the same notification.
-        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0 : duration, delay: 0,
+        UIView.animate(withDuration: duration, delay: 0,
                        options: [.curveLinear, .beginFromCurrentState, .allowUserInteraction]) {
             view.transform = transform
+        } completion: { finished in
+            if finished && !visible && !clip.isUserInteractionEnabled { clip.isHidden = true }
         }
     }
 
@@ -179,6 +193,10 @@ final class AwesunSessionOverlay {
             model.releaseModifiers()
         }
         if model.keyboardInset != 0 && inset == 0 {
+            if let view = installedIn?.view,
+               view.keyboardLayoutGuide.layoutFrame.height <= view.safeAreaInsets.bottom + 1 {
+                showSystemAccessory(false, duration: 0)
+            }
             model.releaseModifiers()
         }
         if model.keyboardInset != inset {

@@ -129,6 +129,7 @@ private final class PhoneWorkspaceTabs: UIView {
     private let highlight = UIView()
     private let row = UIStackView()
     private var selected: Int?
+    private var scrubX: CGFloat?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -149,6 +150,9 @@ private final class PhoneWorkspaceTabs: UIView {
         row.distribution = .fillEqually
         glass.contentView.addSubview(row)
         accessibilityTraits = .tabBar
+        let scrub = UILongPressGestureRecognizer(target: self, action: #selector(scrubTabs(_:)))
+        scrub.minimumPressDuration = 0.25
+        addGestureRecognizer(scrub)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -195,6 +199,28 @@ private final class PhoneWorkspaceTabs: UIView {
         onSelect?(button.tag)
     }
 
+    @objc private func scrubTabs(_ gesture: UILongPressGestureRecognizer) {
+        guard let selected = selected else { return }
+        let point = gesture.location(in: row)
+        switch gesture.state {
+        case .began, .changed:
+            scrubX = gesture.location(in: glass.contentView).x
+            setNeedsLayout()
+        case .ended:
+            scrubX = nil
+            setNeedsLayout()
+            if let button = row.arrangedSubviews.first(where: { $0.frame.contains(point) }),
+               button.tag != selected {
+                select(button.tag)
+                onSelect?(button.tag)
+            }
+        case .cancelled, .failed:
+            scrubX = nil
+            setNeedsLayout()
+        default: break
+        }
+    }
+
     func select(_ index: Int) {
         guard selected != index, row.arrangedSubviews.indices.contains(index) else { return }
         let animate = selected != nil && window != nil && !UIAccessibility.isReduceMotionEnabled
@@ -227,7 +253,8 @@ private final class PhoneWorkspaceTabs: UIView {
         let width = min(button.bounds.width, max(80, contentWidth + 28))
         let center = button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY),
                                     to: glass.contentView)
-        highlight.frame = CGRect(x: center.x - width / 2, y: 4, width: width,
+        let x = scrubX.map { min(max(row.frame.minX + width / 2, $0), row.frame.maxX - width / 2) } ?? center.x
+        highlight.frame = CGRect(x: x - width / 2, y: 4, width: width,
                                  height: max(0, bounds.height - 8))
         highlight.layer.cornerRadius = highlight.bounds.height / 2
     }

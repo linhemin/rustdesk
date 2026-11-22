@@ -220,7 +220,7 @@ struct AwesunKeyboardAccessory: View {
             }
             accessoryButton("✕", width: 33, action: model.dismissRemoteKeyboard)
         }
-        .padding(4)
+        .padding(.horizontal, 4)
         .frame(maxWidth: .infinity)
         .frame(height: Self.height)
         .background(AwesunPalette.keyboardDeck)
@@ -236,6 +236,8 @@ struct AwesunKeyboardAccessory: View {
                 .frame(width: width, height: 28)
                 .background(selected ? AwesunPalette.brandRed : Color.white.opacity(0.09))
                 .cornerRadius(7)
+                .frame(height: Self.height)
+                .contentShape(Rectangle())
         }
         .foregroundColor(.white)
         .buttonStyle(.plain)

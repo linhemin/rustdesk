@@ -102,6 +102,25 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     super.dispose();
   }
 
+  double _phoneWidth(BuildContext context) {
+    final caption = TextPainter(
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    );
+    var itemWidth = 106.0;
+    for (final label in widget.labels) {
+      caption.text = TextSpan(
+          text: label,
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600));
+      caption.layout();
+      if (caption.width + 28 > itemWidth) itemWidth = caption.width + 28;
+    }
+    caption.dispose();
+    // The native equal-width row has a 5pt inset at each end.
+    return itemWidth * widget.labels.length + 10;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
@@ -112,7 +131,9 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       final height = widget.compact
           ? (landscape ? 52.0 : 63.0) + extraTextHeight
           : 72.0;
-      final width = widget.compact ? 440.0 : widget.labels.length * 124.0 + 16;
+      final width = widget.compact
+          ? _phoneWidth(context)
+          : widget.labels.length * 124.0 + 16;
       final margin = widget.compact ? 20.0 : 12.0;
       final bottomGap = widget.compact
           ? (MediaQuery.viewPaddingOf(context).bottom * 0.6)
