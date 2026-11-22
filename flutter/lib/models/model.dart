@@ -2801,6 +2801,17 @@ class CanvasModel with ChangeNotifier {
     notifyListeners();
   }
 
+  bool panDirectTouch(Offset delta) {
+    final origin = Offset(_x, _y);
+    _x += delta.dx;
+    _y += delta.dy;
+    _constrainMobileSessionCanvas();
+    if (_x == origin.dx && _y == origin.dy) return false;
+    isMobileCanvasChanged = true;
+    notifyListeners();
+    return true;
+  }
+
   panX(double dx) {
     _x += dx;
     if (isMobile) {

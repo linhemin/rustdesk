@@ -10,6 +10,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/mobile/session_canvas_drag.dart';
 
 import './gestures.dart';
 
@@ -63,6 +64,7 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
   final FFI ffi;
   final bool isCamera;
   final bool awesunCanvas;
+  final SessionCanvasDrag? canvasDrag;
   late final InputModel inputModel = ffi.inputModel;
   late final FfiModel ffiModel = ffi.ffiModel;
 
@@ -71,6 +73,7 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
     required this.ffi,
     this.isCamera = false,
     this.awesunCanvas = false,
+    this.canvasDrag,
   });
 
   @override
@@ -125,10 +128,33 @@ class _RawTouchGestureDetectorRegionState
 
   @override
   Widget build(BuildContext context) {
-    return RawGestureDetector(
+    final gestures = RawGestureDetector(
       child: widget.child,
       gestures: makeGestures(context),
     );
+    final drag = widget.canvasDrag;
+    if (drag == null) return gestures;
+    return Listener(
+      onPointerDown: drag.down,
+      onPointerMove: drag.move,
+      onPointerUp: drag.up,
+      onPointerCancel: drag.cancel,
+      child: gestures,
+    );
+  }
+
+  @override
+  void didUpdateWidget(RawTouchGestureDetectorRegion oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.canvasDrag != widget.canvasDrag) {
+      oldWidget.canvasDrag?.detach();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.canvasDrag?.detach();
+    super.dispose();
   }
 
   bool isNotTouchBasedDevice() {
@@ -443,14 +469,20 @@ class _RawTouchGestureDetectorRegionState
       return;
     }
     if (ffi.cursorModel.shouldBlock(d.localPosition.dx, d.localPosition.dy)) {
+      widget.canvasDrag?.interrupt();
       return;
     }
     if (_usesAwesunCanvas) {
       if (!ffiModel.touchMode) {
         await ffi.cursorModel.updatePan(d.delta, d.localPosition, false);
       } else if (!canvasLocked) {
-        ffi.canvasModel.panX(d.delta.dx);
-        ffi.canvasModel.panY(d.delta.dy);
+        final drag = widget.canvasDrag;
+        if (drag == null) {
+          ffi.canvasModel.panX(d.delta.dx);
+          ffi.canvasModel.panY(d.delta.dy);
+        } else {
+          drag.drag(d);
+        }
       }
       return;
     }

@@ -29,6 +29,7 @@ import '../../utils/image.dart';
 import '../../utils/scale.dart';
 import '../awesun/awesun_native_bridge.dart';
 import '../ios_p2p_diagnostics.dart';
+import '../session_canvas_drag.dart';
 import '../session_ime.dart';
 import '../session_viewport.dart';
 import '../widgets/dialog.dart';
@@ -105,7 +106,7 @@ class _NativePointerBatch {
 }
 
 class _RemotePageState extends State<RemotePage>
-    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   final _sessionOpened = DateTime.now();
   Timer? _timer;
   bool _showBar = !isWebDesktop;
@@ -147,6 +148,14 @@ class _RemotePageState extends State<RemotePage>
   ({bool obscured, double inset})? _nativePresentation;
   bool _nativeSessionRequested = false;
   bool _nativeSessionActive = false;
+  late final _canvasDrag = SessionCanvasDrag(this, (delta) {
+    final canvas = gFFI.canvasModel;
+    if (!_nativeSessionActive ||
+        !gFFI.ffiModel.touchMode ||
+        gFFI.ffiModel.isPeerMobile ||
+        canvas.locked) return false;
+    return canvas.panDirectTouch(delta);
+  });
   bool _nativePointerVisible = false;
   Rect? _nativeMouseViewport;
   bool _nativeMouseViewportScheduled = false;
@@ -293,6 +302,7 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   Future<void> dispose() async {
+    if (isIOS) _canvasDrag.detach();
     _nativeSessionReadiness?.dispose();
     if (isIOS) {
       gFFI.qualityMonitorModel.removeListener(_syncNativePerformance);
@@ -343,6 +353,7 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (isIOS && state != AppLifecycleState.resumed) _canvasDrag.interrupt();
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
     } else if (isMobile && _showSessionKeyboard) {
@@ -1008,6 +1019,10 @@ class _RemotePageState extends State<RemotePage>
     if (!mounted || !_sessionReady) return null;
     final model = gFFI.ffiModel;
     switch (id) {
+      case 'interruptCanvasPan':
+        _canvasDrag.interrupt();
+        _nativePointerBatch?.pan = Offset.zero;
+        return null;
       case 'menu':
         return _nativeMenu(model);
       case 'action':
@@ -1699,6 +1714,9 @@ class _RemotePageState extends State<RemotePage>
               child: getBodyForMobile(),
               ffi: gFFI,
               awesunCanvas: _nativeSessionActive,
+              canvasDrag: _nativeSessionActive && !gFFI.ffiModel.isPeerMobile
+                  ? _canvasDrag
+                  : null,
             ));
     });
     final canvas = ColoredBox(

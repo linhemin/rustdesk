@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/remote_input.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
+import 'package:flutter_hbb/mobile/session_canvas_drag.dart';
 import 'package:flutter_hbb/mobile/widgets/session_controls.dart';
 import 'package:flutter_hbb/mobile/widgets/session_keyboard.dart';
 import 'package:flutter_hbb/mobile/widgets/session_touchpad.dart';
@@ -23,6 +24,8 @@ class _TouchPeer extends Fake implements FfiModel {
   @override
   final bool touchMode;
   @override
+  Rect get rect => const Rect.fromLTWH(0, 0, 8000, 1000);
+  @override
   bool get isPeerMobile => false;
   @override
   bool get isPeerAndroid => false;
@@ -30,6 +33,10 @@ class _TouchPeer extends Fake implements FfiModel {
 
 class _TouchCursor extends Fake implements CursorModel {
   final moves = <Offset>[];
+  @override
+  Future<void> updatePan(Offset delta, Offset localPosition, bool touchMode) async {
+    moves.add(delta);
+  }
   @override
   bool shouldBlock(double x, double y) => false;
   @override
@@ -65,6 +72,8 @@ class _TouchSession extends Fake implements FFI {
   final _TouchInput inputModel = _TouchInput();
   @override
   final _TouchCursor cursorModel = _TouchCursor();
+  @override
+  late final canvasModel = CanvasModel(WeakReference<FFI>(this));
 }
 
 void main() {
@@ -199,18 +208,81 @@ void main() {
     ]);
   });
 
+  testWidgets(
+      'a direct canvas drag follows the finger and coasts at its release speed',
+      (tester) async {
+    final originalMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = originalMobile);
+    final session = _TouchSession();
+    final canvas = session.canvasModel;
+    canvas.updateMobileSessionViewport(const Size(800, 600), keyboardOpen: false);
+    final drag = SessionCanvasDrag(tester, canvas.panDirectTouch);
+    await tester.pumpWidget(MaterialApp(home: RawTouchGestureDetectorRegion(
+      ffi: session,
+      awesunCanvas: true,
+      canvasDrag: drag,
+      child: const ColoredBox(color: Colors.black, child: SizedBox.expand()),
+    )));
+
+    Future<double> glide(double step, {bool pause = false, bool atEdge = false}) async {
+      final start = atEdge ? -340.0 : -4000.0;
+      canvas.update(start, 0, 1);
+      final finger = await tester.startGesture(const Offset(30, 100));
+      for (var sample = 1; sample <= 4; sample++) {
+        await finger.moveBy(Offset(step, 0),
+            timeStamp: Duration(milliseconds: 8 * sample));
+      }
+      expect(canvas.x - start, closeTo(4 * step, 0.1));
+      await finger.up(timeStamp: Duration(milliseconds: pause ? 110 : 32));
+      final release = canvas.x;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 32));
+      final distance = canvas.x - release;
+      if (atEdge) {
+        expect(canvas.x, 0);
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(canvas.x, 0);
+      } else if (!pause) {
+        await tester.pump(const Duration(milliseconds: 32));
+        expect(canvas.x - release - distance, inExclusiveRange(0, distance));
+      }
+      final brake = await tester.startGesture(const Offset(200, 200));
+      final stopped = canvas.x;
+      await tester.pump(const Duration(milliseconds: 80));
+      expect(canvas.x, stopped);
+      await brake.cancel();
+      await tester.pump(const Duration(milliseconds: 350));
+      return distance;
+    }
+
+    final slow = await glide(80);
+    final fast = await glide(160);
+    expect(fast / slow, closeTo(2, 0.05));
+    expect(await glide(80, pause: true), 0);
+    await glide(80, atEdge: true);
+    expect(session.cursorModel.moves, isEmpty);
+    expect(session.inputModel.events, isEmpty);
+    canvas.dispose();
+  });
+
   testWidgets('iPhone pointer clicks at the existing cursor without jumping',
       (tester) async {
     final originalMobile = isMobile;
     isMobile = true;
     addTearDown(() => isMobile = originalMobile);
     final session = _TouchSession(touch: false);
+    final canvasMoves = <Offset>[];
     const target = ValueKey('iphone-pointer-canvas');
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(
         body: RawTouchGestureDetectorRegion(
           ffi: session,
           awesunCanvas: true,
+          canvasDrag: SessionCanvasDrag(tester, (delta) {
+            canvasMoves.add(delta);
+            return true;
+          }),
           child: const ColoredBox(
               key: target, color: Colors.black, child: SizedBox.expand()),
         ),
@@ -220,6 +292,15 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     expect(session.inputModel.events, [('tap', MouseButtons.left)]);
     expect(session.cursorModel.moves, isEmpty);
+    final finger = await tester.startGesture(const Offset(100, 100));
+    for (var sample = 1; sample <= 4; sample++) {
+      await finger.moveBy(const Offset(30, 0),
+          timeStamp: Duration(milliseconds: sample * 10));
+    }
+    await finger.up(timeStamp: const Duration(milliseconds: 40));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(session.cursorModel.moves, isNotEmpty);
+    expect(canvasMoves, isEmpty);
   });
 
   testWidgets('a narrow keyboard keeps modifiers and mouse buttons accessible',
