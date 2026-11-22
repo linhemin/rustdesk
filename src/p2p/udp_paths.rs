@@ -1,11 +1,12 @@
 use crate::kcp_stream::KcpStream;
 use hbb_common::{
     bytes::BytesMut,
-    futures_util::{stream::FuturesUnordered, StreamExt},
+    futures_util::{stream::FuturesUnordered, FutureExt, StreamExt},
     sodiumoxide::{crypto::auth, randombytes},
     tokio::{
         self,
         net::UdpSocket,
+        sync::Semaphore,
         time::{timeout, Duration, Instant},
     },
     ResultType,
@@ -16,6 +17,20 @@ const EXTRA_SOCKETS: usize = 3;
 const WIDE_EXTRA_SOCKETS: usize = 11;
 const RECEIPT_SIZE: usize = 38;
 const MAX_PEERS: usize = 8;
+// A NAT that maps every destination to a new port hides the mapping the peer has to reach.
+// The side behind it opens PREDICTED_SOCKETS mappings towards the peer's advertised port and
+// the other side guesses GUESSES of its ports; both do both, since neither knows its own NAT.
+const PREDICTED_SOCKETS: usize = 256;
+const PREDICTION_DELAY: Duration = Duration::from_millis(400);
+const GUESSES: usize = 1536;
+const GUESS_BATCH: usize = 12;
+const GUESS_INTERVAL: Duration = Duration::from_millis(20);
+const PORTS: usize = 65536 - 1024;
+// Coprime to PORTS, so no port repeats, and below PREDICTED_SOCKETS, so the first pass lands
+// in the consecutive ports of a sequential allocator wherever they are.
+const GUESS_STRIDE: usize = 251;
+// The peer decides how often it asks; this bounds the sockets and guesses it can make us spend.
+static PREDICTIONS: Semaphore = Semaphore::const_new(2);
 
 #[derive(Debug, Default)]
 pub(crate) struct Counts {
@@ -119,6 +134,106 @@ impl Candidates {
     }
 }
 
+fn guessed_port(base: usize, guess: usize) -> u16 {
+    (1024 + (base + guess * GUESS_STRIDE) % PORTS) as u16
+}
+
+fn predicted_socket_count() -> usize {
+    #[cfg(unix)]
+    {
+        use hbb_common::libc::{getrlimit, rlimit, setrlimit, RLIMIT_NOFILE};
+        let mut limit = rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `limit` is a valid rlimit for both calls.
+        if unsafe { getrlimit(RLIMIT_NOFILE, &mut limit) } != 0 {
+            return 0;
+        }
+        // Apple platforms start at 256 descriptors.
+        if limit.rlim_cur < 1024 && limit.rlim_max >= 1024 {
+            let raised = rlimit {
+                rlim_cur: 1024,
+                ..limit
+            };
+            if unsafe { setrlimit(RLIMIT_NOFILE, &raised) } == 0 {
+                limit = raised;
+            }
+        }
+        return PREDICTED_SOCKETS.min((limit.rlim_cur / 4) as usize);
+    }
+    #[cfg(not(unix))]
+    PREDICTED_SOCKETS
+}
+
+async fn predicted_socket(source: std::net::IpAddr) -> Option<Arc<UdpSocket>> {
+    #[cfg(target_os = "windows")]
+    if let Some(i) =
+        super::Interface::configured().filter(|i| source == std::net::IpAddr::V4(i.address))
+    {
+        return crate::platform::bind_p2p_stun_udp(i.address, i.index, 0, 0).map(Arc::new);
+    }
+    UdpSocket::bind(SocketAddr::new(source, 0))
+        .await
+        .ok()
+        .map(Arc::new)
+}
+
+async fn predict(
+    primary: &UdpSocket,
+    peer: SocketAddr,
+    listen: bool,
+    key: &auth::Key,
+    deadline: Instant,
+) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
+    tokio::time::sleep(PREDICTION_DELAY).await;
+    let Ok(Ok(_permit)) = tokio::time::timeout_at(deadline, PREDICTIONS.acquire()).await else {
+        return Err(Counts::default().into());
+    };
+    let source = primary.local_addr()?.ip();
+    let mut jobs = FuturesUnordered::new();
+    for _ in 0..predicted_socket_count() {
+        let Some(socket) = predicted_socket(source).await else {
+            break;
+        };
+        jobs.push(check_socket(socket, vec![peer], listen, key, deadline, true));
+    }
+    let mut totals = Counts {
+        sockets: jobs.len(),
+        ..Default::default()
+    };
+    let mut nonce = [0; 8];
+    randombytes::randombytes_into(&mut nonce);
+    let probe = packet(if listen { 2 } else { 0 }, &nonce, key);
+    let base = usize::from(u16::from_be_bytes([nonce[0], nonce[1]]));
+    let mut guesses = 0;
+    let mut guess_at = Instant::now();
+    loop {
+        tokio::select! {
+            Some(result) = jobs.next() => match result {
+                Ok(selected) => return Ok(selected),
+                Err(e) => {
+                    if let Some(c) = e.downcast_ref::<Counts>() {
+                        totals.sent += c.sent;
+                        totals.errors += c.errors;
+                        totals.authenticated += c.authenticated;
+                    }
+                }
+            },
+            _ = tokio::time::sleep_until(guess_at), if guesses < GUESSES && guess_at < deadline => {
+                for _ in 0..GUESS_BATCH {
+                    let mut guess = peer;
+                    guess.set_port(guessed_port(base, guesses));
+                    guesses += 1;
+                    match primary.send_to(&probe, guess).await { Ok(_) => totals.sent += 1, Err(_) => totals.errors += 1 }
+                }
+                guess_at = Instant::now() + GUESS_INTERVAL;
+            }
+            else => return Err(totals.into()),
+        }
+    }
+}
+
 pub(crate) struct Paths {
     pub local: Candidates,
     pub ports: Vec<u32>,
@@ -142,6 +257,17 @@ impl Paths {
         peer: SocketAddr,
         listen: bool,
     ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
+        self.select_within(primary, peer, listen, Duration::from_secs(6))
+            .await
+    }
+
+    pub async fn select_within(
+        self,
+        primary: Arc<UdpSocket>,
+        peer: SocketAddr,
+        listen: bool,
+        window: Duration,
+    ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
         let peer = super::ordinary_udp::udp_peer_destination(&primary, peer).await?;
         let mut destinations = vec![peer];
         for port in self
@@ -158,10 +284,13 @@ impl Paths {
         }
         let key = self.key;
         let count = self.local.sockets.len() + 1;
+        let deadline = Instant::now() + window;
+        let guesser = primary.clone();
         let mut jobs: FuturesUnordered<_> = std::iter::once(primary)
             .chain(self.local.sockets)
-            .map(|s| check_socket(s, destinations.clone(), listen, &key))
+            .map(|s| check_socket(s, destinations.clone(), listen, &key, deadline, false).boxed())
             .collect();
+        jobs.push(predict(&guesser, peer, listen, &key, deadline).boxed());
         let mut totals = Counts {
             sockets: count,
             ports: destinations.len(),
@@ -173,6 +302,7 @@ impl Paths {
                 Ok(selected) => return Ok(selected),
                 Err(e) => {
                     if let Some(c) = e.downcast_ref::<Counts>() {
+                        totals.sockets += c.sockets;
                         totals.sent += c.sent;
                         totals.errors += c.errors;
                         totals.authenticated += c.authenticated;
@@ -206,6 +336,8 @@ async fn check_socket(
     mut peers: Vec<SocketAddr>,
     listen: bool,
     key: &auth::Key,
+    deadline: Instant,
+    predicted: bool,
 ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
     let ip = peers[0].ip();
     let mut nonce = [0; 8];
@@ -218,7 +350,6 @@ async fn check_socket(
     let mut pending: Vec<PendingAddress> = Vec::new();
     let mut buf = [0; 1500];
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(6);
     let mut next = start;
     let max_peers = MAX_PEERS.max(peers.len() + 4);
     let mut cursor = 0;
@@ -236,7 +367,7 @@ async fn check_socket(
                     match socket.send_to(&probe, peers[cursor]).await { Ok(_) => sent += 1, Err(_) => errors += 1 }
                     cursor = (cursor + 1) % peers.len();
                 }
-                next = Instant::now() + Duration::from_millis(if start.elapsed().as_millis() < 250 { 90 } else { 350 });
+                next = Instant::now() + Duration::from_millis(if predicted { 1000 } else if start.elapsed().as_millis() < 250 { 90 } else { 350 });
             }
             received = socket.recv_from(&mut buf) => {
                 let (n, from) = match received {
@@ -299,7 +430,11 @@ async fn check_socket(
                 }
                 if !known && peers.len() >= max_peers { continue; }
                 if buf[4] == (kind ^ 2) {
-                    if !authenticated.contains(&from) { authenticated.push(from); }
+                    if !authenticated.contains(&from) {
+                        authenticated.push(from);
+                        // The peer's guess opened this pair; answer on it without waiting a turn.
+                        if known && predicted { socket.send_to(&probe, from).await?; }
+                    }
                     let reply = packet(buf[4] + 1, &buf[5..13], key);
                     socket.send_to(&reply, from).await?;
                 } else if buf[4] == kind + 1 && buf[5..13] == nonce && known && !listen {
@@ -346,6 +481,44 @@ mod tests {
         assert_eq!(host.next_timeout(2000).await.unwrap().unwrap().as_ref(), &[42; 4500]);
         host.send_raw(vec![17; 4500]).await.unwrap();
         assert_eq!(client.next_timeout(2000).await.unwrap().unwrap().as_ref(), &[17; 4500]);
+    }
+
+    #[tokio::test]
+    async fn direct_kcp_recovers_when_no_advertised_port_reaches_the_peer() {
+        async fn bind() -> Arc<UdpSocket> {
+            Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap())
+        }
+        let (left, right) = (bind().await, bind().await);
+        // Each side was told a port the other does not use, as behind a NAT that maps every
+        // destination to a new port.
+        let (stale_left, stale_right) = (bind().await, bind().await);
+        let key = auth::gen_key();
+        let paths = || Paths { local: Candidates::default(), ports: vec![], key: key.clone() };
+        let host = async {
+            let (socket, syn) = paths().select(right, stale_left.local_addr().unwrap(), true).await.unwrap();
+            KcpStream::accept(socket, Duration::from_secs(2), syn).await.unwrap()
+        };
+        let client = async {
+            let window = Duration::from_secs(3);
+            let (socket, _) = paths().select_within(left, stale_right.local_addr().unwrap(), false, window).await.unwrap();
+            KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
+        };
+        let ((_a, mut host), (_b, mut client)) = tokio::join!(host, client);
+        client.send_raw(vec![42; 4500]).await.unwrap();
+        assert_eq!(host.next_timeout(2000).await.unwrap().unwrap().as_ref(), &[42; 4500]);
+        host.send_raw(vec![17; 4500]).await.unwrap();
+        assert_eq!(client.next_timeout(2000).await.unwrap().unwrap().as_ref(), &[17; 4500]);
+    }
+
+    #[tokio::test]
+    async fn silent_peer_releases_the_relay_fallback_when_the_window_ends() {
+        let socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let paths = Paths { local: Candidates::default(), ports: vec![], key: auth::gen_key() };
+        let start = Instant::now();
+        let result = paths.select_within(socket, silent.local_addr().unwrap(), false, Duration::from_secs(1)).await;
+        assert!(result.unwrap_err().downcast_ref::<Counts>().is_some_and(|c| c.sent > 0));
+        assert!(start.elapsed() < Duration::from_millis(1500));
     }
 
     #[tokio::test]
