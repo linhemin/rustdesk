@@ -818,6 +818,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                 color: WorkspaceStyle.elevatedSurface(context),
                 borderRadius: BorderRadius.circular(7)),
             child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: () {
                 if (_locationStatus.value != LocationStatus.fileSearchBar) {
                   _locationStatus.value = LocationStatus.pathLocation;
