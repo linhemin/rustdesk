@@ -177,15 +177,15 @@ class _DraggableDesktopQualityMonitorState
           onPanStart: (_) {
             setState(() {
               _dragging = true;
-              _offset ??= Offset(maxX, maxY);
+              _offset ??= Offset(maxX, 12);
             });
           },
           onPanUpdate: (details) {
-            final current = _offset ?? Offset(maxX, maxY);
+            final current = _offset ?? Offset(maxX, 12);
             setState(() {
               _offset = Offset(
                 (current.dx + details.delta.dx).clamp(minX, maxX),
-                (current.dy + details.delta.dy).clamp(minY, maxY),
+                (current.dy - details.delta.dy).clamp(minY, maxY),
               );
             });
           },
@@ -214,7 +214,7 @@ class _DraggableDesktopQualityMonitorState
         children: [
           Positioned(
             left: pos.dx.clamp(minX, maxX),
-            top: pos.dy.clamp(minY, maxY),
+            bottom: pos.dy.clamp(minY, maxY),
             child: wrapped,
           ),
         ],
