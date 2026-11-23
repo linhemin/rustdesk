@@ -167,10 +167,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Icon(Icons.laptop_mac_rounded, size: 19, color: theme.hintColor),
+          Icon(Icons.laptop_mac_rounded, size: 18, color: theme.hintColor),
           const SizedBox(width: 8),
           Expanded(
               child: Text(translate('Your Desktop'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium)),
         ]),
         const SizedBox(height: 6),
@@ -179,7 +181,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           builder: (_, value, __) => Row(children: [
             Expanded(
                 child: SelectableText(value.text,
-                    style: theme.textTheme.titleLarge)),
+                    maxLines: 1,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                        fontFeatures: const [FontFeature.tabularFigures()]))),
             IconButton(
               tooltip: MaterialLocalizations.of(context).copyButtonLabel,
               icon: const Icon(Icons.copy_rounded, size: 18),

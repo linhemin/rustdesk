@@ -123,6 +123,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   late PageController controller;
   late Rx<SettingsTabKey> selectedTab;
   TabController? _workspaceTabs;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   bool get wantKeepAlive => true;
@@ -191,6 +193,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     // Get.delete does not dispose a plain ChangeNotifier.
     controller.dispose();
     _workspaceTabs?.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -284,12 +287,30 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     });
   }
 
+  Color _tileColorFor(SettingsTabKey key) => switch (key) {
+        SettingsTabKey.general => WorkspaceStyle.neutralTile,
+        SettingsTabKey.safety => WorkspaceStyle.green,
+        SettingsTabKey.network => WorkspaceStyle.blue,
+        SettingsTabKey.display => WorkspaceStyle.amber,
+        SettingsTabKey.account => WorkspaceStyle.indigo,
+        SettingsTabKey.printer => WorkspaceStyle.purple,
+        SettingsTabKey.about => const Color(0xff8e8e93),
+      };
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
     if (usesWorkspaceStyle) {
       final theme = Theme.of(context);
       final tabs = _settingTabs();
+      final query = _searchQuery.trim().toLowerCase();
+      final filteredIndices = <int>[
+        for (var i = 0; i < tabs.length; i++)
+          if (query.isEmpty ||
+              translate(tabs[i].label).toLowerCase().contains(query) ||
+              tabs[i].label.toLowerCase().contains(query))
+            i,
+      ];
       return Scaffold(
           body: _buildBlock(children: [
         Expanded(child: LayoutBuilder(builder: (context, bounds) {
@@ -297,25 +318,81 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (wide)
               WorkspaceSidebar(
-                width: bounds.maxWidth >= 1000 ? 232 : 172,
+                width: bounds.maxWidth >= 1000 ? 232 : 196,
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Padding(
-                          padding: const EdgeInsets.fromLTRB(24, 24, 12, 20),
-                          child: Text(translate('Settings'),
-                              style: theme.textTheme.titleLarge)),
+                        padding: const EdgeInsets.fromLTRB(16, 18, 16, 10),
+                        child: Text(translate('Settings'),
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            )),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: SizedBox(
+                          height: 34,
+                          child: TextField(
+                            controller: _searchController,
+                            onChanged: (value) =>
+                                setState(() => _searchQuery = value),
+                            style: theme.textTheme.bodyMedium
+                                ?.copyWith(fontSize: 12.5),
+                            decoration: InputDecoration(
+                              isDense: true,
+                              filled: true,
+                              fillColor: theme.cardColor,
+                              hintText: translate('Search'),
+                              hintStyle: TextStyle(
+                                  fontSize: 12.5, color: theme.hintColor),
+                              prefixIcon: Icon(Icons.search_rounded,
+                                  size: 16, color: theme.hintColor),
+                              prefixIconConstraints:
+                                  const BoxConstraints(minWidth: 32),
+                              suffixIcon: _searchQuery.isEmpty
+                                  ? null
+                                  : IconButton(
+                                      padding: EdgeInsets.zero,
+                                      iconSize: 14,
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() => _searchQuery = '');
+                                      },
+                                      icon: Icon(Icons.close_rounded,
+                                          color: theme.hintColor),
+                                    ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide:
+                                    BorderSide(color: theme.dividerColor),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                borderSide:
+                                    BorderSide(color: theme.dividerColor),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                       Expanded(
-                          child: ListView(children: [
-                        for (var i = 0; i < tabs.length; i++)
-                          Obx(() => WorkspaceSettingsNavItem(
-                              label: translate(tabs[i].label),
-                              icon: selectedTab.value == tabs[i].key
-                                  ? tabs[i].selected
-                                  : tabs[i].unselected,
-                              selected: selectedTab.value == tabs[i].key,
-                              onTap: () => controller.jumpToPage(i))),
-                      ])),
+                          child: ListView(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              children: [
+                            for (final i in filteredIndices)
+                              Obx(() => WorkspaceSettingsNavItem(
+                                  label: translate(tabs[i].label),
+                                  icon: selectedTab.value == tabs[i].key
+                                      ? tabs[i].selected
+                                      : tabs[i].unselected,
+                                  tileColor: _tileColorFor(tabs[i].key),
+                                  selected: selectedTab.value == tabs[i].key,
+                                  onTap: () => controller.jumpToPage(i))),
+                          ])),
                     ]),
               ),
             Expanded(
@@ -327,7 +404,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                     final tab =
                         tabs.firstWhere((tab) => tab.key == selectedTab.value);
                     return WorkspaceSettingsHeader(
-                        title: translate(tab.label), icon: tab.unselected);
+                      title: translate(tab.label),
+                      icon: tab.selected,
+                      tileColor: _tileColorFor(tab.key),
+                    );
                   })
                 else ...[
                   Padding(
@@ -349,7 +429,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                       indicatorSize: TabBarIndicatorSize.tab,
                       indicator: UnderlineTabIndicator(
                           borderSide: BorderSide(
-                              color: theme.colorScheme.primary, width: 3)),
+                              color: theme.colorScheme.primary, width: 2.5)),
                       dividerColor: theme.dividerColor,
                       onTap: controller.jumpToPage,
                       tabs: [
@@ -358,8 +438,14 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                               child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                Icon(tab.unselected, size: 17),
-                                const SizedBox(width: 6),
+                                WorkspaceIconTile(
+                                  icon: tab.selected,
+                                  color: _tileColorFor(tab.key),
+                                  size: 20,
+                                  radius: 5.5,
+                                  iconSize: 12,
+                                ),
+                                const SizedBox(width: 7),
                                 Text(translate(tab.label)),
                               ])),
                       ]),

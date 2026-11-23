@@ -1006,16 +1006,11 @@ class _RemotePageState extends State<RemotePage>
                 )));
     }
     paints.add(
-      Positioned(
-        top: (isWindows || isMacOS) ? null : 10,
-        bottom: (isWindows || isMacOS) ? 12 : null,
-        right: 10,
-        child: _buildRawTouchAndPointerRegion(
-            (isWindows || isMacOS)
-                ? DesktopQualityMonitor(_ffi.qualityMonitorModel)
-                : QualityMonitor(_ffi.qualityMonitorModel),
-            null,
-            null),
+      Positioned.fill(
+        child: DraggableDesktopQualityMonitor(
+          _ffi.qualityMonitorModel,
+          wrap: (child) => _buildRawTouchAndPointerRegion(child, null, null),
+        ),
       ),
     );
     return Stack(

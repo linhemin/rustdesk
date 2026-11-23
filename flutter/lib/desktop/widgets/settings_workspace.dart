@@ -12,93 +12,154 @@ class WorkspaceSettingsSection extends StatelessWidget {
   final List<Widget>? trailing;
 
   @override
-  Widget build(BuildContext context) => Align(
-        alignment: AlignmentDirectional.topStart,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 768),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-            child: WorkspacePanel(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Row(children: [
-                      Expanded(
-                          child: Text(title,
-                              style: Theme.of(context).textTheme.titleMedium)),
-                      ...?trailing,
-                    ]),
-                    if (children.isNotEmpty) const SizedBox(height: 10),
-                    ...children,
-                  ]),
-            ),
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: AlignmentDirectional.topStart,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                child: Row(children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: theme.hintColor,
+                      ),
+                    ),
+                  ),
+                  ...?trailing,
+                ]),
+              ),
+              if (children.isNotEmpty)
+                WorkspacePanel(
+                  radius: 14,
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: children,
+                  ),
+                ),
+            ],
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 class WorkspaceSettingsNavItem extends StatelessWidget {
-  const WorkspaceSettingsNavItem(
-      {super.key,
-      required this.label,
-      required this.icon,
-      required this.selected,
-      required this.onTap});
+  const WorkspaceSettingsNavItem({
+    super.key,
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+    this.tileColor,
+  });
 
   final String label;
   final IconData icon;
   final bool selected;
   final VoidCallback onTap;
+  final Color? tileColor;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-        child: Material(
-          color: selected
-              ? Theme.of(context).colorScheme.primary.withOpacity(.12)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          child: ListTile(
-            selected: selected,
-            selectedColor: Theme.of(context).colorScheme.primary,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-            minLeadingWidth: 20,
-            horizontalTitleGap: 12,
-            leading: Icon(icon, size: 20),
-            title: Text(label,
-                style: TextStyle(
-                    fontSize: 14,
-                    color: selected
-                        ? Theme.of(context).colorScheme.primary
-                        : Theme.of(context).colorScheme.onSurface,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400)),
-            onTap: onTap,
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accent = theme.colorScheme.primary;
+    final tileTint = tileColor ?? accent;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 3),
+      child: Material(
+        color: selected ? accent : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            child: Row(children: [
+              WorkspaceIconTile(
+                icon: icon,
+                color: selected ? Colors.white.withOpacity(0.22) : tileTint,
+                size: 22,
+                radius: 6,
+                iconSize: 13,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: selected ? Colors.white : theme.colorScheme.onSurface,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+            ]),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 class WorkspaceSettingsHeader extends StatelessWidget {
-  const WorkspaceSettingsHeader(
-      {super.key, required this.title, required this.icon});
+  const WorkspaceSettingsHeader({
+    super.key,
+    required this.title,
+    required this.icon,
+    this.tileColor,
+  });
   final String title;
   final IconData icon;
+  final Color? tileColor;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
-        child: Row(children: [
-          WorkspaceIcon(icon: icon, size: 44),
-          const SizedBox(width: 14),
-          Expanded(
-              child: Text(title,
-                  style: Theme.of(context).textTheme.headlineSmall)),
-        ]),
-      );
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Align(
+      alignment: AlignmentDirectional.topStart,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 18),
+          child: Row(children: [
+            WorkspaceIconTile(
+              icon: icon,
+              color: tileColor ?? theme.colorScheme.primary,
+              size: 34,
+              radius: 9,
+              iconSize: 18,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.3,
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 class WorkspaceSettingsChoice extends StatelessWidget {
