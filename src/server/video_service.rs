@@ -71,7 +71,12 @@ const DXGI_RECOVERY_LIMIT: usize = 3;
 #[cfg(windows)]
 const DXGI_RECOVERY_WINDOW: Duration = Duration::from_secs(10);
 #[cfg(windows)]
-const DXGI_RECOVERY_FRAME_GRACE: Duration = Duration::from_secs(2);
+const DXGI_FIRST_FRAME_GRACE: Duration = Duration::from_secs(2);
+
+#[cfg(windows)]
+fn dxgi_first_frame_expired(started: Option<Instant>, now: Instant) -> bool {
+    started.is_some_and(|time| now.saturating_duration_since(time) >= DXGI_FIRST_FRAME_GRACE)
+}
 
 #[cfg(windows)]
 struct DxgiRecoveryState {
@@ -630,9 +635,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     let sp = vs.sp;
     let mut c = get_capturer(vs.source, display_idx, last_portable_service_running)?;
     #[cfg(windows)]
-    // ACCESS_LOST marks the next successful capturer creation as a recovery. This timestamp is
-    // consumed once and temporarily holds off the normal WouldBlock-to-GDI fallback, giving the
-    // replacement DXGI capturer time to produce its first frame. Normal startup is unaffected.
+    // Preserve the recovery deadline across encoder setup after ACCESS_LOST.
     let dxgi_recovery_started = dxgi_recovery_state
         .lock()
         .unwrap()
@@ -717,7 +720,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     let start = time::Instant::now();
     let mut last_check_displays = time::Instant::now();
     #[cfg(windows)]
-    let mut try_gdi = 1;
+    let mut dxgi_first_frame_started = vs.source.is_monitor().then_some(dxgi_recovery_started.unwrap_or(start));
     #[cfg(windows)]
     log::info!("gdi: {}", c.is_gdi());
     #[cfg(windows)]
@@ -821,7 +824,8 @@ fn run(vs: VideoService) -> ResultType<()> {
         let res = match c.frame(capture_timeout) {
             Ok(frame) => {
                 repeat_encode_counter = 0;
-                if frame.valid() {
+                let valid = frame.valid();
+                if valid {
                     let screenshot_key = (vs.source, display_idx);
                     let screenshot = SCREENSHOTS.lock().unwrap().remove(&screenshot_key);
                     if let Some(mut screenshot) = screenshot {
@@ -889,12 +893,9 @@ fn run(vs: VideoService) -> ResultType<()> {
                     send_counter += 1;
                 }
                 #[cfg(windows)]
-                {
+                if valid && !c.is_gdi() && dxgi_first_frame_started.take().is_some() {
                     #[cfg(feature = "vram")]
-                    if try_gdi == 1 && !c.is_gdi() {
-                        VRamEncoder::set_fallback_gdi(sp.name(), false);
-                    }
-                    try_gdi = 0;
+                    VRamEncoder::set_fallback_gdi(sp.name(), false);
                 }
                 Ok(())
             }
@@ -904,17 +905,14 @@ fn run(vs: VideoService) -> ResultType<()> {
         match res {
             Err(ref e) if e.kind() == WouldBlock => {
                 #[cfg(windows)]
-                if dxgi_recovery_started
-                    .map(|started| started.elapsed() >= DXGI_RECOVERY_FRAME_GRACE)
-                    .unwrap_or(true)
+                if !c.is_gdi()
+                    && dxgi_first_frame_expired(dxgi_first_frame_started, Instant::now())
                 {
-                    if try_gdi > 0 && !c.is_gdi() {
-                        if try_gdi > 3 {
-                            c.set_gdi();
-                            try_gdi = 0;
-                            log::info!("No image, fall back to gdi");
-                        }
-                        try_gdi += 1;
+                    dxgi_first_frame_started = None;
+                    if c.set_gdi() {
+                        log::info!("DXGI first-frame deadline expired, fall back to gdi");
+                    } else {
+                        log::warn!("DXGI first-frame deadline expired, failed to start gdi");
                     }
                 }
                 #[cfg(target_os = "linux")]
@@ -1592,6 +1590,21 @@ mod tests {
         refresh_allowed, unbounded_channel, Arc, HashSet, TokioMutex, VideoFrameController,
         FRAME_FETCHED_NOTIFIERS,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn dxgi_keeps_trying_for_its_first_valid_frame_until_the_deadline() {
+        use super::{dxgi_first_frame_expired, Duration, Instant, DXGI_FIRST_FRAME_GRACE};
+
+        let started = Instant::now();
+        assert!(!dxgi_first_frame_expired(
+            Some(started),
+            started + Duration::from_millis(110),
+        ));
+        let deadline = started + DXGI_FIRST_FRAME_GRACE;
+        assert!(dxgi_first_frame_expired(Some(started), deadline));
+        assert!(!dxgi_first_frame_expired(None, deadline));
+    }
 
     #[tokio::test(start_paused = true)]
     async fn frame_ack_waits_share_the_video_thread_timer() {
