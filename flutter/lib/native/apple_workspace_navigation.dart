@@ -19,6 +19,8 @@ class AppleWorkspaceNavigation extends StatefulWidget {
     this.brand,
     this.settingsLabel,
     this.onSettings,
+    this.onQuickConnect,
+    this.quickConnectLabel,
   }) : assert(labels.length == symbols.length);
 
   final List<String> labels;
@@ -29,6 +31,8 @@ class AppleWorkspaceNavigation extends StatefulWidget {
   final String? brand;
   final String? settingsLabel;
   final VoidCallback? onSettings;
+  final VoidCallback? onQuickConnect;
+  final String? quickConnectLabel;
 
   @override
   State<AppleWorkspaceNavigation> createState() =>
@@ -53,6 +57,11 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
         if (widget.brand != null) 'brand': widget.brand!,
         if (widget.settingsLabel != null) 'settings': widget.settingsLabel!,
         'dark': _brightness == Brightness.dark,
+        if (widget.onQuickConnect != null) ...{
+          'quickConnect': widget.quickConnectLabel ?? widget.labels.first,
+          'rtl': Directionality.of(context) == TextDirection.rtl,
+          'textScale': MediaQuery.textScalerOf(context).scale(10) / 10,
+        },
       };
 
   @override
@@ -96,6 +105,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       _brightness = brightness;
       _updateNativeView();
     }
+    if (widget.onQuickConnect != null) _updateNativeView();
   }
 
   @override
@@ -105,6 +115,8 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
         widget.compact != oldWidget.compact ||
         widget.brand != oldWidget.brand ||
         widget.settingsLabel != oldWidget.settingsLabel ||
+        widget.quickConnectLabel != oldWidget.quickConnectLabel ||
+        (widget.onQuickConnect == null) != (oldWidget.onQuickConnect == null) ||
         !listEquals(widget.labels, oldWidget.labels) ||
         !listEquals(widget.symbols, oldWidget.symbols)) {
       _updateNativeView();
@@ -120,6 +132,8 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       if (!mounted || _channel != channel) return;
       if (call.method == 'settings') {
         widget.onSettings?.call();
+      } else if (call.method == 'quickConnect') {
+        widget.onQuickConnect?.call();
       } else if (call.method == 'select') {
         final index = call.arguments;
         if (index is int && index >= 0 && index < widget.labels.length) {
@@ -178,7 +192,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
   }
 
   UiKitView _iosView() => UiKitView(
-        key: ValueKey(widget.compact),
+        key: ValueKey((widget.compact, widget.onQuickConnect != null)),
         viewType: _viewType,
         creationParams: _configuration,
         creationParamsCodec: const StandardMessageCodec(),
@@ -188,6 +202,25 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
   @override
   Widget build(BuildContext context) {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      if (widget.onQuickConnect != null) {
+        final textScale = MediaQuery.textScalerOf(context).scale(10) / 10;
+        final height = 54.0 + (10 * (textScale - 1)).clamp(0.0, 40.0);
+        return SafeArea(
+          top: false,
+          minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Align(
+            heightFactor: 1,
+            child: SizedBox(
+              width: widget.labels.length * 78.0 + 8 + 60,
+              height: height,
+              child: ClipPath(
+                clipper: _QuickConnectDockClipper(Directionality.of(context)),
+                child: _iosView(),
+              ),
+            ),
+          ),
+        );
+      }
       if (widget.compact && _hasSystemTabs != false) {
         // Start with enough space to lay out UIKit. It then supplies the occupied
         // height, including the device's bottom safe area.
@@ -249,4 +282,25 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     }
     return const SizedBox.shrink();
   }
+}
+
+class _QuickConnectDockClipper extends CustomClipper<Path> {
+  const _QuickConnectDockClipper(this.direction);
+  final TextDirection direction;
+
+  @override
+  Path getClip(Size size) {
+    final rtl = direction == TextDirection.rtl;
+    final tabs = Rect.fromLTWH(rtl ? 60 : 0, 0, size.width - 60, size.height);
+    final action = Rect.fromLTWH(
+        rtl ? 0 : size.width - 50, (size.height - 50) / 2, 50, 50);
+    return Path()
+      ..addRRect(
+          RRect.fromRectAndRadius(tabs, Radius.circular(size.height / 2)))
+      ..addOval(action);
+  }
+
+  @override
+  bool shouldReclip(_QuickConnectDockClipper oldClipper) =>
+      direction != oldClipper.direction;
 }
