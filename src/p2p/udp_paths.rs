@@ -362,8 +362,6 @@ async fn check_socket(
                 if n != 45 || &buf[..4] != b"RDU2" { continue; }
                 let Some(tag) = auth::Tag::from_slice(&buf[13..45]) else { continue };
                 if !auth::verify(&tag, &buf[..13], key) { continue; }
-                traffic.verified += 1;
-                if let Some((_, seen)) = extended { seen.store(true, Relaxed); }
                 if let Some(row) = row { row.verified.fetch_add(1, Relaxed); }
                 let known = peers.contains(&from);
                 if !known && from.ip() != ip {
@@ -381,6 +379,8 @@ async fn check_socket(
                             if peers.len() >= max_peers { continue; }
                             peers.push(from);
                             traffic.verified_foreign += 1;
+                            traffic.verified += 1;
+                            if let Some((_, seen)) = extended { seen.store(true, Relaxed); }
                             if let Some(original) = candidate.request {
                                 authenticated.push(from);
                                 probe_send(&socket, &packet((kind ^ 2) + 1, &original, key), from, row).await?;
@@ -408,6 +408,10 @@ async fn check_socket(
                     }
                     continue;
                 }
+                // A session-authenticated packet from an unlisted IP cannot stop the
+                // port search until that address has answered its own challenge.
+                traffic.verified += 1;
+                if let Some((_, seen)) = extended { seen.store(true, Relaxed); }
                 if !known && peers.len() >= max_peers { continue; }
                 if buf[4] == (kind ^ 2) {
                     if !authenticated.contains(&from) { authenticated.push(from); }
@@ -429,31 +433,41 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn udp_direct_can_use_a_new_local_port_after_the_light_ports_time_out() {
+    async fn udp_direct_can_recover_after_one_way_probes_from_a_translated_address() {
         let initial = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let first = initial.local_addr().unwrap();
-        let remote = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let remote = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let target = remote.local_addr().unwrap();
+        let translated = UdpSocket::bind("127.0.0.2:0").await.unwrap();
         let key = auth::gen_key();
         let paths = Paths {
             local: Candidates { wide: true, ..Default::default() },
             ports: vec![u32::from(target.port())],
             key: key.clone(),
         };
+        // The first port receives a valid translated request, but its return path is broken.
+        translated.send_to(&packet(2, &[7; 8], &key), first).await.unwrap();
         let answer = async {
             let mut data = [0; 45];
             loop {
                 let (size, from) = remote.recv_from(&mut data).await.unwrap();
                 if from != first && size == 45 && data[4] == 0 {
                     remote.send_to(&packet(1, &data[5..13], &key), from).await.unwrap();
-                    break;
+                    remote.connect(from).await.unwrap();
+                    return KcpStream::accept(remote, Duration::from_secs(2), None).await.unwrap();
                 }
             }
         };
-        let (chosen, _) = timeout(Duration::from_secs(12), async {
-            tokio::join!(paths.select(initial, target, false), answer)
+        let dial = async {
+            let (socket, _) = paths.select(initial, target, false).await.unwrap();
+            assert_ne!(socket.local_addr().unwrap(), first);
+            KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
+        };
+        let ((_client, mut client), (_host, mut host)) = timeout(Duration::from_secs(12), async {
+            tokio::join!(dial, answer)
         }).await.unwrap();
-        assert_ne!(chosen.unwrap().0.local_addr().unwrap(), first);
+        client.send_raw(b"hello".to_vec()).await.unwrap();
+        assert_eq!(&host.next_timeout(2000).await.unwrap().unwrap()[..], b"hello");
     }
 
     #[tokio::test]
