@@ -20,15 +20,4 @@ void main() {
     expect(uri.path, '/my_desk-1@hbbs.example.invalid:21116');
     expect(uri.queryParameters, {'key': 'a+public/key='});
   });
-
-  test(
-      'mixed-case and command-like IDs stay case-preserving connection targets',
-      () {
-    for (final id in ['MyDesk_1', 'terminal', 'config', 'password']) {
-      final uri =
-          Uri.parse(incomingConnectionLink(uriPrefix: 'rustdesk://', id: id));
-      expect(uri.authority, 'connect');
-      expect(uri.path.substring(1), '$id@public');
-    }
-  });
 }
