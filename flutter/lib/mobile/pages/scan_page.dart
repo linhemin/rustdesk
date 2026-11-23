@@ -12,14 +12,25 @@ import '../../common.dart';
 import '../../models/platform_model.dart';
 import '../widgets/dialog.dart';
 
+Uri? connectionQrUri(String code, String uriPrefix) {
+  final uri = Uri.tryParse(code);
+  if (!code.startsWith(uriPrefix) ||
+      uri == null ||
+      const {'config', 'password'}.contains(uri.authority)) {
+    return null;
+  }
+  return uri;
+}
+
 class ScanPage extends StatefulWidget {
   static Future<void> openConnection(BuildContext context) async {
     final result = await Navigator.of(context).push(
         MaterialPageRoute<({String code, bool gallery})>(
             builder: (_) => ScanPage()));
     if (result == null || !context.mounted) return;
-    if (result.code.startsWith(bind.mainUriPrefixSync())) {
-      handleUriLink(uriString: result.code);
+    final uri = connectionQrUri(result.code, bind.mainUriPrefixSync());
+    if (uri != null) {
+      handleUriLink(uri: uri);
     } else {
       showToast('Invalid QR code');
     }
