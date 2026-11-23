@@ -33,10 +33,13 @@ void main() {
     addTearDown(() => messenger.setMockMethodCallHandler(
         SystemChannels.platform_views, null));
     var selected = 0;
+    final searchFocus = FocusNode();
+    addTearDown(searchFocus.dispose);
     await tester.pumpWidget(MaterialApp(
       home: StatefulBuilder(
           builder: (_, setState) => Scaffold(
                 extendBody: true,
+                body: TextField(focusNode: searchFocus),
                 bottomNavigationBar: AppleWorkspaceNavigation(
                   labels: const ['连接', '文件', '设置'],
                   symbols: const ['display.2', 'folder', 'gearshape'],
@@ -63,9 +66,17 @@ void main() {
     }
 
     for (final index in [1, 2, 0]) {
+      await tester.enterText(find.byType(TextField), 'Search');
+      expect(searchFocus.hasFocus, isTrue);
+      await tester.tap(view);
+      await tester.pump();
+      expect(searchFocus.hasFocus, isFalse);
       await fromNative('select', index);
       expect(configuration!['selected'], index);
     }
+    await tester.enterText(find.byType(TextField), 'Search');
+    await fromNative('select', 2);
+    expect(searchFocus.hasFocus, isFalse);
 
     tester.view.physicalSize = const Size(844, 390);
     tester.view.viewPadding =

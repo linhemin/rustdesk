@@ -127,6 +127,9 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       } else if (call.method == 'select') {
         final index = call.arguments;
         if (index is int && index >= 0 && index < widget.labels.length) {
+          if (defaultTargetPlatform == TargetPlatform.iOS) {
+            FocusManager.instance.primaryFocus?.unfocus();
+          }
           widget.onSelect(index);
         }
       } else if (call.method == 'systemHeight') {
@@ -181,12 +184,16 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     return itemWidth * widget.labels.length + 10;
   }
 
-  UiKitView _iosView() => UiKitView(
-        key: ValueKey(widget.compact),
-        viewType: _viewType,
-        creationParams: _configuration,
-        creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: _onPlatformViewCreated,
+  Widget _iosView() => Listener(
+        // Release Flutter text input before UIKit handles the tab touch.
+        onPointerDown: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+        child: UiKitView(
+          key: ValueKey(widget.compact),
+          viewType: _viewType,
+          creationParams: _configuration,
+          creationParamsCodec: const StandardMessageCodec(),
+          onPlatformViewCreated: _onPlatformViewCreated,
+        ),
       );
 
   @override
