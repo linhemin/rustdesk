@@ -4758,18 +4758,18 @@ pub fn start_video_thread<F, T>(
                             let mut tmp_chroma = None;
                             let format_changed = handler.decoder.format() != format;
                             match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
-                                Ok(true)
-                                    if !freshness.show(
+                                Ok(true) => {
+                                    if freshness.show(
                                         &video_queue.read().unwrap(),
                                         std::time::Instant::now(),
-                                    ) => {}
-                                Ok(true) => {
-                                    video_callback(
-                                        display,
-                                        &mut handler.rgb,
-                                        handler.texture.texture,
-                                        pixelbuffer,
-                                    );
+                                    ) {
+                                        video_callback(
+                                            display,
+                                            &mut handler.rgb,
+                                            handler.texture.texture,
+                                            pixelbuffer,
+                                        );
+                                    }
 
                                     // chroma
                                     if tmp_chroma.is_some() && last_chroma != tmp_chroma {
