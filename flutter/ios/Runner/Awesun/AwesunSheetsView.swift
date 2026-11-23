@@ -868,21 +868,24 @@ struct AwesunGamePanel: View {
                 gameKey("S").offset(y: 36)
                 gameKey("D").offset(x: 36)
             }
-            .frame(width: 112, height: 112)
+            .frame(width: 116, height: 116)
             VStack(spacing: 6) {
                 // Keep the original arrow keys available alongside WASD.
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 4) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 4)], spacing: 4) {
                     gameKey("Up", label: "↑", width: 24, height: 28)
                     gameKey("Left", label: "←", width: 24, height: 28)
                     gameKey("Down", label: "↓", width: 24, height: 28)
                     gameKey("Right", label: "→", width: 24, height: 28)
                 }
-                Button("退出游戏键盘", action: model.closeSheet)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(AwesunPalette.textPrimary)
-                    .padding(.horizontal, 5).frame(minHeight: 32)
-                    .background(Capsule().fill(AwesunPalette.sheetFill))
-                    .overlay(Capsule().strokeBorder(AwesunPalette.hairline))
+                Button(action: model.closeSheet) {
+                    Text("退出游戏键盘")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AwesunPalette.textPrimary)
+                        .padding(.horizontal, 5).frame(minWidth: 44, minHeight: 44)
+                        .background(Capsule().fill(AwesunPalette.sheetFill))
+                        .overlay(Capsule().strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
+                        .contentShape(Capsule())
+                }
             }
             .frame(maxWidth: .infinity)
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
@@ -893,7 +896,7 @@ struct AwesunGamePanel: View {
             }
             .padding(10).frame(width: 116)
             .background(RoundedRectangle(cornerRadius: 16).fill(AwesunPalette.sheetFill))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.hairline))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
         }
         .padding(12).padding(.bottom, 12)
         .buttonStyle(.plain)
@@ -928,6 +931,7 @@ private struct AwesunGameButton: View {
                 .strokeBorder(accent ? AwesunPalette.activeIce.opacity(0.4) : AwesunPalette.tileStroke)
                 .allowsHitTesting(false))
             .accessibilityLabel(Text(key.label))
+            .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .updating($pressed) { _, value, _ in value = true }
