@@ -41,6 +41,10 @@ void main() {
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    // The viewport is already safe; physical insets must not shrink clearance.
+    tester.view.viewPadding =
+        FakeViewPadding(bottom: 34 * tester.view.devicePixelRatio);
+    addTearDown(tester.view.resetViewPadding);
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(
         body: MobileSessionQualityMonitor(
