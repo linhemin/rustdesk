@@ -30,8 +30,7 @@ class _MobileSessionQualityMonitorState
 
   @override
   Widget build(BuildContext context) => CustomSingleChildLayout(
-        delegate:
-            _QualityPosition(_offset, context, widget.reserveGamepadSpace),
+        delegate: _QualityPosition(_offset, widget.reserveGamepadSpace),
         child: LayoutBuilder(builder: (cardContext, constraints) {
           // Keep the two-line heading and one full 48pt action usable.
           if (constraints.maxHeight <
@@ -52,8 +51,8 @@ class _MobileSessionQualityMonitorState
               final viewport = context.findRenderObject() as RenderBox?;
               if (card == null || viewport == null) return;
               setState(() {
-                _offset = _QualityPosition(_offset + details.delta, context,
-                        widget.reserveGamepadSpace)
+                _offset = _QualityPosition(
+                        _offset + details.delta, widget.reserveGamepadSpace)
                     .getPositionForChild(viewport.size, card.size);
               });
             },
@@ -164,14 +163,9 @@ class _MobileSessionQualityMonitorState
 
 class _QualityPosition extends SingleChildLayoutDelegate {
   // Native gamepad: 44pt arrows + 8pt gap + 116pt keys + 44pt bottom,
-  // plus 12pt clearance. This viewport already excludes the bottom safe area.
-  _QualityPosition(this.offset, BuildContext context, bool reserveGamepadSpace)
-      : bottomInset = reserveGamepadSpace
-            ? (224.0 -
-                    View.of(context).viewPadding.bottom /
-                        MediaQuery.of(context).devicePixelRatio)
-                .clamp(12.0, 224.0)
-            : 12.0;
+  // plus 12pt clearance. The parent already applies SafeArea.
+  _QualityPosition(this.offset, bool reserveGamepadSpace)
+      : bottomInset = reserveGamepadSpace ? 224.0 : 12.0;
   final Offset offset;
   final double bottomInset;
   static const _rightInset = 68.0;
