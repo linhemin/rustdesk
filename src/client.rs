@@ -2017,11 +2017,22 @@ impl Client {
             direct_futures.push(
                 async move {
                     if let Some(paths) = paths {
-                        if conn_type == ConnType::DEFAULT_CONN {
+                        let recording = if conn_type == ConnType::DEFAULT_CONN {
                             let round = crate::p2p::probe_report::id(&paths.key);
                             probe_interface.send(Data::UdpProbeRound(round));
-                        }
-                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout).await
+                            paths.local_ports(&udp_socket_nat).ok().map(|ports| {
+                                let (recording, done) = crate::p2p::probe_report::Recording::local(round, ports.into_iter());
+                                tokio::spawn(async move {
+                                    if let Ok(report) = done.await {
+                                        if let Some(text) = crate::p2p::probe_report::display(&round, &report) {
+                                            probe_interface.send(Data::UdpProbeLocal(text));
+                                        }
+                                    }
+                                });
+                                recording
+                            })
+                        } else { None };
+                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout, recording).await
                             .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
                     }
                     let (conn, kcp, typ) =
@@ -5722,6 +5733,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 #[derive(Clone)]
 pub enum Data {
     UdpProbeRound([u8; 32]),
+    UdpProbeLocal(String),
     Close,
     RejectInsecureConnection,
     Login((String, String, String, bool)),
@@ -6165,7 +6177,7 @@ fn native_stage(phase: &'static str, stage: &'static str) {
 }
 
 async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: Arc<UdpSocket>,
-    peer: SocketAddr, ms_timeout: u64) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    peer: SocketAddr, ms_timeout: u64, recording: Option<crate::p2p::probe_report::Recording>) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
     #[cfg(target_os = "ios")]
     let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp");
     #[cfg(target_os = "ios")]
@@ -6173,7 +6185,9 @@ async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: A
         o.set_udp_round(&crate::p2p::probe_report::id(&paths.key));
         o.set_stage("checking NAS candidate pairs");
     }
-    let (socket, _) = paths.select(socket, peer, false).await.map_err(|err| {
+    let selection = paths.select_recorded(socket, peer, false, recording.as_ref()).await;
+    drop(recording);
+    let (socket, _) = selection.map_err(|err| {
         #[cfg(target_os = "ios")]
         if let Some(o) = observation.as_mut() { o.finish_candidates(&err); }
         log::debug!("{err:#}");

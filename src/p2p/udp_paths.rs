@@ -171,10 +171,13 @@ fn packet(kind: u8, nonce: &[u8], key: &auth::Key) -> [u8; 45] {
 }
 
 impl Paths {
+    pub(crate) fn local_ports(&self, primary: &UdpSocket) -> std::io::Result<Vec<u16>> {
+        std::iter::once(primary).chain(self.local.sockets.iter().map(AsRef::as_ref))
+            .map(|s| s.local_addr().map(|a| a.port())).collect()
+    }
+
     pub(crate) fn record(&self, primary: &UdpSocket) -> ResultType<Recording> {
-        let ports = std::iter::once(primary).chain(self.local.sockets.iter().map(AsRef::as_ref))
-            .map(|s| s.local_addr().map(|a| a.port())).collect::<std::io::Result<Vec<_>>>()?;
-        Ok(Recording::start(probe_report::id(&self.key), ports.into_iter()))
+        Ok(Recording::start(probe_report::id(&self.key), self.local_ports(primary)?.into_iter()))
     }
 
     pub async fn select(self, primary: Arc<UdpSocket>, peer: SocketAddr, listen: bool)
@@ -252,6 +255,7 @@ struct PendingAddress {
 async fn probe_send(socket: &UdpSocket, packet: &[u8; 45], to: SocketAddr, row: Option<&Port>) -> std::io::Result<usize> {
     let sent = socket.send_to(packet, to).await;
     if let Some(row) = row {
+        row.record_destination(to, sent.is_ok());
         if sent.is_ok() {
             row.tx.fetch_add(1, Relaxed);
             if matches!(packet[4], 1 | 3) { row.replies.fetch_add(1, Relaxed); }
@@ -462,7 +466,11 @@ mod tests {
             (u32::from(addr.port()), 2, 1, 1));
         assert!(first.sent > first.replies);
         assert_eq!((report.ports[1].received, report.ports[1].replies), (0, 0));
-        assert!(probe_report::display(&id, &report).is_some());
+        let destination = remote.local_addr().unwrap().to_string();
+        assert_eq!(first.destinations.len(), 1);
+        assert_eq!(first.destinations[0].endpoint, destination);
+        assert_eq!(first.destinations[0].sent, first.sent);
+        assert!(probe_report::display(&id, &report).unwrap().contains(&format!("{} → {destination}", addr.port())));
         assert!(probe_report::display(&[0; 32], &report).is_none());
     }
 

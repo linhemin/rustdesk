@@ -93,13 +93,23 @@ void main() {
     await model.checkShowQualityMonitor(_sessionId);
     model.addUdpReport('UDP #0123456789ab');
     model.addUdpReport('UDP #0123456789ab  RX 3  ACK TX 2\n'
-        'local port | RX | valid RX | TX | ACK TX | TX err\n51023 | 3 | 2 | 9 | 2 | 0');
+        'local port | RX | valid RX | TX | ACK TX | TX err\n51023 | 3 | 2 | 9 | 2 | 0'
+        '\n\nlocal port → destination | TX | TX err\n51023 → 192.0.2.4:38000 | 9 | 0');
+    model.addUdpReport('local UDP #0123456789ab  RX 0  ACK TX 0\n'
+        'local port | RX | valid RX | TX | ACK TX | TX err\n38000 | 0 | 0 | 4 | 0 | 0'
+        '\n\nlocal port → destination | TX | TX err\n38000 → 198.51.100.3:51023 | 4 | 0');
     await tester.pump();
     expect(model.udpReports.length, 1);
     await tester.tap(find.text('UDP #0123456789ab  RX 3  ACK TX 2'));
     await tester.pumpAndSettle();
     expect(find.text('51023'), findsOneWidget);
     expect(find.text('ACK TX'), findsOneWidget);
+    for (final device in ['Local', 'Remote']) {
+      await tester.tap(find.textContaining('$device · IP:port'));
+      await tester.pumpAndSettle();
+    }
+    expect(find.textContaining('38000 → 198.51.100.3:51023'), findsOneWidget);
+    expect(find.textContaining('51023 → 192.0.2.4:38000'), findsOneWidget);
   });
 
   testWidgets(
