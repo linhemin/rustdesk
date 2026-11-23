@@ -861,5 +861,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Display & encoding", "显示与编码"),
         ("Leave empty to use the public server.", "留空则使用默认的公共服务器。"),
         ("Scan QR to import", "扫描二维码导入"),
+        ("Recent", "最近"),
+        ("LAN", "局域网"),
+        ("Enter remote ID or device name…", "输入远程 ID 或设备名…"),
+        ("Scan QR code", "扫描二维码"),
     ].iter().cloned().collect();
 }
