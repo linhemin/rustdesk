@@ -72,8 +72,10 @@ const MAX_PENDING_FRAMES: usize = 128;
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
 // Slow is not dead. A path that has delivered data keeps the session while acknowledgements
 // still advance; it is left only after standing still, or falling behind, for this long.
-const STALL_TIMEOUT: Duration = Duration::from_secs(8);
-const LAG_TIMEOUT: Duration = Duration::from_secs(15);
+// The application pipe stops draining once the in-flight window is full and closes the session
+// after 8s, so a stalled path has to be left for the relay well before that.
+const STALL_TIMEOUT: Duration = Duration::from_secs(5);
+const LAG_TIMEOUT: Duration = Duration::from_secs(8);
 const STEADY_PATH: Duration = Duration::from_secs(60);
 const RTC_TIMEOUT: u64 = 18_000;
 const LITE_TIMEOUT: u64 = 12_000;
@@ -1715,15 +1717,26 @@ mod tests {
 
         stall.send_replace(true);
         controller.send_raw(b"slow".to_vec()).await.unwrap();
-        tokio::time::sleep(PATH_TIMEOUT + Duration::from_millis(1500)).await;
+        tokio::time::sleep(PATH_TIMEOUT + Duration::from_secs(1)).await;
         stall.send_replace(false);
         assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"slow");
         assert!(!path.has_changed().unwrap() && !host_path.has_changed().unwrap());
         assert_eq!((*path.borrow(), *host_path.borrow()), (Some("TCP"), Some("TCP")));
 
         stall.send_replace(true);
-        controller.send_raw(b"dead".to_vec()).await.unwrap();
-        assert_eq!(&controlled.next_timeout(12_000).await.unwrap().unwrap()[..], b"dead");
+        let video = vec![7; 256 * 1024];
+        tokio::join!(
+            async {
+                for _ in 0..12 {
+                    controller.send_raw(video.clone()).await.unwrap();
+                }
+            },
+            async {
+                for _ in 0..12 {
+                    assert_eq!(controlled.next_timeout(12_000).await.unwrap().unwrap().len(), video.len());
+                }
+            },
+        );
         assert!(path.borrow().is_none());
     }
 
@@ -1934,7 +1947,7 @@ async fn run(
                         let acked = seq.acked;
                         seq.acknowledge(number);
                         if seq.acked > acked {
-                            if let Some(direct) = direct.as_mut() {
+                            if let Some(direct) = direct.as_mut().filter(|d| d.active) {
                                 direct.acked_at = Some(Instant::now());
                             }
                         }
@@ -2240,7 +2253,7 @@ async fn run(
                         d.last_rx_progress = rx;
                         ice_stalled(&mut d.ice_silent_since, now, rtc.0.is_disconnected(), progressed)
                     } else { false };
-                    let reason = if !d.active && stalled(now, d.since, d.acked_at) {
+                    let reason = if !d.active && now.duration_since(d.since) >= PATH_TIMEOUT {
                         Some("relay drain timed out")
                     } else if seq.pending.front().is_some_and(|p| stalled(now, p.sent, d.acked_at)) {
                         Some("direct application acknowledgement timed out")
@@ -2274,7 +2287,6 @@ async fn run(
         if let Some(direct) = direct.as_mut() {
             if !direct.active && seq.acked == seq.sent {
                 direct.active = true;
-                direct.acked_at = None;
                 path.send_replace(Some(direct.lane.label()));
                 retries = RetrySchedule::default();
                 let relay_ms = first_relay_data.map(|start| start.elapsed().as_millis());
