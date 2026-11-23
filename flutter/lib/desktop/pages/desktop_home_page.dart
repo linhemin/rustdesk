@@ -203,8 +203,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   Widget _identityWorkspace(BuildContext context, bool visible) {
     final theme = Theme.of(context);
-    return Consumer<ServerModel>(
-        builder: (context, model, _) =>
+    final model = gFFI.serverModel;
+    return ListenableBuilder(
+        listenable: model,
+        builder: (context, _) =>
             ListView(padding: const EdgeInsets.all(24), children: [
               Text(translate('Your Desktop'),
                   style: theme.textTheme.headlineSmall
