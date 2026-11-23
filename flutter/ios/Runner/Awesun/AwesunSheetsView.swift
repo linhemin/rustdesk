@@ -876,7 +876,7 @@ struct AwesunGamePanel: View {
                         .contentShape(Capsule())
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 0) {
                 ZStack {
                     Circle().fill(AwesunPalette.sheetFill)
                         .overlay(Circle().strokeBorder(AwesunPalette.hairline))
