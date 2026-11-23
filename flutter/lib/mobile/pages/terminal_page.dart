@@ -6,11 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/common/widgets/terminal_toolbar.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/models/input_modifier_utils.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/terminal_copy_shortcut.dart';
 import 'package:flutter_hbb/models/terminal_model.dart';
+import 'package:flutter_hbb/models/terminal_theme.dart';
 import 'package:flutter_hbb/models/terminal_mouse_handler.dart';
 import 'package:flutter_hbb/mobile/terminal_keyboard_utils.dart';
 import 'package:flutter_hbb/web/dummy.dart'
@@ -51,6 +54,9 @@ Widget _buildTerminalViewForPlatform({
   }
   return TerminalView(
     terminal,
+    theme: usesWorkspaceStyle
+        ? workspaceTerminalTheme
+        : TerminalThemes.defaultTheme,
     controller: controller,
     autofocus: true,
     textStyle: textStyle,
@@ -425,54 +431,78 @@ class _TerminalPageState extends State<TerminalPage>
 
   Widget buildBody() {
     final scaffold = Scaffold(
-      resizeToAvoidBottomInset: false, // Disable automatic layout adjustment; manually control UI updates to prevent flickering when the keyboard shows/hides
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      resizeToAvoidBottomInset:
+          false, // Disable automatic layout adjustment; manually control UI updates to prevent flickering when the keyboard shows/hides
+      backgroundColor: usesWorkspaceStyle
+          ? workspaceTerminalTheme.background
+          : Theme.of(context).scaffoldBackgroundColor,
       body: Stack(
         children: [
           Positioned.fill(
             child: SafeArea(
               top: true,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final heightPx = constraints.maxHeight;
-                  return _buildTerminalViewForPlatform(
-                    reportMouseInput: isWebDesktop || isAndroid,
-                    reportTouchInput: isIOS,
-                    terminal: _terminalModel.terminal,
-                    controller: _terminalModel.terminalController,
-                    textStyle: _getTerminalStyle(),
-                    // The following comment is from xterm.dart source code:
-                    // Workaround to detect delete key for platforms and IMEs that do not
-                    // emit a hardware delete event. Preferred on mobile platforms. [false] by
-                    // default.
-                    //
-                    // Android works fine without this workaround.
-                    deleteDetection: isIOS,
-                    shortcuts: platformTerminalShortcuts(),
-                    onKeyEvent: terminalCopyHandler(
-                      _terminalModel.terminal,
-                      _terminalModel.terminalController,
-                      fallback: _handleTerminalKeyEvent,
-                    ),
-                    padding: _calculatePadding(heightPx),
-                    onSecondaryTapDown: (details, offset) async {
-                      final selection = _terminalModel.terminalController.selection;
-                      if (selection != null) {
-                        final text = _terminalModel.terminal.buffer.getText(selection);
-                        _terminalModel.terminalController.clearSelection();
-                        await Clipboard.setData(ClipboardData(text: text));
-                      } else {
-                        await _pasteClipboardText();
-                      }
+              child: Column(children: [
+                if (usesWorkspaceStyle)
+                  TerminalToolbar(
+                    peer: widget.id,
+                    copyLabel: translate('Copy'),
+                    pasteLabel: translate('Paste'),
+                    closeLabel: translate('Disconnect'),
+                    onCopy: () async {
+                      final selection =
+                          _terminalModel.terminalController.selection;
+                      if (selection == null) return;
+                      await Clipboard.setData(ClipboardData(
+                          text: _terminalModel.terminal.buffer
+                              .getText(selection)));
                     },
-                  );
-                },
-              ),
+                    onPaste: _pasteClipboardText,
+                    onClose: () => clientClose(sessionId, _ffi),
+                  ),
+                Expanded(child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final heightPx = constraints.maxHeight;
+                    return _buildTerminalViewForPlatform(
+                      reportMouseInput: isWebDesktop || isAndroid,
+                      reportTouchInput: isIOS,
+                      terminal: _terminalModel.terminal,
+                      controller: _terminalModel.terminalController,
+                      textStyle: _getTerminalStyle(),
+                      // The following comment is from xterm.dart source code:
+                      // Workaround to detect delete key for platforms and IMEs that do not
+                      // emit a hardware delete event. Preferred on mobile platforms. [false] by
+                      // default.
+                      //
+                      // Android works fine without this workaround.
+                      deleteDetection: isIOS,
+                      shortcuts: platformTerminalShortcuts(),
+                      onKeyEvent: terminalCopyHandler(
+                        _terminalModel.terminal,
+                        _terminalModel.terminalController,
+                        fallback: _handleTerminalKeyEvent,
+                      ),
+                      padding: _calculatePadding(heightPx),
+                      onSecondaryTapDown: (details, offset) async {
+                        final selection =
+                            _terminalModel.terminalController.selection;
+                        if (selection != null) {
+                          final text =
+                              _terminalModel.terminal.buffer.getText(selection);
+                          _terminalModel.terminalController.clearSelection();
+                          await Clipboard.setData(ClipboardData(text: text));
+                        } else {
+                          await _pasteClipboardText();
+                        }
+                      },
+                    );
+                  },
+                )),
+              ]),
             ),
           ),
           if (_showTerminalExtraKeys) _buildFloatingKeyboard(),
           // iOS-style circular close button in top-right corner
-          if (isIOS) _buildCloseButton(),
+          if (isIOS && !usesWorkspaceStyle) _buildCloseButton(),
         ],
       ),
     );
@@ -583,7 +613,14 @@ class _TerminalPageState extends State<TerminalPage>
       bottom: _sysKeyboardHeight,
       child: Container(
         key: _keyboardKey,
-        color: Theme.of(context).scaffoldBackgroundColor,
+        decoration: BoxDecoration(
+          color: usesWorkspaceStyle
+              ? const Color(0xff11141b)
+              : Theme.of(context).scaffoldBackgroundColor,
+          border: usesWorkspaceStyle
+              ? const Border(top: BorderSide(color: Color(0x1affffff)))
+              : null,
+        ),
         padding: EdgeInsets.zero,
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -682,9 +719,12 @@ class _TerminalPageState extends State<TerminalPage>
           minimumSize: const Size(terminalKeyboardKeyWidth, 32),
           padding: EdgeInsets.zero,
           textStyle: const TextStyle(fontSize: 12),
-          backgroundColor:
-              Theme.of(context).colorScheme.surfaceContainerHighest,
-          foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+          backgroundColor: usesWorkspaceStyle
+              ? const Color(0xff1c212c)
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          foregroundColor: usesWorkspaceStyle
+              ? const Color(0xffe6edf3)
+              : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -722,11 +762,15 @@ class _TerminalPageState extends State<TerminalPage>
           padding: EdgeInsets.zero,
           textStyle: const TextStyle(fontSize: 12),
           backgroundColor: isLocked
-              ? Colors.blue
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
+              ? const Color(0xff4c8bf5)
+              : usesWorkspaceStyle
+                  ? const Color(0xff1c212c)
+                  : Theme.of(context).colorScheme.surfaceContainerHighest,
           foregroundColor: isLocked
               ? Colors.white
-              : Theme.of(context).colorScheme.onSurfaceVariant,
+              : usesWorkspaceStyle
+                  ? const Color(0xffe6edf3)
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -745,9 +789,12 @@ class _TerminalPageState extends State<TerminalPage>
         minimumSize: const Size(terminalKeyboardKeyWidth, 32),
         padding: EdgeInsets.zero,
         textStyle: const TextStyle(fontSize: 12),
-        backgroundColor:
-            Theme.of(context).colorScheme.surfaceContainerHighest,
-        foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+        backgroundColor: usesWorkspaceStyle
+            ? const Color(0xff1c212c)
+            : Theme.of(context).colorScheme.surfaceContainerHighest,
+        foregroundColor: usesWorkspaceStyle
+            ? const Color(0xffe6edf3)
+            : Theme.of(context).colorScheme.onSurfaceVariant,
       ),
     );
   }

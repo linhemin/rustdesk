@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
@@ -465,14 +466,19 @@ class ServerInfo extends StatelessWidget {
   Widget build(BuildContext context) {
     final serverModel = Provider.of<ServerModel>(context);
 
-    const Color colorPositive = Colors.green;
-    const Color colorNegative = Colors.red;
+    final theme = Theme.of(context);
+    final colorPositive = WorkspaceStyle.success(context);
+    final colorNegative = WorkspaceStyle.danger(context);
     const double iconMarginRight = 15;
     const double iconSize = 24;
-    const TextStyle textStyleHeading = TextStyle(
-        fontSize: 16.0, fontWeight: FontWeight.bold, color: Colors.grey);
-    const TextStyle textStyleValue =
-        TextStyle(fontSize: 25.0, fontWeight: FontWeight.bold);
+    final textStyleHeading = TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+        color: WorkspaceStyle.tertiaryInk(context));
+    const TextStyle textStyleValue = TextStyle(
+        fontSize: 25.0,
+        fontWeight: FontWeight.w600,
+        fontFeatures: [FontFeature.tabularFigures()]);
 
     void copyToClipboard(String value) {
       Clipboard.setData(ClipboardData(text: value));
@@ -482,8 +488,7 @@ class ServerInfo extends StatelessWidget {
     Widget ConnectionStateNotification() {
       if (serverModel.connectStatus == -1) {
         return Row(children: [
-          const Icon(Icons.warning_amber_sharp,
-                  color: colorNegative, size: iconSize)
+          Icon(Icons.warning_amber_sharp, color: colorNegative, size: iconSize)
               .marginOnly(right: iconMarginRight),
           Expanded(child: Text(translate('not_ready_status')))
         ]);
@@ -495,7 +500,7 @@ class ServerInfo extends StatelessWidget {
         ]);
       } else {
         return Row(children: [
-          const Icon(Icons.check, color: colorPositive, size: iconSize)
+          Icon(Icons.check, color: colorPositive, size: iconSize)
               .marginOnly(right: iconMarginRight),
           Expanded(child: Text(translate('Ready')))
         ]);
@@ -510,8 +515,7 @@ class ServerInfo extends StatelessWidget {
           // ID
           children: [
             Row(children: [
-              const Icon(Icons.perm_identity,
-                      color: Colors.grey, size: iconSize)
+              Icon(Icons.perm_identity, color: theme.hintColor, size: iconSize)
                   .marginOnly(right: iconMarginRight),
               Text(
                 translate('ID'),
@@ -532,7 +536,7 @@ class ServerInfo extends StatelessWidget {
             ]).marginOnly(left: 39, bottom: 10),
             // Password
             Row(children: [
-              const Icon(Icons.lock_outline, color: Colors.grey, size: iconSize)
+              Icon(Icons.lock_outline, color: theme.hintColor, size: iconSize)
                   .marginOnly(right: iconMarginRight),
               Text(
                 translate('One-time Password'),
@@ -889,7 +893,7 @@ class PaddingCard extends StatelessWidget {
           elevation: 0,
           color: theme.cardColor,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(12),
             side: BorderSide(color: theme.dividerColor),
           ),
           margin: const EdgeInsets.fromLTRB(14.0, 10.0, 14.0, 0),

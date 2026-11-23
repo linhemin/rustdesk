@@ -297,6 +297,15 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         SettingsTabKey.about => const Color(0xff8e8e93),
       };
 
+  String _groupFor(SettingsTabKey key) => switch (key) {
+        SettingsTabKey.general => 'General',
+        SettingsTabKey.safety ||
+        SettingsTabKey.network ||
+        SettingsTabKey.display =>
+          'Connection',
+        _ => 'Other',
+      };
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -318,7 +327,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             if (wide)
               WorkspaceSidebar(
-                width: bounds.maxWidth >= 1000 ? 232 : 196,
+                width: 216,
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -383,15 +392,36 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                           child: ListView(
                               padding: const EdgeInsets.only(bottom: 12),
                               children: [
-                            for (final i in filteredIndices)
-                              Obx(() => WorkspaceSettingsNavItem(
-                                  label: translate(tabs[i].label),
-                                  icon: selectedTab.value == tabs[i].key
-                                      ? tabs[i].selected
-                                      : tabs[i].unselected,
-                                  tileColor: _tileColorFor(tabs[i].key),
-                                  selected: selectedTab.value == tabs[i].key,
-                                  onTap: () => controller.jumpToPage(i))),
+                            for (var index = 0;
+                                index < filteredIndices.length;
+                                index++) ...[
+                              if (index == 0 ||
+                                  _groupFor(tabs[filteredIndices[index]].key) !=
+                                      _groupFor(
+                                          tabs[filteredIndices[index - 1]].key))
+                                Padding(
+                                  padding: EdgeInsets.fromLTRB(
+                                      18, index == 0 ? 0 : 16, 18, 6),
+                                  child: Text(
+                                      translate(_groupFor(
+                                          tabs[filteredIndices[index]].key)),
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: WorkspaceStyle.tertiaryInk(
+                                              context))),
+                                ),
+                              Obx(() {
+                                final i = filteredIndices[index];
+                                return WorkspaceSettingsNavItem(
+                                    label: translate(tabs[i].label),
+                                    icon: selectedTab.value == tabs[i].key
+                                        ? tabs[i].selected
+                                        : tabs[i].unselected,
+                                    tileColor: _tileColorFor(tabs[i].key),
+                                    selected: selectedTab.value == tabs[i].key,
+                                    onTap: () => controller.jumpToPage(i));
+                              }),
+                            ],
                           ])),
                     ]),
               ),

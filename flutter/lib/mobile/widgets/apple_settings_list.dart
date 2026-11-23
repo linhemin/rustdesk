@@ -24,7 +24,7 @@ class AppleSettingsList extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 640),
               child: section is SettingsSection
                   ? Padding(
-                      padding: const EdgeInsets.only(bottom: 22),
+                      padding: const EdgeInsets.only(bottom: 24),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -36,12 +36,14 @@ class AppleSettingsList extends StatelessWidget {
                                 header: true,
                                 child: DefaultTextStyle(
                                   style: theme.textTheme.labelMedium!.copyWith(
-                                    fontSize: 12.5,
+                                    fontSize: 12,
                                     letterSpacing: isIOS ? 0.2 : 0,
                                     color: isIOS
-                                        ? theme.hintColor
+                                        ? WorkspaceStyle.tertiaryInk(context)
                                         : theme.colorScheme.primary,
-                                    fontWeight: FontWeight.w600,
+                                    fontWeight: isIOS
+                                        ? FontWeight.w400
+                                        : FontWeight.w600,
                                   ),
                                   child: section.title!,
                                 ),
@@ -52,8 +54,9 @@ class AppleSettingsList extends StatelessWidget {
                             clipBehavior: Clip.antiAlias,
                             shape: RoundedRectangleBorder(
                               side: BorderSide(
-                                color: theme.dividerColor,
-                                width: isIOS ? 0.6 : 1,
+                                color: isIOS
+                                    ? Colors.transparent
+                                    : theme.dividerColor,
                               ),
                               borderRadius: BorderRadius.circular(14),
                             ),
@@ -156,6 +159,9 @@ class _SettingsRow extends StatelessWidget {
     final isSwitch = tile.tileType == SettingsTileType.switchTile;
     final canToggle = tile.enabled && tile.onToggle != null;
     final onPressed = tile.enabled ? tile.onPressed : null;
+    final inlineValue = tile.value != null &&
+        !isSwitch &&
+        MediaQuery.textScalerOf(context).scale(1) <= 1.3;
     final titleColor = !tile.enabled || (isSwitch && !canToggle)
         ? theme.hintColor
         : theme.colorScheme.onSurface;
@@ -167,18 +173,18 @@ class _SettingsRow extends StatelessWidget {
                 ? () => tile.onToggle!(!(tile.initialValue ?? false))
                 : null,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 50),
+          constraints: const BoxConstraints(minHeight: 46),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             child: Row(children: [
               if (tile.leading != null) ...[
                 Container(
-                  width: 30,
-                  height: 30,
+                  width: 29,
+                  height: 29,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: _tileTintForLeading(
-                        tile.leading!, WorkspaceStyle.blue),
+                    color:
+                        _tileTintForLeading(tile.leading!, WorkspaceStyle.blue),
                     borderRadius: BorderRadius.circular(7.5),
                     border: Border.all(
                       color: Colors.white.withOpacity(0.16),
@@ -203,8 +209,10 @@ class _SettingsRow extends StatelessWidget {
                       ),
                       child: tile.title,
                     ),
-                    for (final secondary
-                        in [tile.value, tile.description].whereType<Widget>())
+                    for (final secondary in [
+                      if (!inlineValue) tile.value,
+                      tile.description,
+                    ].whereType<Widget>())
                       Padding(
                         padding: const EdgeInsets.only(top: 1.5),
                         child: DefaultTextStyle(
@@ -216,6 +224,15 @@ class _SettingsRow extends StatelessWidget {
                   ],
                 ),
               ),
+              if (inlineValue) ...[
+                const SizedBox(width: 8),
+                Flexible(
+                    child: DefaultTextStyle(
+                  style: theme.textTheme.bodyMedium!
+                      .copyWith(color: WorkspaceStyle.tertiaryInk(context)),
+                  child: tile.value!,
+                )),
+              ],
               if (tile.trailing != null) ...[
                 const SizedBox(width: 8),
                 IconTheme.merge(
@@ -226,7 +243,8 @@ class _SettingsRow extends StatelessWidget {
                 CupertinoSwitch(
                   value: tile.initialValue ?? false,
                   onChanged: canToggle ? (v) => tile.onToggle!(v) : null,
-                  activeColor: tile.activeSwitchColor ?? WorkspaceStyle.green,
+                  activeColor:
+                      tile.activeSwitchColor ?? theme.colorScheme.primary,
                 ),
               ] else if (onPressed != null) ...[
                 const SizedBox(width: 8),

@@ -15,7 +15,7 @@ class WorkspaceSettingsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Align(
-      alignment: AlignmentDirectional.topStart,
+      alignment: AlignmentDirectional.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
         child: Padding(
@@ -41,11 +41,16 @@ class WorkspaceSettingsSection extends StatelessWidget {
               ),
               if (children.isNotEmpty)
                 WorkspacePanel(
-                  radius: 14,
+                  radius: 12,
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: children,
+                    children: [
+                      for (var i = 0; i < children.length; i++) ...[
+                        if (i > 0) const Divider(height: 16),
+                        children[i],
+                      ],
+                    ],
                   ),
                 ),
             ],
@@ -81,19 +86,19 @@ class WorkspaceSettingsNavItem extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 3),
       child: Material(
         color: selected ? accent : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: Row(children: [
               WorkspaceIconTile(
                 icon: icon,
-                color: selected ? Colors.white.withOpacity(0.22) : tileTint,
-                size: 22,
-                radius: 6,
-                iconSize: 13,
+                color: tileTint,
+                size: 20,
+                radius: 5.5,
+                iconSize: 12,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -103,7 +108,8 @@ class WorkspaceSettingsNavItem extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13,
-                    color: selected ? Colors.white : theme.colorScheme.onSurface,
+                    color:
+                        selected ? Colors.white : theme.colorScheme.onSurface,
                     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
@@ -131,7 +137,7 @@ class WorkspaceSettingsHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Align(
-      alignment: AlignmentDirectional.topStart,
+      alignment: AlignmentDirectional.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
         child: Padding(

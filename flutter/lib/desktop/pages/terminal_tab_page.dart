@@ -115,6 +115,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
         id: peerId,
         terminalId: terminalId,
         tabKey: tabKey,
+        onClose: () => _closeTab(tabKey),
         password: password,
         loginMethod: loginMethod,
         isSharedPassword: isSharedPassword,

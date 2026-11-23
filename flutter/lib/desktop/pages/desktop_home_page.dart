@@ -202,48 +202,122 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   Widget _identityWorkspace(BuildContext context, bool visible) {
-    final model = gFFI.serverModel;
     final theme = Theme.of(context);
-    return ListView(padding: const EdgeInsets.all(20), children: [
-      Text(translate('Your Desktop'),
-          style: theme.textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 6),
-      Text(translate('desk_tip'), style: TextStyle(color: theme.hintColor)),
-      const SizedBox(height: 18),
-      Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 580),
-              child: WorkspacePanel(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(translate('ID'),
-                            style: theme.textTheme.labelLarge),
-                        ValueListenableBuilder<TextEditingValue>(
-                            valueListenable: model.serverId,
-                            builder: (_, value, __) => Row(children: [
-                                  Expanded(
-                                      child: SelectableText(value.text,
-                                          style: theme.textTheme.headlineMedium
-                                              ?.copyWith(
-                                                  fontWeight: FontWeight.w600,
-                                                  letterSpacing: .5))),
-                                  IconButton(
-                                      tooltip: MaterialLocalizations.of(context)
-                                          .copyButtonLabel,
-                                      icon: const Icon(Icons.copy_rounded),
-                                      onPressed: value.text.isEmpty
-                                          ? null
-                                          : () => _copyLocalId(value.text)),
-                                ])),
-                        const Divider(height: 24),
-                        buildPasswordBoard(context),
-                      ])))),
-      if (visible) Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
-    ]);
+    return Consumer<ServerModel>(
+        builder: (context, model, _) =>
+            ListView(padding: const EdgeInsets.all(24), children: [
+              Text(translate('Your Desktop'),
+                  style: theme.textTheme.headlineSmall
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              Text(translate('desk_tip'),
+                  style: TextStyle(color: theme.hintColor)),
+              const SizedBox(height: 18),
+              Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: LayoutBuilder(builder: (context, bounds) {
+                        final width = bounds.maxWidth < 600
+                            ? bounds.maxWidth
+                            : (bounds.maxWidth - 14) / 2;
+                        return Wrap(spacing: 14, runSpacing: 14, children: [
+                          SizedBox(
+                              width: width,
+                              child: WorkspacePanel(
+                                  radius: 12,
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(translate('ID'),
+                                            style: theme.textTheme.labelSmall
+                                                ?.copyWith(
+                                                    color: WorkspaceStyle
+                                                        .tertiaryInk(context))),
+                                        const SizedBox(height: 12),
+                                        ValueListenableBuilder<
+                                                TextEditingValue>(
+                                            valueListenable: model.serverId,
+                                            builder: (_, value, __) =>
+                                                Row(children: [
+                                                  Expanded(
+                                                      child: SelectableText(
+                                                          value.text,
+                                                          style: theme.textTheme
+                                                              .headlineMedium
+                                                              ?.copyWith(
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
+                                                                  letterSpacing:
+                                                                      .5))),
+                                                  IconButton(
+                                                      tooltip:
+                                                          MaterialLocalizations
+                                                                  .of(context)
+                                                              .copyButtonLabel,
+                                                      icon: const Icon(
+                                                          Icons.copy_rounded),
+                                                      onPressed: value
+                                                              .text.isEmpty
+                                                          ? null
+                                                          : () => _copyLocalId(
+                                                              value.text)),
+                                                ])),
+                                      ]))),
+                          SizedBox(
+                              width: width,
+                              child: WorkspacePanel(
+                                radius: 12,
+                                padding: const EdgeInsets.all(4),
+                                child: buildPasswordBoard(context),
+                              )),
+                        ]);
+                      }))),
+              if (!bind.isDisableSettings() &&
+                  bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) !=
+                      'Y')
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    margin: const EdgeInsets.only(top: 16),
+                    child: WorkspacePanel(
+                      radius: 12,
+                      padding: const EdgeInsets.all(16),
+                      child: Row(children: [
+                        Expanded(
+                            child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(translate('Security'),
+                                style: theme.textTheme.labelLarge),
+                            const SizedBox(height: 6),
+                            Text(
+                                translate(model.approveMode == 'password'
+                                    ? 'Accept sessions via password'
+                                    : model.approveMode == 'click'
+                                        ? 'Accept sessions via click'
+                                        : 'Accept sessions via both'),
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: theme.hintColor)),
+                          ],
+                        )),
+                        const SizedBox(width: 12),
+                        OutlinedButton(
+                          onPressed: () => DesktopSettingPage.switch2page(
+                              SettingsTabKey.safety),
+                          child: Text(translate('Settings')),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+              if (visible)
+                Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
+            ]));
   }
 
   Widget buildLeftPane(BuildContext context) {

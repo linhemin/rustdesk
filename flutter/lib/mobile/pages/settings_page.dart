@@ -1062,8 +1062,6 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               network.isNotEmpty)
             SettingsSection(title: Text(translate('Connection')), tiles: [
               ...server,
-              if (!incomingOnly) ...defaultDisplaySection().tiles,
-              ...shortcuts,
               if (network.isNotEmpty)
                 SettingsTile.navigation(
                   title: Text(translate('Network')),
@@ -1079,8 +1077,10 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
             ]),
           SettingsSection(title: Text(translate('General')), tiles: [
             ...appearance,
+            ...shortcuts,
             ...preferences,
           ]),
+          if (!incomingOnly) defaultDisplaySection(),
         ] else
           SettingsSection(title: Text(translate('Settings')), tiles: [
             ...server,
