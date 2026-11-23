@@ -81,7 +81,10 @@ class FileTransferBreadcrumbs extends StatelessWidget {
                                         overflow: TextOverflow.ellipsis))),
                         ]))
           else if (visible[position] == parts.length - 1)
-            Expanded(child: button(visible[position]))
+            Expanded(
+                child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: button(visible[position])))
           else
             button(visible[position]),
         ],

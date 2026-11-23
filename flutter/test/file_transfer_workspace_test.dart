@@ -15,13 +15,17 @@ void main() {
       'q4'
     ];
     List<String>? opened;
+    var editing = false;
     Widget workspace(double width) => MaterialApp(
         home: Scaffold(
             body: SizedBox(
                 width: width,
                 height: 32,
-                child: FileTransferBreadcrumbs(
-                    parts: parts, onSelected: (path) => opened = path))));
+                child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => editing = true,
+                    child: FileTransferBreadcrumbs(
+                        parts: parts, onSelected: (path) => opened = path)))));
     await tester.pumpWidget(workspace(320));
     expect(find.text('/'), findsOneWidget);
     expect(find.text('q4'), findsOneWidget);
@@ -38,6 +42,10 @@ void main() {
     expect(find.text('ft_demo_local'), findsOneWidget);
     await tester.tap(find.text('devin'));
     expect(opened, ['/', 'Users', 'devin']);
+    await tester.tapAt(
+        tester.getTopRight(find.byType(FileTransferBreadcrumbs)) +
+            const Offset(-20, 16));
+    expect(editing, isTrue);
     expect(tester.takeException(), isNull);
   });
 
