@@ -77,22 +77,24 @@ class HomePageState extends State<HomePage> {
         child: Scaffold(
           extendBody: isIOS && _pages.length > 1,
           // backgroundColor: MyTheme.grayBg,
-          appBar: AppBar(
-            centerTitle: !isIOS,
-            title: isIOS
-                ? Row(children: [
-                    loadIcon(26),
-                    const SizedBox(width: 9),
-                    Flexible(
-                        child: Text(
-                            _pages[_selectedIndex] is SettingsPage
-                                ? _pages[_selectedIndex].title
-                                : bind.mainGetAppNameSync(),
-                            overflow: TextOverflow.ellipsis)),
-                  ])
-                : appTitle(),
-            actions: _pages.elementAt(_selectedIndex).appBarActions,
-          ),
+          appBar: isIOS && _pages[_selectedIndex] is SettingsPage
+              ? null
+              : AppBar(
+                  centerTitle: !isIOS,
+                  title: isIOS
+                      ? Row(children: [
+                          loadIcon(26),
+                          const SizedBox(width: 9),
+                          Flexible(
+                              child: Text(
+                                  _pages[_selectedIndex] is SettingsPage
+                                      ? _pages[_selectedIndex].title
+                                      : bind.mainGetAppNameSync(),
+                                  overflow: TextOverflow.ellipsis)),
+                        ])
+                      : appTitle(),
+                  actions: _pages.elementAt(_selectedIndex).appBarActions,
+                ),
           bottomNavigationBar: _pages.length < 2 ||
                   (isIOS && MediaQuery.viewInsetsOf(context).bottom > 0)
               ? null

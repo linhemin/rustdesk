@@ -13,7 +13,8 @@ import '../../models/platform_model.dart';
 import '../widgets/dialog.dart';
 
 class ScanPage extends StatefulWidget {
-  static Future<void> open(BuildContext context) async {
+  static Future<void> open(BuildContext context,
+      {ValueChanged<ServerConfig>? onServerConfig}) async {
     final result = await Navigator.of(context).push(
         MaterialPageRoute<({String code, bool gallery})>(
             builder: (_) => ScanPage()));
@@ -33,7 +34,11 @@ class ScanPage extends StatefulWidget {
       showToast('Invalid QR code');
       return;
     }
-    showServerSettingsWithValue(config, gFFI.dialogManager, null);
+    if (onServerConfig != null) {
+      onServerConfig(config);
+    } else {
+      showServerSettingsWithValue(config, gFFI.dialogManager, null);
+    }
   }
 
   @override

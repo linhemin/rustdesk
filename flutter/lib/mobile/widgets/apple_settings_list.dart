@@ -5,9 +5,18 @@ import 'package:settings_ui/settings_ui.dart';
 
 /// Unified inset-grouped settings list shared across iOS and Android.
 class AppleSettingsList extends StatelessWidget {
-  const AppleSettingsList({super.key, required this.sections});
+  const AppleSettingsList({
+    super.key,
+    required this.sections,
+    this.header,
+    this.leading = const [],
+    this.searchQuery = '',
+  });
 
   final List<AbstractSettingsSection> sections;
+  final Widget? header;
+  final List<Widget> leading;
+  final String searchQuery;
 
   @override
   Widget build(BuildContext context) {
@@ -15,10 +24,14 @@ class AppleSettingsList extends StatelessWidget {
     final isIOS = theme.platform == TargetPlatform.iOS;
     final gutter = MediaQuery.sizeOf(context).width < 360 ? 12.0 : 16.0;
     return ListView(
-      padding: EdgeInsetsDirectional.fromSTEB(
-          gutter, 8, gutter, MediaQuery.paddingOf(context).bottom + 28),
+      padding: EdgeInsetsDirectional.fromSTEB(gutter, 8, gutter,
+          MediaQuery.paddingOf(context).bottom + (isIOS ? 112 : 28)),
       children: [
-        for (final section in sections)
+        for (final section in [
+          if (header != null) CustomSettingsSection(child: header!),
+          for (final child in leading) CustomSettingsSection(child: child),
+          ..._matchingSections(sections, searchQuery),
+        ])
           Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 640),
@@ -90,6 +103,210 @@ class AppleSettingsList extends StatelessWidget {
   }
 }
 
+Iterable<AbstractSettingsSection> _matchingSections(
+    List<AbstractSettingsSection> sections, String query) sync* {
+  query = query.trim().toLowerCase();
+  for (final section in sections) {
+    if (query.isEmpty) {
+      yield section;
+    } else if (section is SettingsSection) {
+      final groupMatches = _settingsText(section.title).contains(query);
+      final tiles = section.tiles
+          .where((tile) =>
+              groupMatches ||
+              tile is SettingsTile &&
+                  [tile.title, tile.value, tile.description]
+                      .any((label) => _settingsText(label).contains(query)))
+          .toList();
+      if (tiles.isNotEmpty) {
+        yield SettingsSection(title: section.title, tiles: tiles);
+      }
+    }
+  }
+}
+
+String _settingsText(Widget? widget) {
+  if (widget is Text) {
+    return (widget.data ?? widget.textSpan?.toPlainText() ?? '').toLowerCase();
+  }
+  if (widget is Flex) return widget.children.map(_settingsText).join(' ');
+  if (widget is Padding) return _settingsText(widget.child);
+  return '';
+}
+
+class AppleSettingsHeader extends StatelessWidget {
+  const AppleSettingsHeader(
+      {super.key,
+      required this.title,
+      required this.searchHint,
+      required this.controller,
+      required this.onSearch,
+      this.scan});
+
+  final String title;
+  final String searchHint;
+  final TextEditingController controller;
+  final ValueChanged<String> onSearch;
+  final Widget? scan;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 24),
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.6))),
+            if (scan != null)
+              Material(
+                  color: Theme.of(context).cardColor,
+                  shape: const CircleBorder(),
+                  child: scan!),
+          ]),
+          const SizedBox(height: 10),
+          TextField(
+            controller: controller,
+            onChanged: onSearch,
+            style: const TextStyle(fontSize: 14.5),
+            decoration: InputDecoration(
+              hintText: searchHint,
+              prefixIcon: const Icon(Icons.search, size: 17),
+              prefixIconConstraints: const BoxConstraints(minWidth: 34),
+              isDense: true,
+              filled: true,
+              fillColor: WorkspaceStyle.elevatedSurface(context),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(11),
+                  borderSide: BorderSide.none),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(11),
+                  borderSide: BorderSide.none),
+            ),
+          ),
+        ]),
+      );
+}
+
+class AppleSettingsAccountCard extends StatelessWidget {
+  const AppleSettingsAccountCard(
+      {super.key,
+      required this.title,
+      required this.subtitle,
+      required this.avatar,
+      required this.onTap});
+
+  final String title;
+  final String subtitle;
+  final Widget avatar;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 24),
+        child: Material(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(14),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+              onTap: onTap,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(children: [
+                  Container(
+                      width: 54,
+                      height: 54,
+                      clipBehavior: Clip.antiAlias,
+                      decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                              colors: [Color(0xff0a84ff), Color(0xff5e5ce6)])),
+                      alignment: Alignment.center,
+                      child: avatar),
+                  const SizedBox(width: 12),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                        Text(title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 17, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 4),
+                        Text(subtitle,
+                            style: TextStyle(
+                                fontSize: 12.5,
+                                color: WorkspaceStyle.tertiaryInk(context))),
+                      ])),
+                  const SizedBox(width: 8),
+                  Icon(Icons.chevron_right_rounded,
+                      size: 20, color: WorkspaceStyle.tertiaryInk(context)),
+                ]),
+              )),
+        ),
+      );
+}
+
+class AppleSettingsField extends StatelessWidget {
+  const AppleSettingsField(
+      {super.key,
+      required this.label,
+      required this.controller,
+      this.error,
+      this.enabled = true});
+
+  final String label;
+  final TextEditingController controller;
+  final String? error;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(children: [
+          SizedBox(
+              width: 96,
+              child: Text(label, style: const TextStyle(fontSize: 14.5))),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Semantics(
+                  label: label,
+                  child: TextField(
+                    controller: controller,
+                    enabled: enabled,
+                    style: const TextStyle(
+                        fontSize: 14.5, fontWeight: FontWeight.w400),
+                    keyboardType: TextInputType.visiblePassword,
+                    textCapitalization: TextCapitalization.none,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    smartQuotesType: SmartQuotesType.disabled,
+                    enableIMEPersonalizedLearning: false,
+                    spellCheckConfiguration:
+                        const SpellCheckConfiguration.disabled(),
+                    decoration: InputDecoration(
+                      errorText: error?.isEmpty == true ? null : error,
+                      isDense: true,
+                      filled: false,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      disabledBorder: InputBorder.none,
+                    ),
+                  ))),
+        ]),
+      );
+}
+
 Color _tileTintForLeading(Widget leading, Color fallback) {
   if (leading is Icon) {
     final code = leading.icon?.codePoint;
@@ -100,7 +317,8 @@ Color _tileTintForLeading(Widget leading, Color fallback) {
         code == Icons.verified_user_outlined.codePoint ||
         code == Icons.power_settings_new.codePoint ||
         code == Icons.battery_saver.codePoint ||
-        code == Icons.phonelink_lock.codePoint) {
+        code == Icons.phonelink_lock.codePoint ||
+        code == Icons.public.codePoint) {
       return WorkspaceStyle.green;
     }
     if (code == Icons.language.codePoint ||
@@ -119,6 +337,7 @@ Color _tileTintForLeading(Widget leading, Color fallback) {
         code == Icons.palette_outlined.codePoint ||
         code == Icons.person.codePoint ||
         code == Icons.person_outline.codePoint ||
+        code == Icons.nightlight_round.codePoint ||
         code == Icons.account_circle.codePoint) {
       return WorkspaceStyle.indigo;
     }
@@ -204,8 +423,12 @@ class _SettingsRow extends StatelessWidget {
                   children: [
                     DefaultTextStyle(
                       style: theme.textTheme.bodyLarge!.copyWith(
+                        fontSize:
+                            theme.platform == TargetPlatform.iOS ? 14.5 : null,
                         color: titleColor,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: theme.platform == TargetPlatform.iOS
+                            ? FontWeight.w400
+                            : FontWeight.w500,
                       ),
                       child: tile.title,
                     ),
