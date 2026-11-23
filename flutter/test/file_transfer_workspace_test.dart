@@ -26,11 +26,15 @@ void main() {
                     onTap: () => editing = true,
                     child: FileTransferBreadcrumbs(
                         parts: parts, onSelected: (path) => opened = path)))));
-    await tester.pumpWidget(workspace(320));
+    await tester.pumpWidget(workspace(400));
     expect(find.text('/'), findsOneWidget);
     expect(find.text('q4'), findsOneWidget);
+    expect(find.text('projects'), findsOneWidget);
+    expect(find.text('2026'), findsOneWidget);
     expect(find.text('ft_demo_local'), findsNothing);
     expect(tester.takeException(), isNull);
+    await tester.tap(find.text('projects'));
+    expect(opened, ['/', 'Users', 'devin', 'ft_demo_local', 'projects']);
     await tester.tap(find.byIcon(Icons.more_horiz));
     await tester.pumpAndSettle();
     await tester.tap(find.text('ft_demo_local'));

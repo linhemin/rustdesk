@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:rustdesk_ui/rustdesk_ui.dart';
 
-/// Collapses ancestors into a menu rather than clipping part of a path label.
+/// Keeps nearest ancestors visible and makes hidden ancestors navigable.
 class FileTransferBreadcrumbs extends StatelessWidget {
   const FileTransferBreadcrumbs(
       {super.key, required this.parts, required this.onSelected});
@@ -37,30 +37,45 @@ class FileTransferBreadcrumbs extends StatelessWidget {
                     maxLines: 1, overflow: TextOverflow.ellipsis))));
     return LayoutBuilder(builder: (context, bounds) {
       final painter = TextPainter(
-          text: TextSpan(text: parts.first, style: style),
           textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context))
-        ..layout();
-      final rootWidth = painter.width + buttonInset * 4;
-      double width = rootWidth +
-          (parts.length - 1) * (chevronSize + buttonInset * 4) +
-          buttonInset * 2;
-      for (final part in parts.skip(1)) {
+          textScaler: MediaQuery.textScalerOf(context));
+      final widths = <double>[];
+      for (final part in parts) {
         painter.text = TextSpan(text: part, style: style);
         painter.layout();
-        width += painter.width;
+        widths.add(painter.width + buttonInset * 4);
       }
       painter.dispose();
+      final width =
+          widths.fold<double>(buttonInset * 2, (sum, value) => sum + value) +
+              (parts.length - 1) * chevronSize;
       final compact = bounds.maxWidth < menuWidth + minLeafWidth;
       final shortRoot = (parts.first == '/' ||
               (parts.first.length <= 3 && parts.first.contains(':'))) &&
           bounds.maxWidth >=
-              rootWidth + menuWidth + chevronSize * 2 + minLeafWidth;
+              widths.first + menuWidth + chevronSize * 2 + minLeafWidth;
       final hiddenStart = shortRoot ? 1 : 0;
       final collapse =
           width > bounds.maxWidth && parts.length - hiddenStart > 1;
+      var tailStart = parts.length - 1;
+      if (collapse) {
+        var usedWidth = widths.last +
+            menuWidth +
+            chevronSize +
+            buttonInset * 2 +
+            (shortRoot ? widths.first + chevronSize : 0);
+        while (tailStart > hiddenStart + 1 &&
+            usedWidth + chevronSize + widths[tailStart - 1] <=
+                bounds.maxWidth) {
+          usedWidth += chevronSize + widths[--tailStart];
+        }
+      }
       final visible = collapse
-          ? [if (shortRoot) 0, -1, parts.length - 1]
+          ? [
+              if (shortRoot) 0,
+              -1,
+              for (var index = tailStart; index < parts.length; index++) index
+            ]
           : List.generate(parts.length, (index) => index);
       Widget menu() => PopupMenuButton<int>(
           tooltip: parts.join(' › '),
@@ -77,13 +92,17 @@ class FileTransferBreadcrumbs extends StatelessWidget {
               : null,
           onSelected: (index) => onSelected(parts.sublist(0, index + 1)),
           itemBuilder: (_) => [
-                for (var index = hiddenStart; index < parts.length - 1; index++)
+                for (var index = hiddenStart; index < tailStart; index++)
                   PopupMenuItem(
                       value: index,
+                      height: 36,
                       child: Tooltip(
                           message: parts[index],
                           child: Text(parts[index],
-                              maxLines: 1, overflow: TextOverflow.ellipsis))),
+                              style: const TextStyle(
+                                  fontSize: 12, fontWeight: FontWeight.w500),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis))),
               ]);
       if (compact && parts.length > 1) {
         return Align(
