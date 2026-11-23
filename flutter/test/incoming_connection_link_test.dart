@@ -10,17 +10,18 @@ void main() {
   });
 
   test('self-hosted invitation retains its server and public key', () {
-    for (final server in [
-      'hbbs.example.invalid:21116',
-      '[2001:db8::1]:21116'
-    ]) {
+    for (final server in {
+      'hbbs.example.invalid:21116': 'hbbs.example.invalid:21116',
+      '[2001:db8::1]:21116': '[2001:db8::1]:21116',
+      '2001:db8::1': '[2001:db8::1]',
+    }.entries) {
       final uri = Uri.parse(incomingConnectionLink(
         uriPrefix: 'customdesk://',
         id: 'MyDesk_1',
-        server: server,
+        server: server.key,
         key: 'a+public/key=',
       ));
-      expect(uri.authority, 'MyDesk_1@$server');
+      expect(uri.authority, 'MyDesk_1@${server.value}');
       expect(uri.queryParameters, {'key': 'a+public/key='});
     }
   });
