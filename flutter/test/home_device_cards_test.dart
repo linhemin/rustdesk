@@ -21,7 +21,8 @@ void main() {
           child: Scaffold(
             body: Padding(
               padding: const EdgeInsets.all(16),
-              child: GestureDetector(
+              child: SingleChildScrollView(
+                  child: GestureDetector(
                 onLongPress: () => selections++,
                 child: DeviceCard(
                   name: 'MacBook Pro M4 · A very long workspace name',
@@ -42,7 +43,7 @@ void main() {
                         icon: const Icon(Icons.more_horiz)),
                   ],
                 ),
-              ),
+              )),
             ),
           ),
         ),

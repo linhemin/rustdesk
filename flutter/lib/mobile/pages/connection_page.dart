@@ -177,7 +177,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Widget _buildRemoteIDTextField() {
     final theme = Theme.of(context);
     final w = SizedBox(
-      height: isIOS ? 60 : 80,
+      height: isIOS ? 58 : 80,
       child: Padding(
         padding: EdgeInsets.symmetric(vertical: isIOS ? 4 : 8, horizontal: 2),
         child: Ink(
@@ -270,7 +270,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         ),
                         decoration: InputDecoration(
                           labelText: isIOS ? null : translate('Remote ID'),
-                          hintText: isIOS ? translate('Enter Remote ID') : null,
+                          hintText: isIOS
+                              ? translate('Enter remote ID or device name…')
+                              : null,
                           filled: isIOS ? false : null,
                           enabledBorder: isIOS ? InputBorder.none : null,
                           focusedBorder: isIOS ? InputBorder.none : null,

@@ -853,5 +853,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Direct connection required by server", "サーバーが直接接続を要求しています"),
         ("Direct connection unavailable in direct-only mode", "直接接続のみのモードで相手の端末に直接接続できません"),
         ("Direct-only mode conflicts with forced relay", "直接接続のみの設定とリレーを強制する設定が競合しています"),
+        ("Recent", ""),
+        ("LAN", ""),
+        ("Enter remote ID or device name…", ""),
+        ("Scan QR code", ""),
     ].iter().cloned().collect();
 }

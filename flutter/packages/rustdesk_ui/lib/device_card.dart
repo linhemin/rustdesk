@@ -102,7 +102,7 @@ class DeviceCard extends StatelessWidget {
           .where((value) => value.isNotEmpty)
           .join(' · '),
       child: Container(
-        padding: EdgeInsets.all(grid ? 14 : 10),
+        padding: EdgeInsets.all(grid ? 14 : 12),
         decoration: BoxDecoration(
           color:
               selected ? WorkspaceStyle.accentSoft(context) : theme.cardColor,

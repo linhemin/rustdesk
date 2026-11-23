@@ -13,6 +13,18 @@ import '../../models/platform_model.dart';
 import '../widgets/dialog.dart';
 
 class ScanPage extends StatefulWidget {
+  static Future<void> openConnection(BuildContext context) async {
+    final result = await Navigator.of(context).push(
+        MaterialPageRoute<({String code, bool gallery})>(
+            builder: (_) => ScanPage()));
+    if (result == null || !context.mounted) return;
+    if (result.code.startsWith(bind.mainUriPrefixSync())) {
+      handleUriLink(uriString: result.code);
+    } else {
+      showToast('Invalid QR code');
+    }
+  }
+
   static Future<void> open(BuildContext context) async {
     final result = await Navigator.of(context).push(
         MaterialPageRoute<({String code, bool gallery})>(
