@@ -72,7 +72,7 @@ struct AwesunSessionView: View {
                 Image(systemName: model.displayLocked ? "lock.fill" : "lock.open")
                     .resizable().scaledToFit()
             }
-            control("keyboard", label: "键盘") { model.systemKeyboard() }
+            control("keyboard", label: "键盘") { model.showSystemKeyboardFromDeck() }
                 .position(AwesunControlLayout.rail(0, in: size))
             control("gamecontroller", label: "游戏键盘") { model.sheet = .gamepad }
                 .position(AwesunControlLayout.rail(1, in: size))
