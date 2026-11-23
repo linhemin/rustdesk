@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:flutter_hbb/models/file_model.dart';
 import 'package:get/get.dart';
-import 'package:toggle_switch/toggle_switch.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
@@ -321,28 +321,10 @@ class _FileManagerPageState extends State<FileManagerPage> {
                 onPressed: () => clientClose(gFFI.sessionId, gFFI)),
           ]),
           centerTitle: true,
-          title: ToggleSwitch(
-            initialLabelIndex: showLocal ? 0 : 1,
-            activeBgColor: [MyTheme.accent],
-            activeFgColor: Colors.white,
-            cornerRadius: 12,
-            inactiveBgColor: Theme.of(context).brightness == Brightness.light
-                ? MyTheme.grayBg
-                : null,
-            inactiveFgColor: Theme.of(context).brightness == Brightness.light
-                ? Colors.black54
-                : null,
-            totalSwitches: 2,
-            minWidth: 100,
-            fontSize: 15,
-            iconSize: 18,
-            labels: [translate("Local"), translate("Remote")],
-            icons: [isIOS ? Icons.phone_iphone : Icons.phone_android_sharp, Icons.desktop_windows_outlined],
-            onToggle: (index) {
-              final current = showLocal ? 0 : 1;
-              if (index != current) {
-                setState(() => showLocal = !showLocal);
-              }
+          title: _LocalRemoteSegment(
+            showLocal: showLocal,
+            onChanged: (local) {
+              if (local != showLocal) setState(() => showLocal = local);
             },
           ),
           actions: [
@@ -765,119 +747,197 @@ class _FileManagerViewState extends State<FileManagerView> {
               return widget.selectMode.value != SelectMode.none &&
                   widget.selectMode.value.eq(controller.selectedItems.isLocal);
             }();
-            return Card(
-              child: ListTile(
-                leading: entries[index].isDrive
-                    ? Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: Image(
-                            image: iconHardDrive,
-                            fit: BoxFit.scaleDown,
-                            color: Theme.of(context)
-                                .iconTheme
-                                .color
-                                ?.withOpacity(0.7)))
-                    : Icon(
-                        entries[index].isFile
-                            ? Icons.feed_outlined
-                            : Icons.folder,
-                        size: 40),
-                title: Text(entries[index].name),
-                selected: selected,
-                subtitle: entries[index].isDrive
-                    ? null
-                    : Text(
-                        "${entries[index].lastModified().toString().replaceAll(".000", "")}   $sizeStr",
-                        style: TextStyle(fontSize: 12, color: MyTheme.darkGray),
-                      ),
-                trailing: entries[index].isDrive
-                    ? null
-                    : showCheckBox
-                        ? Checkbox(
-                            value: selected,
-                            onChanged: (v) {
-                              if (v == null) return;
-                              if (v && !selected) {
-                                _selectedItems.add(entries[index]);
-                              } else if (!v && selected) {
-                                _selectedItems.remove(entries[index]);
-                              }
-                              setState(() {});
-                            })
-                        : PopupMenuButton<String>(
-                            tooltip: "",
-                            icon: Icon(Icons.more_vert),
-                            itemBuilder: (context) {
-                              return [
-                                PopupMenuItem(
-                                  child: Text(translate("Delete")),
-                                  value: "delete",
-                                ),
-                                PopupMenuItem(
-                                  child: Text(translate("Multi Select")),
-                                  value: "multi_select",
-                                ),
-                                PopupMenuItem(
-                                  child: Text(translate("Properties")),
-                                  value: "properties",
-                                  enabled: false,
-                                ),
-                                if (!entries[index].isDrive &&
-                                    versionCmp(gFFI.ffiModel.pi.version,
-                                            "1.3.0") >=
-                                        0)
-                                  PopupMenuItem(
-                                    child: Text(translate("Rename")),
-                                    value: "rename",
-                                  )
-                              ];
-                            },
-                            onSelected: (v) {
-                              if (v == "delete") {
-                                final items = SelectedItems(isLocal: isLocal);
-                                items.add(entries[index]);
-                                controller.removeAction(items);
-                              } else if (v == "multi_select") {
-                                _selectedItems.clear();
-                                widget.selectMode.toggle(isLocal);
+            final theme = Theme.of(context);
+            final primary = theme.colorScheme.primary;
+            final entry = entries[index];
+            final (badgeIcon, badgeColor) = _fileEntryVisual(entry);
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3.5),
+              child: Material(
+                color: selected ? primary.withOpacity(0.11) : theme.cardColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  side: BorderSide(
+                    color: selected
+                        ? primary.withOpacity(0.45)
+                        : theme.dividerColor,
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: ListTile(
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  leading: entry.isDrive
+                      ? Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: primary.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(11),
+                          ),
+                          child: Icon(Icons.storage_rounded,
+                              size: 20, color: primary),
+                        )
+                      : Container(
+                          width: 40,
+                          height: 40,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: badgeColor.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(11),
+                          ),
+                          child: Icon(badgeIcon, size: 20, color: badgeColor),
+                        ),
+                  title: Text(
+                    entry.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  selected: selected,
+                  subtitle: entry.isDrive
+                      ? null
+                      : Text(
+                          "${entry.lastModified().toString().replaceAll(".000", "")}${sizeStr.isEmpty ? '' : '  ·  $sizeStr'}",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: theme.hintColor,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                  trailing: entry.isDrive
+                      ? Icon(Icons.chevron_right_rounded,
+                          size: 18, color: theme.hintColor)
+                      : showCheckBox
+                          ? Checkbox(
+                              shape: const CircleBorder(),
+                              value: selected,
+                              onChanged: (v) {
+                                if (v == null) return;
+                                if (v && !selected) {
+                                  _selectedItems.add(entry);
+                                } else if (!v && selected) {
+                                  _selectedItems.remove(entry);
+                                }
                                 setState(() {});
-                              } else if (v == "rename") {
-                                controller.renameAction(
-                                    entries[index], isLocal);
-                              }
-                            }),
-                onTap: () {
-                  if (showCheckBox) {
-                    if (selected) {
-                      _selectedItems.remove(entries[index]);
-                    } else {
-                      _selectedItems.add(entries[index]);
+                              })
+                          : PopupMenuButton<String>(
+                              tooltip: "",
+                              icon: Icon(Icons.more_horiz_rounded,
+                                  color: theme.hintColor),
+                              itemBuilder: (context) {
+                                return [
+                                  PopupMenuItem(
+                                    child: Text(translate("Delete")),
+                                    value: "delete",
+                                  ),
+                                  PopupMenuItem(
+                                    child: Text(translate("Multi Select")),
+                                    value: "multi_select",
+                                  ),
+                                  PopupMenuItem(
+                                    child: Text(translate("Properties")),
+                                    value: "properties",
+                                    enabled: false,
+                                  ),
+                                  if (!entry.isDrive &&
+                                      versionCmp(gFFI.ffiModel.pi.version,
+                                              "1.3.0") >=
+                                          0)
+                                    PopupMenuItem(
+                                      child: Text(translate("Rename")),
+                                      value: "rename",
+                                    )
+                                ];
+                              },
+                              onSelected: (v) {
+                                if (v == "delete") {
+                                  final items = SelectedItems(isLocal: isLocal);
+                                  items.add(entry);
+                                  controller.removeAction(items);
+                                } else if (v == "multi_select") {
+                                  _selectedItems.clear();
+                                  widget.selectMode.toggle(isLocal);
+                                  setState(() {});
+                                } else if (v == "rename") {
+                                  controller.renameAction(entry, isLocal);
+                                }
+                              }),
+                  onTap: () {
+                    if (showCheckBox) {
+                      if (selected) {
+                        _selectedItems.remove(entry);
+                      } else {
+                        _selectedItems.add(entry);
+                      }
+                      setState(() {});
+                      return;
                     }
-                    setState(() {});
-                    return;
-                  }
-                  if (entries[index].isDirectory || entries[index].isDrive) {
-                    controller.openDirectory(entries[index].path);
-                  } else {
-                    // Perform file-related tasks.
-                  }
-                },
-                onLongPress: entries[index].isDrive
-                    ? null
-                    : () {
-                        _selectedItems.clear();
-                        widget.selectMode.toggle(isLocal);
-                        if (widget.selectMode.value != SelectMode.none) {
-                          _selectedItems.add(entries[index]);
-                        }
-                        setState(() {});
-                      },
+                    if (entry.isDirectory || entry.isDrive) {
+                      controller.openDirectory(entry.path);
+                    }
+                  },
+                  onLongPress: entry.isDrive
+                      ? null
+                      : () {
+                          _selectedItems.clear();
+                          widget.selectMode.toggle(isLocal);
+                          if (widget.selectMode.value != SelectMode.none) {
+                            _selectedItems.add(entry);
+                          }
+                          setState(() {});
+                        },
+                ),
               ),
             );
           },
         );
       }))
     ]);
+  }
+
+  (IconData, Color) _fileEntryVisual(Entry entry) {
+    if (entry.isDirectory) return (Icons.folder_rounded, WorkspaceStyle.amber);
+    final lower = entry.name.toLowerCase();
+    if (lower.endsWith('.mp4') ||
+        lower.endsWith('.mov') ||
+        lower.endsWith('.mkv') ||
+        lower.endsWith('.avi')) {
+      return (Icons.movie_outlined, WorkspaceStyle.purple);
+    }
+    if (lower.endsWith('.zip') ||
+        lower.endsWith('.tar') ||
+        lower.endsWith('.gz') ||
+        lower.endsWith('.7z') ||
+        lower.endsWith('.rar')) {
+      return (Icons.inventory_2_outlined, WorkspaceStyle.green);
+    }
+    if (lower.endsWith('.json') ||
+        lower.endsWith('.yaml') ||
+        lower.endsWith('.yml') ||
+        lower.endsWith('.dart') ||
+        lower.endsWith('.rs') ||
+        lower.endsWith('.ts') ||
+        lower.endsWith('.js') ||
+        lower.endsWith('.py')) {
+      return (Icons.code_rounded, WorkspaceStyle.blue);
+    }
+    if (lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp')) {
+      return (Icons.image_outlined, WorkspaceStyle.indigo);
+    }
+    if (lower.endsWith('.pdf')) {
+      return (Icons.description_outlined, WorkspaceStyle.red);
+    }
+    return (Icons.insert_drive_file_outlined, WorkspaceStyle.neutralTile);
   }
 
   void breadCrumbScrollToEnd() {
@@ -891,8 +951,17 @@ class _FileManagerViewState extends State<FileManagerView> {
     });
   }
 
-  Widget headTools() => Container(
-          child: Row(
+  Widget headTools() {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: WorkspaceStyle.elevatedSurface(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Row(
         children: [
           Expanded(child: Obx(() {
             final home = controller.options.value.home;
@@ -914,23 +983,26 @@ class _FileManagerViewState extends State<FileManagerView> {
                 }
                 controller.openDirectory(path);
               }),
-              divider: Icon(Icons.chevron_right),
+              divider: Icon(Icons.chevron_right_rounded,
+                  size: 16, color: theme.hintColor),
               overflow: ScrollableOverflow(controller: _breadCrumbScroller),
             );
           })),
           Row(
             children: [
               IconButton(
-                icon: Icon(Icons.arrow_back),
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.arrow_back_rounded, size: 18),
                 onPressed: controller.goBack,
               ),
               IconButton(
-                icon: Icon(Icons.arrow_upward),
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.arrow_upward_rounded, size: 18),
                 onPressed: controller.goToParentDirectory,
               ),
               PopupMenuButton<SortBy>(
                   tooltip: "",
-                  icon: Icon(Icons.sort),
+                  icon: const Icon(Icons.sort_rounded, size: 18),
                   itemBuilder: (context) {
                     return SortBy.values
                         .map((e) => PopupMenuItem(
@@ -940,8 +1012,6 @@ class _FileManagerViewState extends State<FileManagerView> {
                         .toList();
                   },
                   onSelected: (sortBy) {
-                    // If selecting the same sort option, flip the order
-                    // If selecting a different sort option, use ascending order
                     if (controller.sortBy.value == sortBy) {
                       ascending.value = !controller.sortAscending;
                     } else {
@@ -953,7 +1023,9 @@ class _FileManagerViewState extends State<FileManagerView> {
             ],
           )
         ],
-      ));
+      ),
+    );
+  }
 
   Widget listTail() => Obx(() => Container(
         height: 100,
@@ -1013,17 +1085,21 @@ class BottomSheetBody extends StatelessWidget {
 
   @override
   BottomSheet build(BuildContext context) {
+    final theme = Theme.of(context);
     return BottomSheet(
-      backgroundColor: Theme.of(context).cardColor,
+      backgroundColor: theme.cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+        side: BorderSide(color: theme.dividerColor),
+      ),
       builder: (context) => SafeArea(
           top: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+            padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
             child: LayoutBuilder(builder: (context, bounds) {
               final info = Row(children: [
                 IconTheme.merge(
-                    data: IconThemeData(
-                        color: Theme.of(context).colorScheme.primary),
+                    data: IconThemeData(color: theme.colorScheme.primary),
                     child: leading),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1031,9 +1107,12 @@ class BottomSheetBody extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                      Text(title,
-                          style: Theme.of(context).textTheme.titleMedium),
-                      Text(text, style: Theme.of(context).textTheme.bodySmall),
+                      Text(title, style: theme.textTheme.titleMedium),
+                      Text(text,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.hintColor,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          )),
                     ])),
               ]);
               final controls = Wrap(alignment: WrapAlignment.end, children: [
@@ -1056,8 +1135,75 @@ class BottomSheetBody extends StatelessWidget {
             }),
           )),
       onClosing: () {},
-      // backgroundColor: MyTheme.grayBg,
       enableDrag: false,
+    );
+  }
+}
+
+class _LocalRemoteSegment extends StatelessWidget {
+  const _LocalRemoteSegment({
+    required this.showLocal,
+    required this.onChanged,
+  });
+
+  final bool showLocal;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accent = theme.colorScheme.primary;
+    Widget item(bool local, String label, IconData icon) {
+      final active = showLocal == local;
+      return InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => onChanged(local),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: active ? accent : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon,
+                  size: 15,
+                  color: active ? Colors.white : theme.hintColor),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: active ? Colors.white : theme.hintColor,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        color: WorkspaceStyle.elevatedSurface(context),
+        borderRadius: BorderRadius.circular(13),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          item(true, translate('Local'),
+              isIOS ? Icons.phone_iphone_rounded : Icons.phone_android_rounded),
+          const SizedBox(width: 2),
+          item(false, translate('Remote'), Icons.desktop_windows_rounded),
+        ],
+      ),
     );
   }
 }
