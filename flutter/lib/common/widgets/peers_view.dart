@@ -239,7 +239,7 @@ class _PeersViewState extends State<_PeersView>
         const {TargetPlatform.iOS, TargetPlatform.macOS, TargetPlatform.windows}
             .contains(Theme.of(context).platform);
     final cardTextGrowth =
-        (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 28) * 4;
+        (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 28).toDouble() * 4;
     final body = ObxValue<RxList>((filters) {
       return FutureBuilder<List<Peer>>(
         builder: (context, snapshot) {
