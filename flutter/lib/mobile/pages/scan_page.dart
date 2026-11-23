@@ -59,11 +59,7 @@ class ScanPage extends StatefulWidget {
       showToast('Invalid QR code');
       return;
     }
-    if (onServerConfig != null) {
-      onServerConfig(config);
-    } else {
-      showServerSettingsWithValue(config, gFFI.dialogManager, null);
-    }
+    showServerSettingsWithValue(config, gFFI.dialogManager, null);
   }
 
   @override
