@@ -79,17 +79,17 @@ void main() {
     final viewport = tester.getRect(find.byType(Scaffold));
     expect(tester.getRect(card).right, lessThanOrEqualTo(viewport.right - 68));
     expect(
-        tester.getRect(card).bottom, lessThanOrEqualTo(viewport.bottom - 240));
+        tester.getRect(card).bottom, lessThanOrEqualTo(viewport.bottom - 224));
     await tester.drag(find.text('直接连接 · TCP'), const Offset(-40, -40));
     await tester.pump();
     expect(tester.getRect(card).right, lessThan(viewport.right - 68));
-    expect(tester.getRect(card).bottom, lessThan(viewport.bottom - 240));
+    expect(tester.getRect(card).bottom, lessThan(viewport.bottom - 224));
     await tester.binding.setSurfaceSize(const Size(760, 390));
     await tester.pump();
     final compact = tester.getRect(card);
-    await tester.drag(find.text('直接连接 · TCP'), const Offset(0, -60));
+    await tester.drag(find.text('直接连接 · TCP'), const Offset(-60, 0));
     await tester.pump();
-    expect(tester.getRect(card).top, lessThan(compact.top));
+    expect(tester.getRect(card).left, lessThan(compact.left));
     expect(tester.takeException(), isNull);
   });
 
@@ -119,6 +119,66 @@ void main() {
     await tester.pump();
     expect(opened, isTrue);
     expect(find.text('色度采样'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('landscape drops stay above game keys and short cards scroll',
+      (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var opened = false;
+    for (final height in [390.0, 360.0]) {
+      await tester.binding.setSurfaceSize(Size(760, height));
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: MobileSessionQualityMonitor(
+            key: ValueKey(height),
+            connection: 'Direct · TCP',
+            direct: true,
+            metrics: const [
+              ('Speed', '1 MB/s'),
+              ('FPS', '60'),
+              ('Delay', '9 ms'),
+              ('Bitrate', '8 Mb/s'),
+              ('Codec', 'AV1'),
+              ('Chroma', '4:2:0'),
+            ],
+            diagnostics: TextButton(
+                onPressed: () => opened = true,
+                child: const Text('UDP report')),
+          ),
+        ),
+      ));
+      await tester.drag(find.text('Direct · TCP'), const Offset(1000, 1000));
+      await tester.pump();
+      expect(tester.getRect(find.byType(BackdropFilter)).bottom,
+          lessThanOrEqualTo(height - 224));
+      final header = tester.getRect(find.text('Direct · TCP'));
+      await tester.drag(find.text('FPS'), const Offset(0, -200));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('UDP report'));
+      expect(opened, isTrue);
+      expect(tester.getRect(find.text('Direct · TCP')), header);
+      expect(tester.takeException(), isNull);
+      opened = false;
+    }
+  });
+
+  testWidgets('HUD hides when heading and a full action cannot clear game keys',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(760, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+          body: MobileSessionQualityMonitor(
+        connection: 'Direct · TCP',
+        direct: true,
+        metrics: [('FPS', '60')],
+      )),
+    ));
+    expect(find.byType(BackdropFilter), findsNothing);
+    await tester.binding.setSurfaceSize(const Size(760, 390));
+    await tester.pump();
+    expect(find.text('FPS'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
