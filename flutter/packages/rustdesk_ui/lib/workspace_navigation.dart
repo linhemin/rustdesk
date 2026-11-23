@@ -32,11 +32,15 @@ class WorkspaceNavigation extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, bounds) {
+        final theme = Theme.of(context);
+        final primary = theme.colorScheme.primary;
+        final inkDefault = theme.colorScheme.onSurface;
+        final muted = theme.hintColor;
         final wide = bounds.maxWidth >= 740;
-        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 174.0 : 188.0;
+        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 184.0 : 212.0;
         Widget item(
             String label, IconData icon, bool selected, VoidCallback action) {
-          final ink = selected ? Colors.white : const Color(0xffbbcbdf);
+          final ink = selected ? primary : muted;
           return Semantics(
               selected: selected,
               button: true,
@@ -45,88 +49,96 @@ class WorkspaceNavigation extends StatelessWidget {
                   message: wide ? '' : label,
                   child: Material(
                       color: selected
-                          ? const Color(0xff294975)
+                          ? primary.withOpacity(0.13)
                           : Colors.transparent,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                          borderRadius: BorderRadius.circular(10)),
                       child: InkWell(
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(10),
                           onTap: action,
                           child: ExcludeSemantics(
                               child: Padding(
                                   padding: EdgeInsets.symmetric(
-                                      horizontal: wide ? 12 : 0, vertical: 13),
+                                      horizontal: wide ? 12 : 0, vertical: 10),
                                   child: Row(
                                       mainAxisAlignment: wide
                                           ? MainAxisAlignment.start
                                           : MainAxisAlignment.center,
                                       children: [
-                                        Icon(icon, size: 21, color: ink),
+                                        Icon(icon, size: 19, color: ink),
                                         if (wide) ...[
-                                          const SizedBox(width: 12),
+                                          const SizedBox(width: 11),
                                           Expanded(
                                               child: Text(label,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
                                                   style: TextStyle(
-                                                      color: ink,
-                                                      fontSize: 14,
+                                                      color: selected
+                                                          ? primary
+                                                          : inkDefault,
+                                                      fontSize: 13.5,
                                                       fontWeight: selected
-                                                          ? FontWeight.w700
+                                                          ? FontWeight.w600
                                                           : FontWeight.w500))),
                                         ]
                                       ])))))));
         }
 
         return Row(children: [
-          SizedBox(
+          Container(
               width: railWidth,
-              child: ColoredBox(
-                  color: WorkspaceStyle.navy,
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Padding(
-                            padding: EdgeInsets.fromLTRB(
-                                wide ? 18 : 16, 22, wide ? 12 : 16, 24),
-                            child: Row(children: [
-                              SizedBox.square(dimension: 32, child: mark),
-                              if (wide) ...[
-                                const SizedBox(width: 9),
-                                Expanded(
-                                    child: Text(brand,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 19,
-                                            letterSpacing: -.6)))
-                              ]
-                            ])),
-                        Expanded(
-                            child: ListView(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 8),
-                                children: [
-                              for (var i = 0; i < destinations.length; i++)
-                                Padding(
-                                    padding: const EdgeInsets.only(bottom: 6),
-                                    child: item(
-                                        destinations[i].label,
-                                        destinations[i].icon,
-                                        i == current,
-                                        () => onSelect(i))),
-                            ])),
-                        if (onSettings != null && settings != null) ...[
-                          const Divider(
-                              color: Color(0xff304867),
-                              indent: 12,
-                              endIndent: 12),
-                          Padding(
-                              padding: const EdgeInsets.fromLTRB(8, 2, 8, 10),
-                              child: item(settings!, Icons.tune_rounded,
-                                  current == destinations.length, onSettings!)),
-                        ],
-                      ]))),
+              decoration: BoxDecoration(
+                color: WorkspaceStyle.sidebarColor(context),
+                border: BorderDirectional(
+                    end: BorderSide(color: theme.dividerColor)),
+              ),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                        padding: EdgeInsets.fromLTRB(
+                            wide ? 16 : 16, 18, wide ? 12 : 16, 18),
+                        child: Row(children: [
+                          SizedBox.square(dimension: 28, child: mark),
+                          if (wide) ...[
+                            const SizedBox(width: 9),
+                            Expanded(
+                                child: Text(brand,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        color: inkDefault,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 16,
+                                        letterSpacing: -.4)))
+                          ]
+                        ])),
+                    Expanded(
+                        child: ListView(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            children: [
+                          for (var i = 0; i < destinations.length; i++)
+                            Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: item(
+                                    destinations[i].label,
+                                    destinations[i].icon,
+                                    i == current,
+                                    () => onSelect(i))),
+                        ])),
+                    if (onSettings != null && settings != null) ...[
+                      Divider(
+                          color: theme.dividerColor,
+                          height: 1,
+                          indent: 12,
+                          endIndent: 12),
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+                          child: item(settings!, Icons.tune_rounded,
+                              current == destinations.length, onSettings!)),
+                    ],
+                  ])),
           Expanded(child: child),
         ]);
       });
@@ -154,25 +166,32 @@ class SessionModePicker extends StatelessWidget {
           selected: active,
           button: true,
           child: InkWell(
-            borderRadius: BorderRadius.circular(7),
+            borderRadius: BorderRadius.circular(8),
             onTap: () => onSelect(index),
             child: AnimatedContainer(
-              duration: Duration(milliseconds: reducedMotion ? 0 : 150),
+              duration: Duration(milliseconds: reducedMotion ? 0 : 140),
               decoration: BoxDecoration(
-                  border: Border(
-                      bottom: BorderSide(
-                          width: 2.5,
-                          color: active ? color : Colors.transparent))),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                color: active ? theme.cardColor : Colors.transparent,
+                borderRadius: BorderRadius.circular(8),
+                border: active
+                    ? Border.all(color: theme.dividerColor)
+                    : Border.all(color: Colors.transparent),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(choices[index].icon, size: 18, color: color),
-                const SizedBox(width: 7),
+                Icon(choices[index].icon, size: 16, color: color),
+                const SizedBox(width: 6),
                 Flexible(
                     child: Text(choices[index].label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodyMedium?.copyWith(
+                            fontSize: 13,
                             fontWeight:
-                                active ? FontWeight.w700 : FontWeight.w500,
-                            color: color))),
+                                active ? FontWeight.w600 : FontWeight.w500,
+                            color: active
+                                ? theme.colorScheme.onSurface
+                                : theme.hintColor))),
               ]),
             ),
           ),
@@ -181,11 +200,13 @@ class SessionModePicker extends StatelessWidget {
 
       return Material(
           color: Colors.transparent,
-          child: DecoratedBox(
+          child: Container(
+              padding: const EdgeInsets.all(3),
               decoration: BoxDecoration(
-                  border:
-                      Border(bottom: BorderSide(color: theme.dividerColor))),
-              child: Wrap(spacing: bounds.maxWidth >= 640 ? 16 : 3, children: [
+                  color: WorkspaceStyle.elevatedSurface(context),
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(color: theme.dividerColor)),
+              child: Wrap(spacing: bounds.maxWidth >= 640 ? 4 : 2, children: [
                 for (var i = 0; i < choices.length; i++) choice(i)
               ])));
     });

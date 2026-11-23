@@ -6,22 +6,22 @@ import 'rustdesk_ui.dart';
 class DesktopSessionStyle {
   DesktopSessionStyle._();
 
-  static const buttonSize = 36.0;
-  static const buttonRadius = 10.0;
-  static const toolbarRadius = 16.0;
-  static const inactive = Color(0xFF25344B);
-  static const inactiveHover = Color(0xFF3B4D69);
+  static const buttonSize = 34.0;
+  static const buttonRadius = 9.0;
+  static const toolbarRadius = 14.0;
+  static const inactive = Color(0xFF1C212C);
+  static const inactiveHover = Color(0xFF2B3445);
 
   static MenuStyle menuStyle(BuildContext context) => MenuStyle(
         backgroundColor: WidgetStatePropertyAll(Theme.of(context).cardColor),
         surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-        elevation: const WidgetStatePropertyAll(8),
-        shadowColor: const WidgetStatePropertyAll(Color(0x240B1426)),
+        elevation: const WidgetStatePropertyAll(12),
+        shadowColor: const WidgetStatePropertyAll(Color(0x3805070B)),
         side: WidgetStatePropertyAll(
             BorderSide(color: Theme.of(context).dividerColor)),
         shape: WidgetStatePropertyAll(
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
-        padding: const WidgetStatePropertyAll(EdgeInsets.all(8)),
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+        padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
       );
 }
 
@@ -31,9 +31,9 @@ class SessionToolbarSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: Theme.of(context).cardColor,
-        elevation: 6,
-        shadowColor: const Color(0x240B1426),
+        color: Theme.of(context).cardColor.withOpacity(0.94),
+        elevation: 10,
+        shadowColor: const Color(0x3805070B),
         shape: RoundedRectangleBorder(
             borderRadius:
                 BorderRadius.circular(DesktopSessionStyle.toolbarRadius),
@@ -49,15 +49,15 @@ class SessionOverlayFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
         decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0x665B6B85)),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Theme.of(context).dividerColor),
             boxShadow: const [
               BoxShadow(
-                  color: Color(0x26000000),
-                  blurRadius: 16,
-                  offset: Offset(0, 4))
+                  color: Color(0x36000000),
+                  blurRadius: 20,
+                  offset: Offset(0, 6))
             ]),
-        child: ClipRRect(borderRadius: BorderRadius.circular(11), child: child),
+        child: ClipRRect(borderRadius: BorderRadius.circular(13), child: child),
       );
 }
 
@@ -69,12 +69,12 @@ class DesktopOverlaySurface extends StatelessWidget {
   Widget build(BuildContext context) => DecoratedBox(
         decoration: const BoxDecoration(boxShadow: [
           BoxShadow(
-              color: Color(0x260B1426), blurRadius: 24, offset: Offset(0, 8))
+              color: Color(0x3605070B), blurRadius: 24, offset: Offset(0, 8))
         ]),
         child: Material(
           color: Theme.of(context).cardColor,
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(14),
               side: BorderSide(color: Theme.of(context).dividerColor)),
           clipBehavior: Clip.antiAlias,
           child: child,
@@ -99,7 +99,7 @@ class TransferPane extends StatelessWidget {
         padding: padding,
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(color: Theme.of(context).dividerColor),
         ),
         child: child,
