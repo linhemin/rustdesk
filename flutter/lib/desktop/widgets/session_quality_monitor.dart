@@ -2,7 +2,9 @@ import 'package:flutter_hbb/common/widgets/peer_udp_report.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/model.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:rustdesk_ui/desktop.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 class DesktopQualityMonitor extends StatelessWidget {
   const DesktopQualityMonitor(this.model, {super.key});
@@ -33,13 +35,25 @@ class DesktopQualityMonitor extends StatelessWidget {
             fontFeatures: const [FontFeature.tabularFigures()],
           );
 
-          Widget reading(String label, String value) => Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: caption),
-                  Text(value, style: number),
-                ],
+          Widget reading(String label, String value) => Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: WorkspaceStyle.elevatedSurface(context),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: caption),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(value, style: number),
+                    ),
+                  ],
+                ),
               );
           Widget detail(String label, String value) => Padding(
                 padding: const EdgeInsets.only(top: 3),
@@ -61,37 +75,66 @@ class DesktopQualityMonitor extends StatelessWidget {
               );
           return SessionOverlayFrame(
             child: Container(
-              width: 236,
-              color: theme.cardColor.withOpacity(0.95),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Column(
+              width: 272,
+              color: theme.cardColor.withOpacity(0.88),
+              padding: const EdgeInsets.all(14),
+              child: SingleChildScrollView(
+                  child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(children: [
-                    Icon(Icons.south_west_rounded,
-                        size: 16, color: colors.primary),
+                    Icon(Icons.drag_indicator_rounded,
+                        size: 14, color: theme.hintColor),
+                    const SizedBox(width: 6),
+                    Expanded(
+                        child: Text(translate('Connection quality'),
+                            style: theme.textTheme.labelLarge)),
+                    IconButton(
+                      tooltip: translate('Close'),
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                      onPressed: () async {
+                        final sessionId = model.parent.target?.sessionId;
+                        if (sessionId == null) return;
+                        await bind.sessionToggleOption(
+                            sessionId: sessionId,
+                            value: 'show-quality-monitor');
+                        await model.checkShowQualityMonitor(sessionId);
+                      },
+                    ),
+                  ]),
+                  const Divider(height: 12),
+                  Row(children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: model.directConnection == null
+                            ? theme.hintColor
+                            : model.directConnection == true
+                                ? WorkspaceStyle.success(context)
+                                : colors.primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
                     const SizedBox(width: 6),
                     Expanded(child: Text(translate('Speed'), style: caption)),
                     Expanded(
                         flex: 2,
                         child: Text(data.speed ?? '—',
                             textAlign: TextAlign.end, style: number)),
-                    const SizedBox(width: 4),
-                    Icon(Icons.drag_indicator_rounded,
-                        size: 14, color: theme.hintColor.withOpacity(0.7)),
                   ]),
                   const Divider(height: 14),
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Expanded(child: reading(translate('FPS'), data.fps ?? '—')),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 6),
                     Expanded(child: reading(translate('Delay'), delay)),
+                    const SizedBox(width: 6),
+                    Expanded(child: reading(translate('Bitrate'), bitrate)),
                   ]),
                   const Divider(height: 14),
-                  detail(translate('Bitrate'), bitrate),
                   detail(translate('Codec'), data.codecFormat ?? '—'),
                   detail(translate('Chroma'), data.chroma ?? '—'),
-                  if (model.udpReports.isNotEmpty) PeerUdpButton(model),
                   if (model.directConnection case final direct?) ...[
                     const Divider(height: 12),
                     detail(
@@ -99,8 +142,18 @@ class DesktopQualityMonitor extends StatelessWidget {
                             direct ? 'Direct Connection' : 'Relay Connection'),
                         model.activeTransport ?? '—'),
                   ],
+                  const SizedBox(height: 8),
+                  SizedBox(
+                      width: double.infinity,
+                      child: TextButton.icon(
+                        onPressed: model.udpReports.isEmpty
+                            ? null
+                            : () => showPeerUdpReport(context, model),
+                        icon: const Icon(Icons.expand_more_rounded, size: 16),
+                        label: Text(translate('UDP diagnostics')),
+                      )),
                 ],
-              ),
+              )),
             ),
           );
         },
@@ -112,11 +165,9 @@ class DraggableDesktopQualityMonitor extends StatefulWidget {
   const DraggableDesktopQualityMonitor(
     this.model, {
     super.key,
-    this.wrap,
   });
 
   final QualityMonitorModel model;
-  final Widget Function(Widget child)? wrap;
 
   @override
   State<DraggableDesktopQualityMonitor> createState() =>
@@ -125,75 +176,68 @@ class DraggableDesktopQualityMonitor extends StatefulWidget {
 
 class _DraggableDesktopQualityMonitorState
     extends State<DraggableDesktopQualityMonitor> {
-  static const _panelWidth = 236.0;
-  static const _estimatedHeight = 200.0;
-  static const _edgeMargin = 10.0;
-
-  Offset? _offset;
+  Offset _offset = const Offset(20, 68);
   bool _dragging = false;
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final maxW = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-      final maxH =
-          constraints.maxHeight.isFinite ? constraints.maxHeight : 600.0;
-      final minX = _edgeMargin;
-      final maxX = (maxW - _panelWidth - _edgeMargin).clamp(minX, maxW);
-      final minY = _edgeMargin;
-      final maxY = (maxH - _estimatedHeight - _edgeMargin).clamp(minY, maxH);
-
-      final panel = MouseRegion(
-        cursor: _dragging
-            ? SystemMouseCursors.grabbing
-            : SystemMouseCursors.grab,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onPanStart: (_) {
-            setState(() {
-              _dragging = true;
-              _offset ??= Offset(maxX, maxY);
-            });
-          },
-          onPanUpdate: (details) {
-            final current = _offset ?? Offset(maxX, maxY);
-            setState(() {
-              _offset = Offset(
-                (current.dx + details.delta.dx).clamp(minX, maxX),
-                (current.dy + details.delta.dy).clamp(minY, maxY),
-              );
-            });
-          },
-          onPanEnd: (_) => setState(() => _dragging = false),
-          onPanCancel: () => setState(() => _dragging = false),
-          child: DesktopQualityMonitor(widget.model),
-        ),
-      );
-
-      final wrapped = widget.wrap != null ? widget.wrap!(panel) : panel;
-      final pos = _offset;
-      if (pos == null) {
-        return Stack(
-          fit: StackFit.passthrough,
-          children: [
-            Positioned(
-              right: _edgeMargin,
-              bottom: 12,
-              child: wrapped,
+    return CustomSingleChildLayout(
+        delegate: _DesktopQualityPosition(_offset),
+        child: Builder(builder: (cardContext) {
+          final panel = MouseRegion(
+            cursor: _dragging
+                ? SystemMouseCursors.grabbing
+                : SystemMouseCursors.grab,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanStart: (_) {
+                final card = cardContext.findRenderObject() as RenderBox?;
+                final viewport = context.findRenderObject() as RenderBox?;
+                setState(() {
+                  _dragging = true;
+                  if (card != null && viewport != null) {
+                    _offset =
+                        card.localToGlobal(Offset.zero, ancestor: viewport);
+                  }
+                });
+              },
+              onPanUpdate: (details) {
+                final card = cardContext.findRenderObject() as RenderBox?;
+                final viewport = context.findRenderObject() as RenderBox?;
+                if (card == null || viewport == null) return;
+                setState(() {
+                  _offset = _DesktopQualityPosition(_offset + details.delta)
+                      .getPositionForChild(viewport.size, card.size);
+                });
+              },
+              onPanEnd: (_) => setState(() => _dragging = false),
+              onPanCancel: () => setState(() => _dragging = false),
+              child: DesktopQualityMonitor(widget.model),
             ),
-          ],
-        );
-      }
-      return Stack(
-        fit: StackFit.passthrough,
-        children: [
-          Positioned(
-            left: pos.dx.clamp(minX, maxX),
-            top: pos.dy.clamp(minY, maxY),
-            child: wrapped,
-          ),
-        ],
-      );
-    });
+          );
+
+          return panel;
+        }));
   }
+}
+
+class _DesktopQualityPosition extends SingleChildLayoutDelegate {
+  _DesktopQualityPosition(this.offset);
+  final Offset offset;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      constraints.loosen().deflate(const EdgeInsets.all(10));
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) => Offset(
+        offset.dx.clamp(10.0,
+            (size.width - childSize.width - 10).clamp(10.0, double.infinity)),
+        offset.dy.clamp(10.0,
+            (size.height - childSize.height - 10).clamp(10.0, double.infinity)),
+      );
+
+  @override
+  bool shouldRelayout(_DesktopQualityPosition oldDelegate) =>
+      offset != oldDelegate.offset;
 }

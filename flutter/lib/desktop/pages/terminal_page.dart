@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/terminal_toolbar.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/terminal_model.dart';
@@ -18,6 +20,7 @@ class TerminalPage extends StatefulWidget {
     required this.isSharedPassword,
     required this.terminalId,
     required this.tabKey,
+    required this.onClose,
     this.forceRelay,
     this.connToken,
     this.onClipboardWriteBlocked,
@@ -33,6 +36,7 @@ class TerminalPage extends StatefulWidget {
   final ValueChanged<String>? onClipboardWriteBlocked;
   final ValueChanged<String>? onClipboardWriteSucceeded;
   final int terminalId;
+  final VoidCallback onClose;
 
   /// Tab key for focus management, passed from parent to avoid duplicate construction
   final String tabKey;
@@ -202,35 +206,71 @@ class _TerminalPageState extends State<TerminalPage>
   Widget build(BuildContext context) {
     super.build(context);
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final heightPx = constraints.maxHeight;
-          return TerminalMouseInteraction(
-            _terminalModel.terminal,
-            controller: _terminalModel.terminalController,
-            focusNode: _terminalFocusNode,
-            // Note: autofocus is not used here because focus is managed manually
-            // via _onTabStateChanged() to handle tab switching properly.
-            backgroundOpacity: 1.0,
-            padding: _calculatePadding(heightPx),
-            onSecondaryTapDown: (details, offset) async {
-              final selection = _terminalModel.terminalController.selection;
-              if (selection != null) {
-                final text = _terminalModel.terminal.buffer.getText(selection);
-                _terminalModel.terminalController.clearSelection();
-                await Clipboard.setData(ClipboardData(text: text));
-              } else {
-                final data = await Clipboard.getData('text/plain');
-                final text = data?.text;
-                if (text != null) {
-                  _terminalModel.terminal.paste(text);
+      backgroundColor: usesWorkspaceStyle
+          ? const Color(0xff0a0c10)
+          : Theme.of(context).scaffoldBackgroundColor,
+      body: Column(children: [
+        if (usesWorkspaceStyle)
+          ListenableBuilder(
+              listenable: _ffi.qualityMonitorModel,
+              builder: (context, _) => TerminalToolbar(
+                    peer: [
+                      widget.id,
+                      if (_ffi.qualityMonitorModel.data.delay?.isNotEmpty ==
+                          true)
+                        '${_ffi.qualityMonitorModel.data.delay} ms',
+                    ].join(' · '),
+                    copyLabel: translate('Copy'),
+                    pasteLabel: translate('Paste'),
+                    closeLabel: translate('Disconnect'),
+                    onCopy: () async {
+                      final selection =
+                          _terminalModel.terminalController.selection;
+                      if (selection == null) return;
+                      final text =
+                          _terminalModel.terminal.buffer.getText(selection);
+                      await Clipboard.setData(ClipboardData(text: text));
+                      _requestFocusIfSelected();
+                    },
+                    onPaste: () async {
+                      final data =
+                          await Clipboard.getData(Clipboard.kTextPlain);
+                      if (!mounted || data?.text == null) return;
+                      await _terminalModel.pasteText(data!.text!);
+                      _requestFocusIfSelected();
+                    },
+                    onClose: widget.onClose,
+                  )),
+        Expanded(child: LayoutBuilder(
+          builder: (context, constraints) {
+            final heightPx = constraints.maxHeight;
+            return TerminalMouseInteraction(
+              _terminalModel.terminal,
+              controller: _terminalModel.terminalController,
+              focusNode: _terminalFocusNode,
+              // Note: autofocus is not used here because focus is managed manually
+              // via _onTabStateChanged() to handle tab switching properly.
+              backgroundOpacity: 1.0,
+              padding: _calculatePadding(heightPx),
+              onSecondaryTapDown: (details, offset) async {
+                final selection = _terminalModel.terminalController.selection;
+                if (selection != null) {
+                  final text =
+                      _terminalModel.terminal.buffer.getText(selection);
+                  _terminalModel.terminalController.clearSelection();
+                  await Clipboard.setData(ClipboardData(text: text));
+                } else {
+                  final data = await Clipboard.getData('text/plain');
+                  final text = data?.text;
+                  if (text != null) {
+                    _terminalModel.terminal.paste(text);
+                  }
                 }
-              }
-            },
-          );
-        },
-      ),
+              },
+            );
+          },
+        )),
+      ]),
     );
   }
 

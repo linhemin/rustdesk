@@ -50,12 +50,14 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         mark.image = Self.appMark()
         mark.imageScaling = .scaleProportionallyUpOrDown
         mark.setAccessibilityElement(false)
-        brand.font = .systemFont(ofSize: 17, weight: .semibold)
+        brand.font = .systemFont(ofSize: 14, weight: .semibold)
         brand.lineBreakMode = .byTruncatingTail
         brand.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let header = NSStackView(views: [mark, brand])
         header.spacing = 9
         header.alignment = .centerY
+        let navigationOnly = (arguments as? [String: Any])?["navigationOnly"] as? Bool == true
+        header.isHidden = navigationOnly
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("destination"))
         column.minWidth = 1
@@ -70,6 +72,10 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         if #available(macOS 11.0, *) { table.style = .plain }
         table.delegate = self
         table.dataSource = self
+        if navigationOnly {
+            table.target = self
+            table.action = #selector(rowClicked)
+        }
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -82,6 +88,12 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
             content.addSubview(item)
         }
         listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        if navigationOnly {
+            listHeight.priority = .defaultHigh
+            scroll.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor).isActive = true
+            scroll.hasVerticalScroller = true
+            scroll.autohidesScrollers = true
+        }
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -92,7 +104,8 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
             header.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
             mark.widthAnchor.constraint(equalToConstant: 25),
             mark.heightAnchor.constraint(equalToConstant: 25),
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 22),
+            scroll.topAnchor.constraint(equalTo: navigationOnly ? content.topAnchor : header.bottomAnchor,
+                                        constant: navigationOnly ? 0 : 22),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
             listHeight,
@@ -118,21 +131,14 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
     deinit { channel.setMethodCallHandler(nil) }
 
     private static func makeSurface(_ content: NSView) -> NSView {
-#if compiler(>=6.2)
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView()
-            glass.cornerRadius = 0
-            glass.contentView = content
-            return glass
-        }
-#endif
-        let material = NSVisualEffectView()
-        material.material = .sidebar
-        material.blendingMode = .withinWindow
-        content.frame = material.bounds
-        content.autoresizingMask = [.width, .height]
-        material.addSubview(content)
-        return material
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor.workspaceSidebar(for: content.effectiveAppearance).cgColor
+        return content
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        subviews.first?.layer?.backgroundColor = NSColor.workspaceSidebar(for: effectiveAppearance).cgColor
     }
 
     private static func appMark() -> NSImage? {
@@ -248,7 +254,14 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !applyingConfiguration, labels.indices.contains(table.selectedRow) else { return }
+        if table.action != nil, let type = NSApp.currentEvent?.type,
+           type == .leftMouseDown || type == .leftMouseUp { return }
         channel.invokeMethod("select", arguments: table.selectedRow)
+    }
+
+    @objc private func rowClicked() {
+        guard !applyingConfiguration, labels.indices.contains(table.clickedRow) else { return }
+        channel.invokeMethod("select", arguments: table.clickedRow)
     }
 }
 
@@ -256,10 +269,15 @@ private final class WorkspaceDestinationRow: NSTableRowView {
     private var dark: Bool { effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 
     override func drawSelection(in dirtyRect: NSRect) {
-        let color = dark ? NSColor(srgbRed: 0.19, green: 0.24, blue: 0.38, alpha: 1)
-                         : NSColor(srgbRed: 0.92, green: 0.93, blue: 0.99, alpha: 1)
+        let color = dark ? NSColor(srgbRed: 21 / 255, green: 25 / 255, blue: 33 / 255, alpha: 1)
+                         : .white
         color.setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 0), xRadius: 8, yRadius: 8).fill()
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 0.5), xRadius: 8, yRadius: 8)
+        path.fill()
+        (dark ? NSColor.white : NSColor(srgbRed: 15 / 255, green: 23 / 255, blue: 42 / 255, alpha: 1))
+            .withAlphaComponent(0.085).setStroke()
+        path.lineWidth = 1
+        path.stroke()
     }
 
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
@@ -278,10 +296,22 @@ private final class WorkspaceDestinationRow: NSTableRowView {
 
     private func updateForeground() {
         guard let cell = subviews.compactMap({ $0 as? NSTableCellView }).first else { return }
-        let foreground = dark ? NSColor(srgbRed: 0.78, green: 0.82, blue: 1, alpha: 1)
-                              : NSColor(srgbRed: 0.20, green: 0.28, blue: 0.70, alpha: 1)
-        cell.textField?.textColor = isSelected ? foreground : .labelColor
+        let accent = dark ? NSColor(srgbRed: 76 / 255, green: 139 / 255, blue: 245 / 255, alpha: 1)
+                          : NSColor(srgbRed: 37 / 255, green: 99 / 255, blue: 235 / 255, alpha: 1)
+        let ink = dark ? NSColor(srgbRed: 242 / 255, green: 244 / 255, blue: 248 / 255, alpha: 1)
+                       : NSColor(srgbRed: 17 / 255, green: 20 / 255, blue: 26 / 255, alpha: 1)
+        let secondary = dark ? NSColor(srgbRed: 154 / 255, green: 163 / 255, blue: 178 / 255, alpha: 1)
+                             : NSColor(srgbRed: 87 / 255, green: 96 / 255, blue: 113 / 255, alpha: 1)
+        cell.textField?.textColor = isSelected ? ink : secondary
         cell.textField?.font = .systemFont(ofSize: 13, weight: isSelected ? .semibold : .regular)
-        cell.imageView?.contentTintColor = isSelected ? foreground : .secondaryLabelColor
+        cell.imageView?.contentTintColor = isSelected ? accent : secondary
+    }
+}
+
+private extension NSColor {
+    static func workspaceSidebar(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 16 / 255, green: 19 / 255, blue: 25 / 255, alpha: 1)
+            : NSColor(srgbRed: 236 / 255, green: 239 / 255, blue: 244 / 255, alpha: 1)
     }
 }

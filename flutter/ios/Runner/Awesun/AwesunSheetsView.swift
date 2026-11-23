@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AwesunSheetShell<Content: View>: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     let title: String
     var titleImage: String? = nil
     let onClose: () -> Void
@@ -10,7 +11,7 @@ struct AwesunSheetShell<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Text(title)
-                    .font(.headline)
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(AwesunPalette.textPrimary)
                 if let titleImage {
                     Image(titleImage)
@@ -24,7 +25,7 @@ struct AwesunSheetShell<Content: View>: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(AwesunPalette.textPrimary)
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(AwesunPalette.padFillPressed))
+                        .background(Circle().fill(Color.white.opacity(0.10)))
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
@@ -37,7 +38,20 @@ struct AwesunSheetShell<Content: View>: View {
         .padding(.top, AwesunMetrics.sheetTopPad)
         .padding(.bottom, AwesunMetrics.sheetBottomPad)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AwesunPalette.sheetFill)
+        .background {
+            if reduceTransparency {
+                AwesunPalette.sheetSolid
+            } else {
+                Rectangle().fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+                    .overlay(AwesunPalette.sheetFill)
+            }
+        }
+        .overlay(
+            AwesunCorners(radius: AwesunMetrics.sheetRadius, corners: [.topLeft, .topRight])
+                .stroke(AwesunPalette.hairline, lineWidth: 1)
+                .allowsHitTesting(false)
+        )
         .awesunCorners(AwesunMetrics.sheetRadius, [.topLeft, .topRight])
     }
 }
@@ -72,32 +86,32 @@ struct AwesunFunctionSheet: View {
     @State private var picked: Int?
 
     private let quickIDs = ["quit", "shot", "sound", "screen", "chat", "actions"]
-    private let keyboardIDs = ["kbd", "fullKeyboard", "layout", "keys", "game"]
+    private let keyboardIDs = ["kbd", "fullKeyboard", "layout", "game"]
     private let displayIDs = ["display", "quality"]
 
     var body: some View {
         AwesunSheetShell(title: "远程操作", onClose: model.closeFunctions) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 13) {
+                VStack(alignment: .leading, spacing: 16) {
                     quickActions
-                    Divider()
+                    Divider().overlay(AwesunPalette.tileStroke)
                     if item("mode") != nil || item("mouse") != nil {
                         touchControls
-                        Divider()
+                        Divider().overlay(AwesunPalette.tileStroke)
                     }
                     if !items(keyboardIDs).isEmpty {
                         section("键盘", keys: keyboardIDs)
-                        Divider()
+                        Divider().overlay(AwesunPalette.tileStroke)
                     }
                     section("显示与连接", keys: displayIDs)
                 }
                 .padding(.top, 8)
                 .padding(.bottom, 6)
             }
-            .frame(maxHeight: height)
             .foregroundColor(.white)
             .buttonStyle(.plain)
         }
+        .frame(maxHeight: height)
     }
 
     private var quickActions: some View {
@@ -117,8 +131,8 @@ struct AwesunFunctionSheet: View {
                     .font(.system(size: 11))
                     .foregroundColor(AwesunPalette.textSecondary)
             }
-            let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 4)
-            LazyVGrid(columns: columns, spacing: 6) {
+            let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+            LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(items(quickIDs), id: \.element.id) { index, entry in
                     Button {
                         if editing {
@@ -151,19 +165,18 @@ struct AwesunFunctionSheet: View {
                         Label("手势指南", systemImage: "chevron.right")
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .foregroundColor(AwesunPalette.brandBlue)
+                    .foregroundColor(AwesunPalette.activeIce)
                 }
             }
             if item("mode") != nil {
                 HStack(spacing: 8) {
-                    modeButton(.touch)
                     modeButton(.pointer)
+                    modeButton(.touch)
                 }
             }
             if item("mouse") != nil {
                 option("虚拟鼠标", value: model.mouseVisible, action: model.setMouseVisible)
             }
-            option("锁定显示", value: model.displayLocked, action: model.setDisplayLocked)
         }
     }
 
@@ -172,32 +185,62 @@ struct AwesunFunctionSheet: View {
         return Button {
             model.selectMode(mode)
         } label: {
-            Text(mode.title)
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .foregroundColor(selected ? AwesunPalette.mint : .white)
-                .frame(maxWidth: .infinity, minHeight: 40)
-                .background(Color.white.opacity(selected ? 0.08 : 0.03))
-                .overlay(RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(selected ? AwesunPalette.mint : .white.opacity(0.20), lineWidth: 1))
+            HStack(spacing: 8) {
+                Image(systemName: mode == .touch ? "hand.point.up.left" : "cursorarrow")
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: 30, height: 32)
+                    .background(selected ? AwesunPalette.brandBlue : Color.white.opacity(0.09))
+                    .cornerRadius(10)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mode == .touch ? "触控模式" : "指针模式")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(mode == .touch ? "指哪点哪直控" : "拖动移动光标")
+                        .font(.system(size: 10))
+                        .foregroundColor(AwesunPalette.textSecondary.opacity(0.7))
+                }
+                .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+            }
+            .foregroundColor(.white)
+            .padding(10)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(selected ? AwesunPalette.tileActive : AwesunPalette.tileFill)
+            .cornerRadius(16)
+            .overlay(RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(selected ? AwesunPalette.activeIce.opacity(0.48) : AwesunPalette.tileStroke, lineWidth: 1))
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func option(_ title: String, value: Bool, action: @escaping (Bool) -> Void) -> some View {
         HStack {
-            Text(title).font(.system(size: 13))
+            Image(systemName: title == "虚拟鼠标" ? "computermouse" : "lock.display")
+                .font(.system(size: 17))
+                .foregroundColor(AwesunPalette.activeIce)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title == "虚拟鼠标" ? "悬浮虚拟鼠标" : title)
+                    .font(.system(size: 12, weight: .medium))
+                Text("环形左右键 · 中键 · 旋转滚轮环")
+                    .font(.system(size: 10))
+                    .foregroundColor(AwesunPalette.textSecondary.opacity(0.7))
+            }
             Spacer()
             AwesunSwitch(isOn: Binding(get: { value }, set: action))
                 .accessibilityLabel(Text(title))
         }
-        .frame(minHeight: 33)
-        .padding(.horizontal, 4)
+        .frame(minHeight: 44)
+        .padding(.horizontal, 12)
+        .background(AwesunPalette.tileFill)
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.tileStroke)
+            .allowsHitTesting(false))
     }
 
     private func section(_ title: String, keys: [String]) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             heading(title)
-            HStack(spacing: 4) {
+            HStack(spacing: 8) {
                 ForEach(items(keys), id: \.element.id) { _, entry in
                     Button { model.perform(entry) } label: { actionTile(entry) }
                 }
@@ -206,28 +249,49 @@ struct AwesunFunctionSheet: View {
     }
 
     private func heading(_ title: String) -> some View {
-        Text(title).font(.system(size: 12, weight: .semibold))
-            .foregroundColor(AwesunPalette.textSecondary)
+        Text(title).font(.system(size: 11, weight: .semibold))
+            .foregroundColor(AwesunPalette.textSecondary.opacity(0.75))
     }
 
     private func actionTile(_ entry: AwesunFunctionItem, selected: Bool = false) -> some View {
-        VStack(spacing: 6) {
+        let danger = entry.id == "quit"
+        let active = selected || (entry.id == "sound" && model.soundOn) || (entry.id == "quality" && model.qualityVisible)
+        return VStack(spacing: 7) {
             Group {
-                if entry.symbol {
+                if let symbol = tileSymbol(entry.id) {
+                    Image(systemName: symbol).font(.system(size: 19, weight: .medium))
+                } else if entry.symbol {
                     Image(systemName: entry.icon).font(.system(size: 19, weight: .medium))
                 } else {
                     Image(entry.icon).resizable().scaledToFit()
                 }
             }
             .frame(width: 23, height: 23)
-            Text(entry.title).font(.system(size: 11, weight: .medium))
+            Text(entry.id == "layout" ? "自定义键" : entry.title)
+                .font(.system(size: 10.5, weight: .medium))
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
-        .frame(maxWidth: .infinity, minHeight: 58)
-        .foregroundColor(entry.id == "quit" ? AwesunPalette.brandRed : AwesunPalette.textPrimary)
-        .background(selected ? AwesunPalette.mint.opacity(0.20) : Color.white.opacity(0.035))
-        .cornerRadius(7)
+        .frame(maxWidth: .infinity, minHeight: 64)
+        .foregroundColor(danger ? Color(awesun: 0xFFFCA5A5) : active ? Color(awesun: 0xFF93C5FD) : AwesunPalette.glyph)
+        .background(danger ? AwesunPalette.brandRed.opacity(0.14) : active ? AwesunPalette.tileActive : AwesunPalette.tileFill)
+        .cornerRadius(16)
+        .overlay(RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(danger ? AwesunPalette.brandRed.opacity(0.28) : active ? AwesunPalette.activeIce.opacity(0.42) : AwesunPalette.tileStroke))
         .contentShape(Rectangle())
+    }
+
+    private func tileSymbol(_ id: String) -> String? {
+        switch id {
+        case "quit": return "power"
+        case "shot": return "camera"
+        case "sound": return model.soundOn ? "speaker.wave.2" : "speaker.slash"
+        case "screen": return "rectangle.on.rectangle"
+        case "kbd": return "keyboard"
+        case "layout": return "keyboard.badge.ellipsis"
+        case "keys": return "ellipsis"
+        case "actions": return "slider.horizontal.3"
+        default: return nil
+        }
     }
 
     private func items(_ ids: [String]) -> [(offset: Int, element: AwesunFunctionItem)] {
@@ -624,6 +688,16 @@ struct AwesunActionPanel: View {
         AwesunSheetShell(title: "更多操作", onClose: model.closeSheet) {
             ScrollView {
                 VStack(spacing: 6) {
+                    if let entry = model.functions.first(where: { $0.id == "keys" }) {
+                        Button { model.perform(entry) } label: {
+                            AwesunActionRow(icon: "keyboard", title: entry.title)
+                        }
+                    }
+                    if let entry = model.functions.first(where: { $0.id == "lock" }) {
+                        Button { model.setDisplayLocked(!model.displayLocked) } label: {
+                            AwesunActionRow(icon: "lock.display", title: model.displayLocked ? "解除锁定" : entry.title)
+                        }
+                    }
                     ForEach(Array(model.actions.enumerated()), id: \.offset) { index, title in
                         Button { model.chooseAction(index) } label: {
                             AwesunActionRow(icon: symbol(for: title), title: title)
@@ -783,38 +857,81 @@ struct AwesunShortcutPanel: View {
 
 struct AwesunGamePanel: View {
     @ObservedObject var model: AwesunSessionModel
-    private let rows = [["W", "Up", "Space"], ["A", "S", "D"], ["Left", "Down", "Right"]]
 
     var body: some View {
-        AwesunSheetShell(title: "游戏键盘", onClose: model.closeSheet) {
-            VStack(spacing: 7) {
-                ForEach(rows, id: \.self) { row in
-                    HStack(spacing: 7) {
-                        ForEach(row, id: \.self) { label in
-                            if let key = AwesunKeyboardLayout.selectableKeys.first(where: { $0.label == label }) {
-                                AwesunGameButton(key: key)
-                            }
-                        }
-                    }
+        VStack(spacing: 8) {
+            // Keep the original arrows away from the home gesture and the rail.
+            HStack(spacing: 4) {
+                gameKey("Up", label: "↑", width: 24, height: 28)
+                gameKey("Left", label: "←", width: 24, height: 28)
+                gameKey("Down", label: "↓", width: 24, height: 28)
+                gameKey("Right", label: "→", width: 24, height: 28)
+                Button(action: model.closeSheet) {
+                    Text("退出游戏键盘")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AwesunPalette.textPrimary)
+                        .padding(.horizontal, 5).frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
+                        .background(Capsule().fill(AwesunPalette.sheetFill))
+                        .overlay(Capsule().strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
+                        .contentShape(Capsule())
                 }
             }
-            .padding(.top, 12)
+            HStack(alignment: .bottom, spacing: 0) {
+                ZStack {
+                    Circle().fill(AwesunPalette.sheetFill)
+                        .overlay(Circle().strokeBorder(AwesunPalette.hairline))
+                    gameKey("W").offset(y: -36)
+                    gameKey("A").offset(x: -36)
+                    gameKey("S").offset(y: 36)
+                    gameKey("D").offset(x: 36)
+                }
+                .frame(width: 116, height: 116)
+                Spacer(minLength: 8)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    gameKey("Shift", width: 44, height: 40, accent: true)
+                    gameKey("Space", width: 44, height: 40, accent: true)
+                    gameKey("E", width: 44, height: 40, accent: true)
+                    gameKey("F", width: 44, height: 40, accent: true)
+                }
+                .padding(10).frame(width: 116)
+                .background(RoundedRectangle(cornerRadius: 16).fill(AwesunPalette.sheetFill))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 68).padding(.bottom, 44)
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func gameKey(_ name: String, label: String? = nil, width: CGFloat = 32,
+                         height: CGFloat = 32, accent: Bool = false) -> some View {
+        if let key = AwesunKeyboardLayout.selectableKeys.first(where: { $0.label == name }) {
+            AwesunGameButton(key: key, label: label ?? name, width: width, height: height, accent: accent)
         }
     }
 }
 
 private struct AwesunGameButton: View {
     let key: AwesunKeySpec
+    let label: String
+    let width: CGFloat
+    let height: CGFloat
+    var accent = false
     @GestureState private var pressed = false
     @State private var sent = false
 
     var body: some View {
-        Text(key.label)
-            .font(.system(size: 14, weight: .semibold))
+        Text(label)
+            .font(.system(size: 11, weight: .semibold))
             .foregroundColor(.white)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background(pressed ? AwesunPalette.brandBlue : Color.white.opacity(0.10))
-            .cornerRadius(8)
+            .frame(width: width, height: height)
+            .background(pressed ? AwesunPalette.brandBlue : accent ? AwesunPalette.tileActive : Color.white.opacity(0.10))
+            .cornerRadius(accent ? 12 : 8)
+            .overlay(RoundedRectangle(cornerRadius: accent ? 12 : 8)
+                .strokeBorder(accent ? AwesunPalette.activeIce.opacity(0.4) : AwesunPalette.tileStroke)
+                .allowsHitTesting(false))
+            .accessibilityLabel(Text(key.label))
+            .frame(minWidth: 44, minHeight: 44)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
                 .updating($pressed) { _, value, _ in value = true }

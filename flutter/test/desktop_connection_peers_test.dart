@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
@@ -11,6 +12,7 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_test/flutter_test.dart' hide isWindows, isMacOS;
 import 'package:provider/provider.dart';
+import 'package:rustdesk_ui/device_card.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
   @override
@@ -38,6 +40,24 @@ class _Binding extends Fake implements RustdeskImpl {
 }
 
 void main() {
+  test('autocomplete survives closing another connection input', () async {
+    isTest = true;
+    platformFFI.setBindingForTesting(_Binding());
+    await initGlobalFFI();
+    final inline = AllPeersLoader()..init((update) => update());
+    final sheet = AllPeersLoader()..init((update) => update());
+    addTearDown(inline.clear);
+    inline.peers.add(Peer.fromJson({'id': '123456789'}));
+    sheet.clear();
+
+    await platformFFI.tryHandle({
+      'name': 'callback_query_onlines',
+      'onlines': '123456789',
+      'offlines': '',
+    });
+    expect(inline.peers.single.online, isTrue);
+  });
+
   testWidgets('recent device opens with the selected desktop connection mode',
       (tester) async {
     isTest = true;
@@ -91,7 +111,7 @@ void main() {
       'View camera'
     ];
     for (var i = 0; i < modes.length; i++) {
-      await tester.tap(find.text(modes[i]));
+      await tester.tap(find.text(modes[i]).first);
       await settle();
       await tester.tap(find.text('Studio Mac'));
       await settle();
@@ -102,9 +122,22 @@ void main() {
       expect(request['isTerminal'], i == 2);
       expect(request['isViewCamera'], i == 3);
     }
+    for (final action in [
+      ('Transfer file', true, false),
+      ('Terminal', false, true),
+      ('Connect', false, false),
+    ]) {
+      await tester.tap(find.descendant(
+          of: find.byType(DeviceCard), matching: find.text(action.$1)));
+      await settle();
+      expect(requests.last['id'], '123456789');
+      expect(requests.last['isFileTransfer'], action.$2);
+      expect(requests.last['isTerminal'], action.$3);
+      expect(requests.last['isViewCamera'], isFalse);
+    }
     await mount(devicesOnly: true);
     expect(peerCardUiType.value, PeerUiType.grid);
-    expect(find.byIcon(Icons.desktop_mac_outlined), findsNothing);
+    expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
     if (isWindows || isMacOS) {
       await tester.tap(find.byTooltip('Search'));
       await settle();
@@ -121,7 +154,7 @@ void main() {
       await settle();
     }
     await mount();
-    expect(find.byIcon(Icons.desktop_mac_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
     debugDefaultTargetPlatformOverride = null;

@@ -18,6 +18,9 @@ class WorkspaceNavigation extends StatelessWidget {
       required this.current,
       required this.onSelect,
       required this.child,
+      this.identity,
+      this.footer,
+      this.nativeNavigation,
       this.settings,
       this.onSettings});
   final String brand;
@@ -28,6 +31,9 @@ class WorkspaceNavigation extends StatelessWidget {
   final String? settings;
   final VoidCallback? onSettings;
   final Widget child;
+  final Widget? identity;
+  final Widget? footer;
+  final Widget? nativeNavigation;
 
   @override
   Widget build(BuildContext context) =>
@@ -36,11 +42,17 @@ class WorkspaceNavigation extends StatelessWidget {
         final primary = theme.colorScheme.primary;
         final inkDefault = theme.colorScheme.onSurface;
         final muted = theme.hintColor;
-        final wide = bounds.maxWidth >= 740;
-        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 184.0 : 212.0;
+        final wide = nativeNavigation != null || bounds.maxWidth >= 740;
+        final railWidth = nativeNavigation != null
+            ? (bounds.maxWidth < 760 ? 164.0 : 216.0)
+            : !wide
+                ? 64.0
+                : bounds.maxWidth < 950
+                    ? 184.0
+                    : 216.0;
         Widget item(
             String label, IconData icon, bool selected, VoidCallback action) {
-          final ink = selected ? primary : muted;
+          final ink = selected ? primary : WorkspaceStyle.tertiaryInk(context);
           return Semantics(
               selected: selected,
               button: true,
@@ -48,13 +60,15 @@ class WorkspaceNavigation extends StatelessWidget {
               child: Tooltip(
                   message: wide ? '' : label,
                   child: Material(
-                      color: selected
-                          ? primary.withOpacity(0.13)
-                          : Colors.transparent,
+                      color: selected ? theme.cardColor : Colors.transparent,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                          side: BorderSide(
+                              color: selected
+                                  ? theme.dividerColor
+                                  : Colors.transparent),
+                          borderRadius: BorderRadius.circular(8)),
                       child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                           onTap: action,
                           child: ExcludeSemantics(
                               child: Padding(
@@ -65,7 +79,7 @@ class WorkspaceNavigation extends StatelessWidget {
                                           ? MainAxisAlignment.start
                                           : MainAxisAlignment.center,
                                       children: [
-                                        Icon(icon, size: 19, color: ink),
+                                        Icon(icon, size: 17, color: ink),
                                         if (wide) ...[
                                           const SizedBox(width: 11),
                                           Expanded(
@@ -75,9 +89,9 @@ class WorkspaceNavigation extends StatelessWidget {
                                                       TextOverflow.ellipsis,
                                                   style: TextStyle(
                                                       color: selected
-                                                          ? primary
-                                                          : inkDefault,
-                                                      fontSize: 13.5,
+                                                          ? inkDefault
+                                                          : muted,
+                                                      fontSize: 13,
                                                       fontWeight: selected
                                                           ? FontWeight.w600
                                                           : FontWeight.w500))),
@@ -110,23 +124,33 @@ class WorkspaceNavigation extends StatelessWidget {
                                     style: TextStyle(
                                         color: inkDefault,
                                         fontWeight: FontWeight.w700,
-                                        fontSize: 16,
+                                        fontSize: 14,
                                         letterSpacing: -.4)))
                           ]
                         ])),
+                    if (wide && identity != null && bounds.maxWidth >= 740)
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
+                          child: identity!),
                     Expanded(
-                        child: ListView(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            children: [
-                          for (var i = 0; i < destinations.length; i++)
-                            Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
-                                child: item(
-                                    destinations[i].label,
-                                    destinations[i].icon,
-                                    i == current,
-                                    () => onSelect(i))),
-                        ])),
+                        child: nativeNavigation != null
+                            ? nativeNavigation!
+                            : ListView(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 10),
+                                children: [
+                                    for (var i = 0;
+                                        i < destinations.length;
+                                        i++)
+                                      Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 4),
+                                          child: item(
+                                              destinations[i].label,
+                                              destinations[i].icon,
+                                              i == current,
+                                              () => onSelect(i))),
+                                  ])),
                     if (onSettings != null && settings != null) ...[
                       Divider(
                           color: theme.dividerColor,
@@ -135,9 +159,10 @@ class WorkspaceNavigation extends StatelessWidget {
                           endIndent: 12),
                       Padding(
                           padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
-                          child: item(settings!, Icons.tune_rounded,
+                          child: item(settings!, Icons.settings_outlined,
                               current == destinations.length, onSettings!)),
                     ],
+                    if (footer != null) footer!,
                   ])),
           Expanded(child: child),
         ]);

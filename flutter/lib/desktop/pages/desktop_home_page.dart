@@ -9,6 +9,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart' show changeIdDialog;
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
@@ -25,6 +26,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 import '../../native/apple_workspace_navigation.dart';
+import '../incoming_connection_link.dart';
 import '../widgets/button.dart';
 
 class DesktopHomePage extends StatefulWidget {
@@ -65,17 +67,31 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (usesWorkspaceStyle && !isIncomingOnly) {
       final incoming = !bind.isOutgoingOnly();
       final destinations = [
-        WorkspaceDestination(translate('Connection'), Icons.north_east_rounded),
         WorkspaceDestination(
-            translate('Accessible devices'), Icons.devices_rounded),
+            translate('Home and devices'), Icons.home_outlined),
         if (incoming)
           WorkspaceDestination(
               translate('Your Desktop'), Icons.laptop_mac_rounded),
+        WorkspaceDestination(
+            translate('Remote sessions'), Icons.desktop_windows_outlined),
+        WorkspaceDestination(
+            translate('Transfer file'), Icons.folder_open_outlined),
+        WorkspaceDestination(translate('Terminal'), Icons.terminal_rounded),
       ];
       final current = _destination < destinations.length ? _destination : 0;
+      final incomingIndex = incoming ? 1 : -1;
+      final sessionsIndex = incoming ? 2 : 1;
+      final requestedMode = current == sessionsIndex
+          ? 0
+          : current == sessionsIndex + 1
+              ? 1
+              : current == sessionsIndex + 2
+                  ? 2
+                  : null;
       void select(int index) {
         FocusManager.instance.primaryFocus?.unfocus();
         setState(() => _destination = index);
+        if (index == sessionsIndex) _showExistingRemoteSession(index);
       }
 
       final content = Column(children: [
@@ -85,61 +101,66 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               children: [loadLogo(), loadPowered(context)]),
         if (incoming) buildPresetPasswordWarning(),
         Expanded(
-            child: IndexedStack(index: current == 2 ? 1 : 0, children: [
-          ConnectionPage(
-              devicesOnly: current == 1,
-              localIdentity: incoming ? _localIdentitySummary(context) : null,
-              notices: current == 0
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                          if (!incoming)
-                            Text(translate('outgoing_only_desk_tip'),
-                                style: Theme.of(context).textTheme.bodySmall),
-                          Obx(() =>
-                              buildHelpCards(stateGlobal.updateUrl.value)),
-                        ])
-                  : null),
-          if (incoming) _identityWorkspace(context, current == 2),
-        ])),
-        if (incoming) ...[const Divider(height: 1), OnlineStatusWidget()],
+            child: IndexedStack(
+                index: current == incomingIndex ? 1 : 0,
+                children: [
+              ConnectionPage(
+                  requestedMode: requestedMode,
+                  workspaceTitle: destinations[current].label,
+                  notices: current == 0
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                              if (!incoming)
+                                Text(translate('outgoing_only_desk_tip'),
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall),
+                              Obx(() =>
+                                  buildHelpCards(stateGlobal.updateUrl.value)),
+                            ])
+                      : null),
+              if (incoming)
+                _identityWorkspace(context, current == incomingIndex),
+            ])),
       ]);
-      if (isMacOS) {
-        return _buildBlock(child: LayoutBuilder(builder: (context, bounds) {
-          final compact = bounds.maxWidth < 760;
-          return Row(children: [
-            SizedBox(
-              width: compact ? 164 : 204,
-              child: ColoredBox(
-                color: Theme.of(context).cardColor,
-                child: AppleWorkspaceNavigation(
-                  labels: [for (final item in destinations) item.label],
-                  symbols: [
-                    'arrow.left.arrow.right',
-                    'display.2',
-                    if (incoming) 'laptopcomputer',
-                  ],
-                  selected: current,
-                  compact: compact,
-                  onSelect: select,
-                  brand: bind.mainGetAppNameSync(),
-                  settingsLabel:
-                      bind.isDisableSettings() ? null : translate('Settings'),
-                  onSettings: DesktopTabPage.onAddSetting,
-                ),
-              ),
-            ),
-            Expanded(child: content),
-          ]);
-        }));
-      }
       return _buildBlock(
           child: WorkspaceNavigation(
         brand: bind.mainGetAppNameSync(),
-        mark: loadIcon(32),
+        mark: bind.mainGetAppNameSync() == 'RustDesk'
+            ? ExcludeSemantics(
+                child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary,
+                        borderRadius: BorderRadius.circular(6)),
+                    child: const Text('R',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14))))
+            : loadIcon(28),
         destinations: destinations,
         current: current,
         onSelect: select,
+        identity: incoming ? _localIdentitySummary(context) : null,
+        footer: incoming ? const OnlineStatusWidget(compact: true) : null,
+        nativeNavigation: isMacOS
+            ? LayoutBuilder(
+                builder: (_, bounds) => AppleWorkspaceNavigation(
+                      labels: [for (final item in destinations) item.label],
+                      symbols: [
+                        'house',
+                        if (incoming) 'laptopcomputer',
+                        'display.2',
+                        'folder',
+                        'terminal',
+                      ],
+                      selected: current,
+                      compact: bounds.maxWidth < 200,
+                      navigationOnly: true,
+                      onSelect: select,
+                    ))
+            : null,
         settings: translate('Settings'),
         onSettings:
             bind.isDisableSettings() ? null : DesktopTabPage.onAddSetting,
@@ -156,6 +177,21 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     ));
   }
 
+  Future<void> _showExistingRemoteSession(int destination) async {
+    try {
+      final sessions = await rustDeskWinManager.call(
+          WindowType.RemoteDesktop, kWindowEventGetRemoteList, null);
+      final ids = sessions.result is String
+          ? (sessions.result as String).split(',').where((id) => id.isNotEmpty)
+          : const <String>[];
+      if (mounted && _destination == destination && ids.isNotEmpty) {
+        await windowOnTop(sessions.windowId);
+      }
+    } on PlatformException catch (error) {
+      debugPrint('Unable to focus remote session: $error');
+    }
+  }
+
   Widget _buildBlock({required Widget child}) {
     return buildRemoteBlock(
         block: _block, mask: true, use: canBeBlocked, child: child);
@@ -164,16 +200,24 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget _localIdentitySummary(BuildContext context) {
     final theme = Theme.of(context);
     return WorkspacePanel(
-      padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+      padding: const EdgeInsets.all(10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Icon(Icons.laptop_mac_rounded, size: 18, color: theme.hintColor),
-          const SizedBox(width: 8),
           Expanded(
-              child: Text(translate('Your Desktop'),
+              child: Text(translate('ID'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium)),
+                  style: theme.textTheme.labelSmall)),
+          Obx(() {
+            final ready = !svcStopped.value &&
+                stateGlobal.svcStatus.value == SvcStatus.ready;
+            return Text(translate(ready ? 'Ready' : 'Status'),
+                style: TextStyle(
+                    fontSize: 10,
+                    color: ready
+                        ? WorkspaceStyle.success(context)
+                        : theme.hintColor));
+          }),
         ]),
         const SizedBox(height: 6),
         ValueListenableBuilder<TextEditingValue>(
@@ -182,9 +226,14 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             Expanded(
                 child: SelectableText(value.text,
                     maxLines: 1,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                        fontFeatures: const [FontFeature.tabularFigures()]))),
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'monospace',
+                        fontFeatures: [FontFeature.tabularFigures()]))),
             IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
               tooltip: MaterialLocalizations.of(context).copyButtonLabel,
               icon: const Icon(Icons.copy_rounded, size: 18),
               onPressed:
@@ -202,48 +251,279 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   Widget _identityWorkspace(BuildContext context, bool visible) {
-    final model = gFFI.serverModel;
     final theme = Theme.of(context);
-    return ListView(padding: const EdgeInsets.all(20), children: [
-      Text(translate('Your Desktop'),
-          style: theme.textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w700)),
-      const SizedBox(height: 6),
-      Text(translate('desk_tip'), style: TextStyle(color: theme.hintColor)),
-      const SizedBox(height: 18),
-      Align(
-          alignment: AlignmentDirectional.centerStart,
-          child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 580),
-              child: WorkspacePanel(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(translate('ID'),
-                            style: theme.textTheme.labelLarge),
-                        ValueListenableBuilder<TextEditingValue>(
-                            valueListenable: model.serverId,
-                            builder: (_, value, __) => Row(children: [
-                                  Expanded(
-                                      child: SelectableText(value.text,
-                                          style: theme.textTheme.headlineMedium
-                                              ?.copyWith(
-                                                  fontWeight: FontWeight.w600,
-                                                  letterSpacing: .5))),
-                                  IconButton(
-                                      tooltip: MaterialLocalizations.of(context)
-                                          .copyButtonLabel,
-                                      icon: const Icon(Icons.copy_rounded),
-                                      onPressed: value.text.isEmpty
-                                          ? null
-                                          : () => _copyLocalId(value.text)),
-                                ])),
-                        const Divider(height: 24),
-                        buildPasswordBoard(context),
-                      ])))),
-      if (visible) Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
-    ]);
+    final model = gFFI.serverModel;
+    return ListenableBuilder(
+        listenable: model,
+        builder: (context, _) =>
+            ListView(padding: const EdgeInsets.all(24), children: [
+              Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(translate('Your Desktop'),
+                        style: theme.textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Obx(() => Chip(
+                          avatar: Icon(Icons.circle,
+                              size: 8,
+                              color: !svcStopped.value &&
+                                      stateGlobal.svcStatus.value ==
+                                          SvcStatus.ready
+                                  ? WorkspaceStyle.green
+                                  : theme.hintColor),
+                          label: Text(
+                              translate(svcStopped.value
+                                  ? 'Service is not running'
+                                  : stateGlobal.svcStatus.value ==
+                                          SvcStatus.ready
+                                      ? 'Service is running'
+                                      : stateGlobal.svcStatus.value ==
+                                              SvcStatus.connecting
+                                          ? 'connecting_status'
+                                          : 'not_ready_status'),
+                              style: const TextStyle(fontSize: 12)),
+                        )),
+                  ]),
+              const SizedBox(height: 6),
+              Text(translate('desk_tip'),
+                  style: TextStyle(color: theme.hintColor)),
+              const SizedBox(height: 18),
+              Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 720),
+                      child: LayoutBuilder(builder: (context, bounds) {
+                        final width = bounds.maxWidth < 600
+                            ? bounds.maxWidth
+                            : (bounds.maxWidth - 14) / 2;
+                        return Wrap(spacing: 14, runSpacing: 14, children: [
+                          SizedBox(
+                              width: width,
+                              child: WorkspacePanel(
+                                  radius: 12,
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(translate('ID'),
+                                            style: theme.textTheme.labelSmall
+                                                ?.copyWith(
+                                                    color: WorkspaceStyle
+                                                        .tertiaryInk(context))),
+                                        const SizedBox(height: 12),
+                                        ValueListenableBuilder<
+                                                TextEditingValue>(
+                                            valueListenable: model.serverId,
+                                            builder: (_, value, __) =>
+                                                Row(children: [
+                                                  Expanded(
+                                                      child: SelectableText(
+                                                          value.text,
+                                                          style: theme.textTheme
+                                                              .headlineMedium
+                                                              ?.copyWith(
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
+                                                                  letterSpacing:
+                                                                      .5))),
+                                                  IconButton(
+                                                      tooltip:
+                                                          MaterialLocalizations
+                                                                  .of(context)
+                                                              .copyButtonLabel,
+                                                      icon: const Icon(
+                                                          Icons.copy_rounded),
+                                                      onPressed: value
+                                                              .text.isEmpty
+                                                          ? null
+                                                          : () => _copyLocalId(
+                                                              value.text)),
+                                                ])),
+                                        const SizedBox(height: 12),
+                                        ValueListenableBuilder<
+                                                TextEditingValue>(
+                                            valueListenable: model.serverId,
+                                            builder:
+                                                (context, value, _) => Wrap(
+                                                        spacing: 8,
+                                                        runSpacing: 8,
+                                                        children: [
+                                                          OutlinedButton.icon(
+                                                            icon: const Icon(
+                                                                Icons
+                                                                    .link_rounded,
+                                                                size: 16),
+                                                            label: Text(translate(
+                                                                'Copy invitation')),
+                                                            onPressed: value
+                                                                        .text
+                                                                        .trim()
+                                                                        .isEmpty ||
+                                                                    value.text ==
+                                                                        translate(
+                                                                            'Generating ...')
+                                                                ? null
+                                                                : () async =>
+                                                                    _copyLocalId(
+                                                                        incomingConnectionLink(
+                                                                      windowsLicense: isWindows
+                                                                          ? await bind.mainGetLicense()
+                                                                          : '',
+                                                                      uriPrefix:
+                                                                          bind.mainUriPrefixSync(),
+                                                                      id: value
+                                                                          .text
+                                                                          .replaceAll(
+                                                                              ' ',
+                                                                              ''),
+                                                                      server: bind
+                                                                          .mainGetOptionSync(
+                                                                              key: 'custom-rendezvous-server'),
+                                                                      key: bind.mainGetOptionSync(
+                                                                          key:
+                                                                              'key'),
+                                                                    )),
+                                                          ),
+                                                          if (!isChangeIdDisabled() &&
+                                                              !bind
+                                                                  .isDisableSettings() &&
+                                                              bind.mainGetBuildinOption(
+                                                                      key:
+                                                                          kOptionHideSecuritySetting) !=
+                                                                  'Y')
+                                                            TextButton(
+                                                              onPressed:
+                                                                  model.connectStatus <=
+                                                                          0
+                                                                      ? null
+                                                                      : () {
+                                                                          if (bind
+                                                                              .mainIsInstalled()) {
+                                                                            DesktopSettingPage.switch2page(SettingsTabKey.safety);
+                                                                          } else {
+                                                                            changeIdDialog();
+                                                                          }
+                                                                        },
+                                                              child: Text(translate(
+                                                                  'Change ID')),
+                                                            ),
+                                                        ])),
+                                      ]))),
+                          SizedBox(
+                              width: width,
+                              child: WorkspacePanel(
+                                radius: 12,
+                                padding: const EdgeInsets.all(4),
+                                child: buildPasswordBoard(context),
+                              )),
+                        ]);
+                      }))),
+              if (!bind.isDisableSettings() &&
+                  bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) !=
+                      'Y')
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    margin: const EdgeInsets.only(top: 16),
+                    child: WorkspacePanel(
+                      radius: 12,
+                      padding: const EdgeInsets.all(16),
+                      child: Row(children: [
+                        Expanded(
+                            child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(translate('Security'),
+                                style: theme.textTheme.labelLarge),
+                            const SizedBox(height: 6),
+                            for (final mode in {
+                              'password': 'Accept sessions via password',
+                              'click': 'Accept sessions via click',
+                              defaultOptionApproveMode:
+                                  'Accept sessions via both',
+                            }.entries)
+                              RadioListTile<String>(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(translate(mode.value),
+                                    style: theme.textTheme.bodyMedium),
+                                value: mode.key,
+                                groupValue: const ['password', 'click']
+                                        .contains(model.approveMode)
+                                    ? model.approveMode
+                                    : defaultOptionApproveMode,
+                                onChanged: bind.mainIsInstalled() ||
+                                        isOptionFixed(kOptionApproveMode)
+                                    ? null
+                                    : (value) => model.setApproveMode(value!),
+                              ),
+                          ],
+                        )),
+                        const SizedBox(width: 12),
+                        OutlinedButton(
+                          onPressed: () => DesktopSettingPage.switch2page(
+                              SettingsTabKey.safety),
+                          child: Text(translate('Settings')),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+              if (isMacOS) _incomingMacPermissions(context),
+              if (visible)
+                Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
+            ]));
+  }
+
+  Widget _incomingMacPermissions(BuildContext context) {
+    Widget row(String label, bool granted, VoidCallback configure) => ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(
+              granted ? Icons.check_circle_outline : Icons.warning_amber,
+              color: granted ? WorkspaceStyle.green : WorkspaceStyle.amber),
+          title: Text(translate(label)),
+          trailing: granted
+              ? Text(translate('Permission granted'),
+                  style: Theme.of(context).textTheme.bodySmall)
+              : TextButton(
+                  onPressed: configure, child: Text(translate('Configure'))),
+        );
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 720),
+        margin: const EdgeInsets.only(top: 16),
+        child: WorkspacePanel(
+          radius: 12,
+          padding: const EdgeInsets.all(16),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(translate('Permissions'),
+                style: Theme.of(context).textTheme.labelLarge),
+            row('Screen recording',
+                bind.mainIsCanScreenRecording(prompt: false), () {
+              bind.mainIsCanScreenRecording(prompt: true);
+              launchUrl(Uri.parse(
+                  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'));
+              watchIsCanScreenRecording = true;
+            }),
+            row('Accessibility', bind.mainIsProcessTrusted(prompt: false), () {
+              bind.mainIsProcessTrusted(prompt: true);
+              watchIsProcessTrust = true;
+            }),
+            row('Input monitoring',
+                bind.mainIsCanInputMonitoring(prompt: false), () {
+              bind.mainIsCanInputMonitoring(prompt: true);
+              watchIsInputMonitoring = true;
+            }),
+          ]),
+        ),
+      ),
+    );
   }
 
   Widget buildLeftPane(BuildContext context) {
@@ -1140,6 +1420,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       shouldBeBlocked(_block, canBeBlocked);
+      if (isMacOS && usesWorkspaceStyle) setState(() {});
     }
   }
 }

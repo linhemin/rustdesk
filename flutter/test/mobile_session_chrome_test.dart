@@ -1,0 +1,211 @@
+import 'dart:ui' show PointerDeviceKind;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+// Also runs from the backend-free ui_preview package.
+// ignore: avoid_relative_lib_imports
+import '../lib/mobile/widgets/session_quality_monitor.dart';
+
+void main() {
+  testWidgets('HUD consumes touch and mouse drags without blocking the canvas',
+      (tester) async {
+    var canvasPresses = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Stack(fit: StackFit.expand, children: [
+          Listener(
+            onPointerDown: (_) => canvasPresses++,
+            child: GestureDetector(
+              onLongPressDown: (_) => canvasPresses++,
+              child: const ColoredBox(color: Colors.black),
+            ),
+          ),
+          const MobileSessionQualityMonitor(
+              connection: 'Direct · TCP', direct: true, metrics: []),
+        ]),
+      ),
+    ));
+    for (final kind in [PointerDeviceKind.touch, PointerDeviceKind.mouse]) {
+      await tester.drag(find.text('Direct · TCP'), const Offset(40, 30),
+          kind: kind);
+      await tester.pump();
+      expect(canvasPresses, 0);
+    }
+    await tester.tapAt(const Offset(500, 500));
+    expect(canvasPresses, greaterThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile quality card moves and stays within the viewport',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 760));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    // The viewport is already safe; physical insets must not shrink clearance.
+    tester.view.viewPadding =
+        FakeViewPadding(bottom: 34 * tester.view.devicePixelRatio);
+    addTearDown(tester.view.resetViewPadding);
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: MobileSessionQualityMonitor(
+          reserveGamepadSpace: true,
+          connection: '直接连接 · TCP',
+          direct: true,
+          metrics: [
+            ('速度', '1.08 MB/s'),
+            ('FPS', '60'),
+            ('延迟', '9 ms'),
+            ('码率', '8.2 Mb/s'),
+            ('编解码', 'AV1'),
+            ('色度采样', '4:2:0')
+          ],
+        ),
+      ),
+    ));
+    final card = find.byType(BackdropFilter);
+    final initial = tester.getRect(card);
+    await tester.drag(find.text('直接连接 · TCP'), const Offset(80, 100));
+    await tester.pump();
+    expect(tester.getRect(card).left, greaterThan(initial.left));
+    expect(tester.getRect(card).top, greaterThan(initial.top));
+    final drag =
+        await tester.startGesture(tester.getCenter(find.text('直接连接 · TCP')));
+    await drag.moveBy(const Offset(30, 30));
+    await tester.pump();
+    final beforeBurst = tester.getRect(card);
+    await drag.moveBy(const Offset(10, 5));
+    await drag.moveBy(const Offset(10, 5));
+    await drag.up();
+    await tester.pump();
+    expect(tester.getRect(card).left, closeTo(beforeBurst.left + 20, 0.1));
+    expect(tester.getRect(card).top, closeTo(beforeBurst.top + 10, 0.1));
+    await tester.drag(find.text('直接连接 · TCP'), const Offset(1000, 1000));
+    await tester.pump();
+    final viewport = tester.getRect(find.byType(Scaffold));
+    expect(tester.getRect(card).right, lessThanOrEqualTo(viewport.right - 68));
+    expect(
+        tester.getRect(card).bottom, lessThanOrEqualTo(viewport.bottom - 224));
+    await tester.drag(find.text('直接连接 · TCP'), const Offset(-40, -40));
+    await tester.pump();
+    expect(tester.getRect(card).right, lessThan(viewport.right - 68));
+    expect(tester.getRect(card).bottom, lessThan(viewport.bottom - 224));
+    await tester.binding.setSurfaceSize(const Size(760, 390));
+    await tester.pump();
+    final compact = tester.getRect(card);
+    await tester.drag(find.text('直接连接 · TCP'), const Offset(-60, 0));
+    await tester.pump();
+    expect(tester.getRect(card).left, lessThan(compact.left));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('quality diagnostics remain tappable at larger text scale',
+      (tester) async {
+    var opened = false;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(1.5)),
+          child: MobileSessionQualityMonitor(
+            reserveGamepadSpace: true,
+            connection: '中继连接 · WebRTC/IPv6 / TURN',
+            direct: false,
+            metrics: const [
+              ('延迟', '17 ms'),
+              ('码率', '9.5 Mb/s'),
+              ('色度采样', '4:4:4')
+            ],
+            diagnostics: TextButton(
+                onPressed: () => opened = true,
+                child: const Text('UDP report')),
+          ),
+        ),
+      ),
+    ));
+    await tester.tap(find.text('UDP report'));
+    await tester.pump();
+    expect(opened, isTrue);
+    expect(find.text('色度采样'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('landscape drops stay above game keys and short cards scroll',
+      (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    var opened = false;
+    for (final height in [390.0, 360.0]) {
+      await tester.binding.setSurfaceSize(Size(760, height));
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: MobileSessionQualityMonitor(
+            key: ValueKey(height),
+            reserveGamepadSpace: true,
+            connection: 'Direct · TCP',
+            direct: true,
+            metrics: const [
+              ('Speed', '1 MB/s'),
+              ('FPS', '60'),
+              ('Delay', '9 ms'),
+              ('Bitrate', '8 Mb/s'),
+              ('Codec', 'AV1'),
+              ('Chroma', '4:2:0'),
+            ],
+            diagnostics: TextButton(
+                onPressed: () => opened = true,
+                child: const Text('UDP report')),
+          ),
+        ),
+      ));
+      await tester.drag(find.text('Direct · TCP'), const Offset(1000, 1000));
+      await tester.pump();
+      expect(tester.getRect(find.byType(BackdropFilter)).bottom,
+          lessThanOrEqualTo(height - 224));
+      final header = tester.getRect(find.text('Direct · TCP'));
+      await tester.drag(find.text('FPS'), const Offset(0, -200));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('UDP report'));
+      expect(opened, isTrue);
+      expect(tester.getRect(find.text('Direct · TCP')), header);
+      expect(tester.takeException(), isNull);
+      opened = false;
+    }
+  });
+
+  testWidgets('compact HUD without native gamepad uses the full viewport',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(760, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+      body: MobileSessionQualityMonitor(
+        connection: 'Direct · TCP',
+        direct: true,
+        metrics: [('FPS', '60')],
+      ),
+    )));
+    expect(find.text('FPS'), findsOneWidget);
+    await tester.drag(find.text('Direct · TCP'), const Offset(1000, 1000));
+    await tester.pump();
+    expect(tester.getRect(find.byType(BackdropFilter)).bottom, 308);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('HUD hides when heading and a full action cannot clear game keys',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(760, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+          body: MobileSessionQualityMonitor(
+        reserveGamepadSpace: true,
+        connection: 'Direct · TCP',
+        direct: true,
+        metrics: [('FPS', '60')],
+      )),
+    ));
+    expect(find.byType(BackdropFilter), findsNothing);
+    await tester.binding.setSurfaceSize(const Size(760, 390));
+    await tester.pump();
+    expect(find.text('FPS'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+}

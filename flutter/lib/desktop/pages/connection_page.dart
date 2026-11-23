@@ -25,10 +25,12 @@ import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 
 class OnlineStatusWidget extends StatefulWidget {
-  const OnlineStatusWidget({Key? key, this.onSvcStatusChanged})
+  const OnlineStatusWidget(
+      {Key? key, this.onSvcStatusChanged, this.compact = false})
       : super(key: key);
 
   final VoidCallback? onSvcStatusChanged;
+  final bool compact;
 
   @override
   State<OnlineStatusWidget> createState() => _OnlineStatusWidgetState();
@@ -40,7 +42,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   final _svcIsUsingPublicServer = true.obs;
   Timer? _updateTimer;
 
-  double get em => 14.0;
+  double get em => widget.compact ? 11.0 : 14.0;
   double? get height => bind.isIncomingOnly() ? null : em * 3;
 
   void onUsePublicServerGuide() {
@@ -69,6 +71,56 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   @override
   Widget build(BuildContext context) {
     final isIncomingOnly = bind.isIncomingOnly();
+    if (widget.compact) {
+      return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+          child: LayoutBuilder(
+              builder: (_, bounds) => Obx(() {
+                    final ready = !_svcStopped.value &&
+                        stateGlobal.svcStatus.value == SvcStatus.ready;
+                    final guide = ready && _svcIsUsingPublicServer.value;
+                    final color = ready
+                        ? WorkspaceStyle.success(context)
+                        : _svcStopped.value ||
+                                stateGlobal.svcStatus.value ==
+                                    SvcStatus.connecting
+                            ? WorkspaceStyle.warning(context)
+                            : WorkspaceStyle.danger(context);
+                    if (bounds.maxWidth < 80) {
+                      return IconButton(
+                          tooltip: guide
+                              ? translate('setup_server_tip')
+                              : _buildConnStatusMsg().data,
+                          onPressed: _svcStopped.value
+                              ? () => start_service(true)
+                              : guide
+                                  ? onUsePublicServerGuide
+                                  : null,
+                          icon: Icon(Icons.circle, size: 6, color: color));
+                    }
+                    return Row(children: [
+                      Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                              shape: BoxShape.circle, color: color)),
+                      const SizedBox(width: 7),
+                      Expanded(child: _buildConnStatusMsg()),
+                      if (_svcStopped.value)
+                        IconButton(
+                            tooltip: translate('Start service'),
+                            icon:
+                                const Icon(Icons.play_arrow_rounded, size: 16),
+                            onPressed: () => start_service(true)),
+                      if (guide)
+                        IconButton(
+                            tooltip: translate('setup_server_tip'),
+                            icon: const Icon(Icons.info_outline_rounded,
+                                size: 14),
+                            onPressed: onUsePublicServerGuide),
+                    ]);
+                  })));
+    }
     startServiceWidget() => Offstage(
           offstage: !_svcStopped.value,
           child: InkWell(
@@ -156,7 +208,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
     ).paddingOnly(right: isIncomingOnly ? 8 : 0);
   }
 
-  _buildConnStatusMsg() {
+  Text _buildConnStatusMsg() {
     widget.onSvcStatusChanged?.call();
     return Text(
       _svcStopped.value
@@ -167,6 +219,8 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
                   ? translate("not_ready_status")
                   : translate('Ready'),
       style: TextStyle(fontSize: em),
+      maxLines: widget.compact ? 2 : null,
+      overflow: widget.compact ? TextOverflow.ellipsis : null,
     );
   }
 
@@ -193,11 +247,20 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget {
   const ConnectionPage(
-      {Key? key, this.devicesOnly = false, this.notices, this.localIdentity})
-      : super(key: key);
+      {Key? key,
+      this.devicesOnly = false,
+      this.notices,
+      this.localIdentity,
+      this.requestedMode,
+      this.workspaceTitle})
+      : assert(
+            requestedMode == null || (requestedMode >= 0 && requestedMode < 4)),
+        super(key: key);
   final bool devicesOnly;
   final Widget? localIdentity;
   final Widget? notices;
+  final int? requestedMode;
+  final String? workspaceTitle;
 
   @override
   State<ConnectionPage> createState() => _ConnectionPageState();
@@ -245,6 +308,7 @@ class _ConnectionPageState extends State<ConnectionPage>
   @override
   void initState() {
     super.initState();
+    _mode = widget.requestedMode ?? 0;
     _allPeersLoader.init(setState);
     _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
@@ -260,6 +324,14 @@ class _ConnectionPageState extends State<ConnectionPage>
     Get.put<TextEditingController>(_idEditingController);
     Get.put<IDTextEditingController>(_idController);
     windowManager.addListener(this);
+  }
+
+  @override
+  void didUpdateWidget(covariant ConnectionPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.requestedMode != oldWidget.requestedMode) {
+      _mode = widget.requestedMode ?? 0;
+    }
   }
 
   @override
@@ -336,7 +408,7 @@ class _ConnectionPageState extends State<ConnectionPage>
         SliverToBoxAdapter(
             child: Padding(
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 10),
-                child: Text(translate(title),
+                child: Text(widget.workspaceTitle ?? translate(title),
                     style: Theme.of(context)
                         .textTheme
                         .headlineSmall
@@ -353,16 +425,6 @@ class _ConnectionPageState extends State<ConnectionPage>
                             child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  SessionModePicker(
-                                      choices: [
-                                        for (final mode in _modes)
-                                          WorkspaceDestination(
-                                              translate(mode.$1), mode.$2)
-                                      ],
-                                      selected: _mode,
-                                      onSelect: (value) =>
-                                          setState(() => _mode = value)),
-                                  const SizedBox(height: 10),
                                   LayoutBuilder(builder: (context, bounds) {
                                     final form =
                                         _buildRemoteIDTextField(context);
@@ -531,19 +593,30 @@ class _ConnectionPageState extends State<ConnectionPage>
                   enableSuggestions: false,
                   keyboardType: TextInputType.visiblePassword,
                   focusNode: fieldFocusNode,
-                  style: const TextStyle(
-                    fontFamily: 'WorkSans',
-                    fontSize: 22,
+                  style: TextStyle(
+                    fontFamily: usesWorkspaceStyle ? 'monospace' : 'WorkSans',
+                    fontSize: usesWorkspaceStyle ? 15 : 22,
                     height: 1.4,
                   ),
                   maxLines: 1,
                   cursorColor: Theme.of(context).textTheme.titleLarge?.color,
                   decoration: InputDecoration(
-                      filled: false,
+                      filled: usesWorkspaceStyle,
+                      fillColor: usesWorkspaceStyle
+                          ? WorkspaceStyle.well(context)
+                          : null,
+                      prefixIcon: usesWorkspaceStyle
+                          ? Icon(Icons.arrow_forward_rounded,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary)
+                          : null,
                       counterText: '',
                       hintText: _idInputFocused.value
                           ? null
-                          : translate('Enter Remote ID'),
+                          : translate(
+                              usesWorkspaceStyle && (isMacOS || isWindows)
+                                  ? 'Enter remote ID or device name…'
+                                  : 'Enter Remote ID'),
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 15, vertical: 13)),
                   controller: fieldTextEditingController,
@@ -627,7 +700,7 @@ class _ConnectionPageState extends State<ConnectionPage>
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           SizedBox(
-            height: usesWorkspaceStyle ? 38 : 28,
+            height: usesWorkspaceStyle ? 44 : 28,
             child: ElevatedButton(
               onPressed: () {
                 _startSelectedMode();
@@ -637,8 +710,8 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
           const SizedBox(width: 8),
           Container(
-            height: usesWorkspaceStyle ? 38 : 28,
-            width: usesWorkspaceStyle ? 38 : 28,
+            height: usesWorkspaceStyle ? 44 : 28,
+            width: usesWorkspaceStyle ? 36 : 28,
             decoration: BoxDecoration(
               border: Border.all(color: Theme.of(context).dividerColor),
               borderRadius: BorderRadius.circular(8),
@@ -725,22 +798,41 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
         ]);
     if (usesWorkspaceStyle) {
-      return ConnectionPanel(
-        title: translate('Remote ID'),
-        help: Tooltip(
-            message: translate('id_input_tip'),
-            child: Icon(Icons.info_outline,
-                size: 16, color: Theme.of(context).hintColor)),
-        controls: LayoutBuilder(builder: (context, bounds) {
-          if (bounds.maxWidth >= 395) {
-            return Row(children: [
-              Expanded(child: field),
-              const SizedBox(width: 12),
-              actions
-            ]);
-          }
-          return Column(children: [field, const SizedBox(height: 8), actions]);
-        }),
+      return WorkspacePanel(
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            alignment: WrapAlignment.spaceBetween,
+            children: [
+              Tooltip(
+                  message: translate('id_input_tip'),
+                  child: Text(translate('New Connection'),
+                      style: Theme.of(context).textTheme.titleSmall)),
+              SessionModePicker(
+                  choices: [
+                    for (final mode in _modes)
+                      WorkspaceDestination(translate(mode.$1), mode.$2)
+                  ],
+                  selected: _mode,
+                  onSelect: (value) => setState(() => _mode = value)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(builder: (context, bounds) {
+            if (bounds.maxWidth >= 395) {
+              return Row(children: [
+                Expanded(child: field),
+                const SizedBox(width: 12),
+                actions
+              ]);
+            }
+            return Column(
+                children: [field, const SizedBox(height: 8), actions]);
+          }),
+        ]),
       );
     }
     final w = Container(

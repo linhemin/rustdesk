@@ -10,14 +10,51 @@ import 'package:zxing2/qrcode.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import '../server_config_qr.dart';
 import '../widgets/dialog.dart';
 
+Uri? connectionQrUri(String code, String uriPrefix) {
+  final uri = Uri.tryParse(code);
+  if (!code.startsWith(uriPrefix) ||
+      uri == null ||
+      const {'config', 'password'}.contains(uri.authority)) {
+    return null;
+  }
+  return uri;
+}
+
 class ScanPage extends StatefulWidget {
-  static Future<void> open(BuildContext context) async {
+  static Future<void> openConnection(BuildContext context) async {
     final result = await Navigator.of(context).push(
         MaterialPageRoute<({String code, bool gallery})>(
             builder: (_) => ScanPage()));
     if (result == null || !context.mounted) return;
+    final uri = connectionQrUri(result.code, bind.mainUriPrefixSync());
+    if (uri != null) {
+      handleUriLink(uri: uri);
+    } else {
+      showToast(translate('Invalid QR code'));
+    }
+  }
+
+  static Future<void> open(BuildContext context,
+      {ValueChanged<ServerConfig>? onServerConfig}) async {
+    final result = await Navigator.of(context).push(
+        MaterialPageRoute<({String code, bool gallery})>(
+            builder: (_) => ScanPage()));
+    if (result == null || !context.mounted) return;
+    if (onServerConfig != null) {
+      final config =
+          serverConfigFromQr(result.code, uriPrefix: bind.mainUriPrefixSync());
+      if (config != null) {
+        try {
+          onServerConfig(ServerConfig.decode(config));
+        } catch (_) {
+          showToast('Invalid QR code');
+        }
+        return;
+      }
+    }
     if (result.gallery && result.code.startsWith(bind.mainUriPrefixSync())) {
       handleUriLink(uriString: result.code);
       return;

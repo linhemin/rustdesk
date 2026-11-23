@@ -19,6 +19,7 @@ class AppleWorkspaceNavigation extends StatefulWidget {
     this.brand,
     this.settingsLabel,
     this.onSettings,
+    this.navigationOnly = false,
   }) : assert(labels.length == symbols.length);
 
   final List<String> labels;
@@ -29,6 +30,7 @@ class AppleWorkspaceNavigation extends StatefulWidget {
   final String? brand;
   final String? settingsLabel;
   final VoidCallback? onSettings;
+  final bool navigationOnly;
 
   @override
   State<AppleWorkspaceNavigation> createState() =>
@@ -50,6 +52,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
         'symbols': widget.symbols,
         'selected': widget.selected,
         'compact': widget.compact,
+        if (widget.navigationOnly) 'navigationOnly': true,
         if (widget.brand != null) 'brand': widget.brand!,
         if (widget.settingsLabel != null) 'settings': widget.settingsLabel!,
         'dark': _brightness == Brightness.dark,
@@ -103,6 +106,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     super.didUpdateWidget(oldWidget);
     if (widget.selected != oldWidget.selected ||
         widget.compact != oldWidget.compact ||
+        widget.navigationOnly != oldWidget.navigationOnly ||
         widget.brand != oldWidget.brand ||
         widget.settingsLabel != oldWidget.settingsLabel ||
         !listEquals(widget.labels, oldWidget.labels) ||
@@ -123,6 +127,9 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       } else if (call.method == 'select') {
         final index = call.arguments;
         if (index is int && index >= 0 && index < widget.labels.length) {
+          if (defaultTargetPlatform == TargetPlatform.iOS) {
+            FocusManager.instance.primaryFocus?.unfocus();
+          }
           widget.onSelect(index);
         }
       } else if (call.method == 'systemHeight') {
@@ -177,12 +184,16 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     return itemWidth * widget.labels.length + 10;
   }
 
-  UiKitView _iosView() => UiKitView(
-        key: ValueKey(widget.compact),
-        viewType: _viewType,
-        creationParams: _configuration,
-        creationParamsCodec: const StandardMessageCodec(),
-        onPlatformViewCreated: _onPlatformViewCreated,
+  Widget _iosView() => Listener(
+        // Release Flutter text input before UIKit handles the tab touch.
+        onPointerDown: (_) => FocusManager.instance.primaryFocus?.unfocus(),
+        child: UiKitView(
+          key: ValueKey(widget.compact),
+          viewType: _viewType,
+          creationParams: _configuration,
+          creationParamsCodec: const StandardMessageCodec(),
+          onPlatformViewCreated: _onPlatformViewCreated,
+        ),
       );
 
   @override
@@ -241,6 +252,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
       return AppKitView(
+        key: ValueKey(widget.navigationOnly),
         viewType: _viewType,
         creationParams: _configuration,
         creationParamsCodec: const StandardMessageCodec(),

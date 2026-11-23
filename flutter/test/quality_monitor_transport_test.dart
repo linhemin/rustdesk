@@ -31,6 +31,15 @@ class _Options extends Fake implements RustdeskImpl {
   bool show = true;
 
   @override
+  Future<void> sessionToggleOption(
+      {required UuidValue sessionId,
+      required String value,
+      dynamic hint}) async {
+    expect(value, 'show-quality-monitor');
+    show = !show;
+  }
+
+  @override
   Future<bool?> sessionGetToggleOption(
       {required UuidValue sessionId, required String arg, dynamic hint}) async {
     expect(arg, 'show-quality-monitor');
@@ -100,7 +109,7 @@ void main() {
         '\n\nlocal port → destination | TX | TX err\n38000 → 198.51.100.3:51023 | 4 | 0');
     await tester.pump();
     expect(model.udpReports.length, 1);
-    await tester.tap(find.text('UDP #0123456789ab  RX 3  ACK TX 2'));
+    await tester.tap(find.text('UDP diagnostics'));
     await tester.pumpAndSettle();
     expect(find.text('51023'), findsOneWidget);
     expect(find.text('ACK TX'), findsOneWidget);
@@ -111,6 +120,41 @@ void main() {
     expect(find.textContaining('38000 → 198.51.100.3:51023'), findsOneWidget);
     expect(find.textContaining('51023 → 192.0.2.4:38000'), findsOneWidget);
   });
+
+  for (final withUdp in [false, true]) {
+    testWidgets(
+        'desktop monitor stays stable and visible when dragged (UDP: $withUdp)',
+        (tester) async {
+      platformFFI.setBindingForTesting(_Options());
+      final ffi = _FakeFFI();
+      final model = ffi.qualityMonitorModel;
+      await model.checkShowQualityMonitor(_sessionId);
+      ffi.ffiModel.setConnectionType('sample', true, true, 'UDP');
+      if (withUdp) model.addUdpReport('UDP #0123456789ab  RX 3  ACK TX 2');
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: DraggableDesktopQualityMonitor(model),
+        ),
+      ));
+      final initialTop =
+          tester.getTopLeft(find.byType(DesktopQualityMonitor)).dy;
+      expect(initialTop, closeTo(68, 0.1));
+      expect(tester.getTopLeft(find.byType(DesktopQualityMonitor)).dx,
+          closeTo(20, 0.1));
+      await tester.drag(find.text('Connection quality'), const Offset(80, 0));
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.byType(DesktopQualityMonitor)).dy,
+          closeTo(initialTop, 0.1));
+      await tester.drag(find.text('Speed'), const Offset(0, 600));
+      await tester.pumpAndSettle();
+      final viewport = tester.getRect(find.byType(Scaffold));
+      final panel = tester.getRect(find.byType(DesktopQualityMonitor));
+      final transport = tester.getRect(find.text('KCP / UDP'));
+      expect(panel.bottom, lessThanOrEqualTo(viewport.bottom));
+      expect(transport.bottom, lessThanOrEqualTo(viewport.bottom));
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets(
       'desktop quality panel follows the session toggle and live samples',
@@ -167,9 +211,9 @@ void main() {
       await tester.pump();
       expect(find.text('Direct Connection'), findsNothing);
     }
-    options.show = false;
-    await model.checkShowQualityMonitor(_sessionId);
-    await tester.pump();
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(options.show, isFalse);
     expect(find.text('Speed'), findsNothing);
   });
 }
