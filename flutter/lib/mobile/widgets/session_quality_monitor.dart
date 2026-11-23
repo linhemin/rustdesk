@@ -32,13 +32,20 @@ class _MobileSessionQualityMonitorState
         child: Builder(builder: (cardContext) {
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
+            onPanStart: (_) {
+              final card = cardContext.findRenderObject() as RenderBox?;
+              final viewport = context.findRenderObject() as RenderBox?;
+              if (card != null && viewport != null) {
+                _offset = card.localToGlobal(Offset.zero, ancestor: viewport);
+              }
+            },
             onPanUpdate: (details) {
               final card = cardContext.findRenderObject() as RenderBox?;
               final viewport = context.findRenderObject() as RenderBox?;
               if (card == null || viewport == null) return;
               setState(() {
-                _offset = card.localToGlobal(Offset.zero, ancestor: viewport) +
-                    details.delta;
+                _offset = _QualityPosition(_offset + details.delta)
+                    .getPositionForChild(viewport.size, card.size);
               });
             },
             child: Container(

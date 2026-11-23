@@ -32,6 +32,17 @@ void main() {
     await tester.pump();
     expect(tester.getRect(card).left, greaterThan(initial.left));
     expect(tester.getRect(card).top, greaterThan(initial.top));
+    final drag =
+        await tester.startGesture(tester.getCenter(find.text('直接连接 · TCP')));
+    await drag.moveBy(const Offset(30, 30));
+    await tester.pump();
+    final beforeBurst = tester.getRect(card);
+    await drag.moveBy(const Offset(10, 5));
+    await drag.moveBy(const Offset(10, 5));
+    await drag.up();
+    await tester.pump();
+    expect(tester.getRect(card).left, closeTo(beforeBurst.left + 20, 0.1));
+    expect(tester.getRect(card).top, closeTo(beforeBurst.top + 10, 0.1));
     await tester.drag(find.text('直接连接 · TCP'), const Offset(1000, 1000));
     await tester.pump();
     final viewport = tester.getRect(find.byType(Scaffold));
