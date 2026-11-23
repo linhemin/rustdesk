@@ -10,6 +10,7 @@ import 'package:zxing2/qrcode.dart';
 
 import '../../common.dart';
 import '../../models/platform_model.dart';
+import '../server_config_qr.dart';
 import '../widgets/dialog.dart';
 
 class ScanPage extends StatefulWidget {
@@ -19,6 +20,18 @@ class ScanPage extends StatefulWidget {
         MaterialPageRoute<({String code, bool gallery})>(
             builder: (_) => ScanPage()));
     if (result == null || !context.mounted) return;
+    if (onServerConfig != null) {
+      final config =
+          serverConfigFromQr(result.code, uriPrefix: bind.mainUriPrefixSync());
+      if (config != null) {
+        try {
+          onServerConfig(ServerConfig.decode(config));
+        } catch (_) {
+          showToast('Invalid QR code');
+        }
+        return;
+      }
+    }
     if (result.gallery && result.code.startsWith(bind.mainUriPrefixSync())) {
       handleUriLink(uriString: result.code);
       return;

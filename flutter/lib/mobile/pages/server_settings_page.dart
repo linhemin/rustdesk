@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import '../../common.dart';
 import '../../common/widgets/api_server_warning.dart';
 import '../../models/platform_model.dart';
+import '../server_config_qr.dart';
 import '../widgets/apple_settings_list.dart';
 import 'scan_page.dart';
 
@@ -80,10 +81,13 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
         .push<({String code, bool gallery})>(
             MaterialPageRoute(builder: (_) => ScanPage()));
     if (!mounted || result == null) return;
-    if (result.gallery && result.code.startsWith(bind.mainUriPrefixSync())) {
+    final config =
+        serverConfigFromQr(result.code, uriPrefix: bind.mainUriPrefixSync());
+    if (config != null) {
+      _import(config);
+    } else if (result.gallery &&
+        result.code.startsWith(bind.mainUriPrefixSync())) {
       handleUriLink(uriString: result.code);
-    } else if (result.code.startsWith('config=')) {
-      _import(result.code.substring(7));
     } else {
       showToast(translate('Invalid QR code'));
     }
