@@ -314,6 +314,17 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         maxHeight = 193;
                       }
                       maxHeight = maxHeight.clamp(0, 200);
+                      if (isIOS) {
+                        final field = _idFocusNode.context?.findRenderObject();
+                        if (field is RenderBox && field.hasSize) {
+                          // The root overlay does not inherit the keyboard's body resize.
+                          final media = MediaQuery.of(context);
+                          final available = media.size.height -
+                              media.viewInsets.bottom - media.padding.bottom -
+                              field.localToGlobal(Offset(0, field.size.height)).dy - 8;
+                          maxHeight = maxHeight.clamp(0, available.clamp(0, 200)).toDouble();
+                        }
+                      }
                       return Align(
                           alignment: Alignment.topLeft,
                           child: Container(
