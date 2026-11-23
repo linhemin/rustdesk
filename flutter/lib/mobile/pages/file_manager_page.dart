@@ -530,8 +530,8 @@ class _FileManagerPageState extends State<FileManagerPage> {
                 }),
           ],
         ),
-        body: Stack(children: [
-          Column(children: [
+        body: Column(children: [
+          Expanded(child: Column(children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
               child: _LocalRemoteSegment(
@@ -551,12 +551,8 @@ class _FileManagerPageState extends State<FileManagerPage> {
                         controller: model.remoteController,
                         selectMode: selectMode,
                       )),
-          ]),
-          PositionedDirectional(
-              start: 0,
-              end: 0,
-              bottom: 0,
-              child: bottomSheet() ?? const SizedBox.shrink()),
+          ])),
+          bottomSheet() ?? const SizedBox.shrink(),
         ]),
       ));
 
