@@ -1338,7 +1338,9 @@ impl RendezvousMediator {
         };
         if ph.udp_port > 0 {
             peer_addr.set_port(ph.udp_port as u16);
-            self.punch_udp_hole(peer_addr, &ph.shared_egress_ipv4, ph.udp_candidate_ports, server, msg_punch, meta, slot_udp)
+            self.punch_udp_hole(peer_addr, &ph.shared_egress_ipv4, ph.udp_candidate_ports,
+                hbb_common::lan_udp::endpoint(&ph.udp_lan_endpoint), ph.udp_observed_ipv4,
+                server, msg_punch, meta, slot_udp)
                 .await?;
             return Ok(());
         }
@@ -1411,24 +1413,32 @@ impl RendezvousMediator {
         peer_addr: SocketAddr,
         shared_egress: &[u8],
         candidate_ports: Vec<u32>,
+        lan_peer: Option<SocketAddr>,
+        observed_ipv4: u32,
         server: ServerPtr,
         mut msg_punch: PunchHoleSent,
         meta: ConnectionMeta,
         slot: Option<PunchSlot>,
     ) -> ResultType<()> {
-        let ordinary_v4 = peer_addr.is_ipv4() && msg_punch.webrtc_sdp_answer.is_empty();
+        let udp_peer = crate::p2p::ordinary_udp::observed_peer(peer_addr, observed_ipv4,
+            !candidate_ports.is_empty() && msg_punch.udp_reply_token.len() == 16);
+        let ordinary_v4 = udp_peer.is_ipv4() && msg_punch.webrtc_sdp_answer.is_empty();
         let mut msg_out = Message::new();
         let (socket, addr) = if ordinary_v4 {
             crate::p2p::ordinary_udp::ordinary_udp_socket(&self.host, true).await?
         } else {
             crate::p2p::rendezvous_punch_socket(&self.host, true).await?
         };
-        let destination = crate::p2p::ordinary_udp::peer_candidate(peer_addr, addr, shared_egress);
+        let destination = crate::p2p::ordinary_udp::peer_candidate(udp_peer, addr, shared_egress);
         let mut paths = None;
         if ordinary_v4 && slot.is_some() && !candidate_ports.is_empty() && msg_punch.udp_reply_token.len() == 16 {
             let mut local = crate::p2p::udp_paths::Candidates::gather(&socket, addr, candidate_ports.len() > 3, None).await;
             if !local.tickets.is_empty() {
                 let key = hbb_common::sodiumoxide::crypto::hash::sha256::hash(&msg_punch.udp_reply_token);
+                if lan_peer.is_some() {
+                    msg_punch.udp_lan_endpoint = local.lan_offer(&socket);
+                    local.lan_peer = lan_peer;
+                }
                 msg_punch.udp_mapping_tickets = std::mem::take(&mut local.tickets).into();
                 let candidates = crate::p2p::udp_paths::Paths {
                     local, ports: candidate_ports, key: hbb_common::sodiumoxide::crypto::auth::Key(key.0),
@@ -1547,6 +1557,7 @@ impl RendezvousMediator {
             serial,
             lan_probe: Self::lan_probe_interface().is_some(),
             udp_punch_reply: true,
+            udp_endpoint_candidates: true,
             ..Default::default()
         });
         socket.send(&msg_out).await?;
@@ -1737,7 +1748,8 @@ async fn udp_nat_listen(
             let advertised = crate::p2p::ordinary_udp::udp_peer_destination(&socket, peer_addr).await?;
             let selected = paths.select_recorded(socket, advertised, true, Some(&report)).await?;
             let actual = selected.0.peer_addr()?;
-            if actual.ip() != advertised.ip() && !crate::server::ip_allowed(actual.ip()) {
+            if (actual.ip() != advertised.ip() || peer_addr_v4.is_ipv6() && advertised.is_ipv4())
+                && !crate::server::ip_allowed(actual.ip()) {
                 anyhow::bail!("UDP source is outside the IP whitelist");
             }
             selected

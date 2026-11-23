@@ -1419,6 +1419,8 @@ impl Client {
             version: crate::VERSION.to_owned(),
             udp_port: udp_nat_port as _,
             udp_mapping_tickets: udp_candidates.tickets.clone().into(),
+            udp_lan_endpoint: udp.0.as_ref().map(|s| udp_candidates.lan_offer(s)).unwrap_or_default(),
+            udp_observed_ipv4: udp_candidates.observed_ipv4,
             force_relay: interface.is_force_relay() && !direct_permission.direct_only,
             direct_only: direct_permission.direct_only,
             socket_addr_v6: ipv6.1.unwrap_or_default(),
@@ -1525,6 +1527,7 @@ impl Client {
                                     if let Some(key) = hbb_common::sodiumoxide::crypto::auth::Key::from_slice(&ph.udp_probe_key)
                                         .filter(|_| !udp_candidates.tickets.is_empty() && exchanged)
                                     {
+                                        udp_candidates.lan_peer = hbb_common::lan_udp::endpoint(&ph.udp_lan_endpoint);
                                         udp_paths = Some(crate::p2p::udp_paths::Paths {
                                             local: std::mem::take(&mut udp_candidates), ports: ph.udp_candidate_ports, key,
                                         });

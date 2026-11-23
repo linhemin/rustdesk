@@ -124,6 +124,13 @@ pub(crate) async fn connect_udp_observer(
     socket_client::connect_tcp_local(observer, Some(local), 1_500).await
 }
 
+pub(crate) fn observed_peer(signaling: SocketAddr, ipv4: u32, verified: bool) -> SocketAddr {
+    let ip = std::net::Ipv4Addr::from(ipv4);
+    if verified && signaling.is_ipv6() && super::usable_server_ipv4(ip) && !ip.is_private() {
+        SocketAddr::from((ip, signaling.port()))
+    } else { signaling }
+}
+
 // Only the selected hbbs address can be an alternate. Preserve its reported
 // inside address separately so IP access checks still see the signaling peer.
 pub(crate) fn peer_candidate(peer: SocketAddr, server: SocketAddr, hint: &[u8]) -> SocketAddr {

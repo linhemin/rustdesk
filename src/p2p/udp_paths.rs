@@ -42,9 +42,11 @@ impl std::error::Error for Counts {}
 pub(crate) struct Candidates {
     sockets: Vec<Arc<UdpSocket>>,
     pub tickets: Vec<u8>,
+    pub observed_ipv4: u32,
+    pub lan_peer: Option<SocketAddr>,
 }
 
-async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primary: Option<(&UdpSocket, Option<u16>)>) -> Option<(Arc<UdpSocket>, Vec<u8>, bool)> {
+async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primary: Option<(&UdpSocket, Option<u16>)>) -> Option<(Arc<UdpSocket>, Vec<u8>, bool, u32)> {
     // The primary port is advertised independently of the secondary receipts.
     // Use one existing observation slot to preserve that source port toward the peer.
     let preferred = if let Some((socket, observed)) = primary {
@@ -91,6 +93,9 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primar
                     Arc::new(socket),
                     buf[pos + 4..pos + 4 + RECEIPT_SIZE].to_vec(),
                     expanded,
+                    if pos == 32 && buf[24..26] == [0, 1] {
+                        u32::from_be_bytes([buf[28], buf[29], buf[30], buf[31]]) ^ 0x2112a442
+                    } else { 0 },
                 ));
             }
             return None; // An older hbbs supplied a standard binding response.
@@ -100,6 +105,12 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primar
 }
 
 impl Candidates {
+    pub fn lan_offer(&self, primary: &UdpSocket) -> String {
+        if self.tickets.is_empty() { return String::new(); }
+        primary.local_addr().ok().map(|a| a.to_string())
+            .filter(|s| hbb_common::lan_udp::endpoint(s).is_some()).unwrap_or_default()
+    }
+
     pub async fn gather(primary: &UdpSocket, nas: SocketAddr, wide: bool, observed: Option<u16>) -> Self {
         let mut result = Self::default();
         let Ok(source) = primary.local_addr() else { return result; };
@@ -111,7 +122,8 @@ impl Candidates {
             .collect();
         let mut extended = false;
         while let Some(candidate) = jobs.next().await {
-            if let Some((socket, ticket, supported)) = candidate {
+            if let Some((socket, ticket, supported, ip)) = candidate {
+                if result.observed_ipv4 == 0 { result.observed_ipv4 = ip; }
                 result.sockets.push(socket);
                 result.tickets.extend(ticket);
                 if supported && !extended {
@@ -211,7 +223,15 @@ impl Paths {
         let mut jobs: FuturesUnordered<_> = std::iter::once(primary)
             .chain(self.local.sockets)
             .enumerate()
-            .map(|(i, s)| check_socket(s, destinations.clone(), listen, &key, report.and_then(|r| r.ports.get(i))))
+            .map(|(i, s)| {
+                let mut peers = destinations.clone();
+                if i == 0 {
+                    if let Some(lan) = self.local.lan_peer.filter(|a| !peers.contains(a)) {
+                        peers.insert(1, lan);
+                    }
+                }
+                check_socket(s, peers, listen, &key, report.and_then(|r| r.ports.get(i)))
+            })
             .collect();
         let mut totals = Counts {
             sockets: count,
@@ -384,6 +404,31 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn private_candidate_carries_kcp_when_the_public_route_is_unreachable() {
+        let a = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let b = Arc::new(UdpSocket::bind("127.0.0.2:0").await.unwrap());
+        let unreachable = UdpSocket::bind("127.0.0.3:0").await.unwrap();
+        let public = unreachable.local_addr().unwrap();
+        let key = auth::gen_key();
+        let paths = |peer| Paths {
+            local: Candidates { lan_peer: Some(peer), ..Default::default() },
+            ports: Vec::new(),
+            key: key.clone(),
+        };
+        let left = paths(b.local_addr().unwrap());
+        let right = paths(a.local_addr().unwrap());
+        let accept = async {
+            let (socket, syn) = right.select(b, public, true).await.unwrap();
+            KcpStream::accept(socket, Duration::from_secs(2), syn).await.unwrap()
+        };
+        let dial = async {
+            let (socket, _) = left.select(a, public, false).await.unwrap();
+            KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
+        };
+        let (_, _) = tokio::join!(accept, dial);
+    }
+
+    #[tokio::test]
     async fn nas_observes_a_secondary_socket_on_the_primary_mapped_port() {
         let nas = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let primary = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -410,7 +455,7 @@ mod tests {
         let peer = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let primary = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
-        let mut local = Candidates { sockets: Vec::new(), tickets: vec![0; RECEIPT_SIZE] };
+        let mut local = Candidates { sockets: Vec::new(), tickets: vec![0; RECEIPT_SIZE], ..Default::default() };
         local.tickets[..2].copy_from_slice(&port.to_be_bytes());
         local.bind_observed_ports(primary.local_addr().unwrap()).await;
         let key = auth::gen_key();
@@ -451,7 +496,7 @@ mod tests {
         let key = auth::gen_key();
         let id = probe_report::id(&key);
         let paths = Paths { key: key.clone(), ports: vec![],
-            local: Candidates { sockets: vec![extra], tickets: vec![] } };
+            local: Candidates { sockets: vec![extra], ..Default::default() } };
         let recording = paths.record(&controlled).unwrap();
         assert!(probe_report::take(&[0; 32]).is_none());
         let done = probe_report::take(&id).unwrap();
@@ -524,7 +569,7 @@ mod tests {
         let responder = Paths {
             local: Candidates {
                 sockets: vec![alternate],
-                tickets: vec![],
+                ..Default::default()
             },
             ports: vec![],
             key,
