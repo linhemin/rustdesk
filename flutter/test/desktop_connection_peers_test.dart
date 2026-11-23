@@ -104,7 +104,7 @@ void main() {
     }
     await mount(devicesOnly: true);
     expect(peerCardUiType.value, PeerUiType.grid);
-    expect(find.byIcon(Icons.grid_view_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
     if (isWindows || isMacOS) {
       await tester.tap(find.byTooltip('Search'));
       await settle();
@@ -121,7 +121,7 @@ void main() {
       await settle();
     }
     await mount();
-    expect(find.byIcon(Icons.grid_view_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
     debugDefaultTargetPlatformOverride = null;

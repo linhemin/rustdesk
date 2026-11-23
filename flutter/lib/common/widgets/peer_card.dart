@@ -103,7 +103,7 @@ class _PeerCardState extends State<_PeerCard>
       remoteId: formatID(peer.id),
       platform: peer.platform,
       platformIcon: switch (peer.platform.toLowerCase()) {
-        'mac os' || 'macos' || 'darwin' => Icons.grid_view_rounded,
+        'mac os' || 'macos' || 'darwin' => Icons.grid_view_outlined,
         'windows' => Icons.window_outlined,
         'linux' => Icons.terminal_rounded,
         'android' || 'ios' => Icons.smartphone_outlined,
