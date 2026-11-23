@@ -9,6 +9,7 @@ import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart' show changeIdDialog;
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
@@ -25,6 +26,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
 import '../../native/apple_workspace_navigation.dart';
+import '../incoming_connection_link.dart';
 import '../widgets/button.dart';
 
 class DesktopHomePage extends StatefulWidget {
@@ -208,9 +210,35 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         listenable: model,
         builder: (context, _) =>
             ListView(padding: const EdgeInsets.all(24), children: [
-              Text(translate('Your Desktop'),
-                  style: theme.textTheme.headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.w700)),
+              Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(translate('Your Desktop'),
+                        style: theme.textTheme.headlineSmall
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    Obx(() => Chip(
+                          avatar: Icon(Icons.circle,
+                              size: 8,
+                              color: !svcStopped.value &&
+                                      stateGlobal.svcStatus.value ==
+                                          SvcStatus.ready
+                                  ? WorkspaceStyle.green
+                                  : theme.hintColor),
+                          label: Text(
+                              translate(svcStopped.value
+                                  ? 'Service is not running'
+                                  : stateGlobal.svcStatus.value ==
+                                          SvcStatus.ready
+                                      ? 'Service is running'
+                                      : stateGlobal.svcStatus.value ==
+                                              SvcStatus.connecting
+                                          ? 'connecting_status'
+                                          : 'not_ready_status'),
+                              style: const TextStyle(fontSize: 12)),
+                        )),
+                  ]),
               const SizedBox(height: 6),
               Text(translate('desk_tip'),
                   style: TextStyle(color: theme.hintColor)),
@@ -268,6 +296,71 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                                           : () => _copyLocalId(
                                                               value.text)),
                                                 ])),
+                                        const SizedBox(height: 12),
+                                        ValueListenableBuilder<
+                                                TextEditingValue>(
+                                            valueListenable: model.serverId,
+                                            builder:
+                                                (context, value, _) => Wrap(
+                                                        spacing: 8,
+                                                        runSpacing: 8,
+                                                        children: [
+                                                          OutlinedButton.icon(
+                                                            icon: const Icon(
+                                                                Icons
+                                                                    .link_rounded,
+                                                                size: 16),
+                                                            label: Text(translate(
+                                                                'Copy invitation')),
+                                                            onPressed: value
+                                                                        .text
+                                                                        .trim()
+                                                                        .isEmpty ||
+                                                                    value.text ==
+                                                                        translate(
+                                                                            'Generating ...')
+                                                                ? null
+                                                                : () =>
+                                                                    _copyLocalId(
+                                                                        incomingConnectionLink(
+                                                                      uriPrefix:
+                                                                          bind.mainUriPrefixSync(),
+                                                                      id: value
+                                                                          .text
+                                                                          .replaceAll(
+                                                                              ' ',
+                                                                              ''),
+                                                                      server: bind
+                                                                          .mainGetOptionSync(
+                                                                              key: 'custom-rendezvous-server'),
+                                                                      key: bind.mainGetOptionSync(
+                                                                          key:
+                                                                              'key'),
+                                                                    )),
+                                                          ),
+                                                          if (!bind
+                                                                  .isDisableSettings() &&
+                                                              bind.mainGetBuildinOption(
+                                                                      key:
+                                                                          kOptionHideSecuritySetting) !=
+                                                                  'Y')
+                                                            TextButton(
+                                                              onPressed:
+                                                                  model.connectStatus <=
+                                                                          0
+                                                                      ? null
+                                                                      : () {
+                                                                          if (bind
+                                                                              .mainIsInstalled()) {
+                                                                            DesktopSettingPage.switch2page(SettingsTabKey.safety);
+                                                                          } else {
+                                                                            changeIdDialog();
+                                                                          }
+                                                                        },
+                                                              child: Text(translate(
+                                                                  'Change ID')),
+                                                            ),
+                                                        ])),
                                       ]))),
                           SizedBox(
                               width: width,
@@ -297,14 +390,26 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                             Text(translate('Security'),
                                 style: theme.textTheme.labelLarge),
                             const SizedBox(height: 6),
-                            Text(
-                                translate(model.approveMode == 'password'
-                                    ? 'Accept sessions via password'
-                                    : model.approveMode == 'click'
-                                        ? 'Accept sessions via click'
-                                        : 'Accept sessions via both'),
-                                style: theme.textTheme.bodySmall
-                                    ?.copyWith(color: theme.hintColor)),
+                            for (final mode in {
+                              'password': 'Accept sessions via password',
+                              'click': 'Accept sessions via click',
+                              defaultOptionApproveMode:
+                                  'Accept sessions via both',
+                            }.entries)
+                              RadioListTile<String>(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(translate(mode.value),
+                                    style: theme.textTheme.bodyMedium),
+                                value: mode.key,
+                                groupValue: const ['password', 'click']
+                                        .contains(model.approveMode)
+                                    ? model.approveMode
+                                    : defaultOptionApproveMode,
+                                onChanged: bind.mainIsInstalled() ||
+                                        isOptionFixed(kOptionApproveMode)
+                                    ? null
+                                    : (value) => model.setApproveMode(value!),
+                              ),
                           ],
                         )),
                         const SizedBox(width: 12),
@@ -317,9 +422,57 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                     ),
                   ),
                 ),
+              if (isMacOS) _incomingMacPermissions(context),
               if (visible)
                 Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
             ]));
+  }
+
+  Widget _incomingMacPermissions(BuildContext context) {
+    Widget row(String label, bool granted, VoidCallback configure) => ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(
+              granted ? Icons.check_circle_outline : Icons.warning_amber,
+              color: granted ? WorkspaceStyle.green : WorkspaceStyle.amber),
+          title: Text(translate(label)),
+          trailing: granted
+              ? Text(translate('Permission granted'),
+                  style: Theme.of(context).textTheme.bodySmall)
+              : TextButton(
+                  onPressed: configure, child: Text(translate('Configure'))),
+        );
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 720),
+        margin: const EdgeInsets.only(top: 16),
+        child: WorkspacePanel(
+          radius: 12,
+          padding: const EdgeInsets.all(16),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(translate('Permissions'),
+                style: Theme.of(context).textTheme.labelLarge),
+            row('Screen recording',
+                bind.mainIsCanScreenRecording(prompt: false), () {
+              bind.mainIsCanScreenRecording(prompt: true);
+              launchUrl(Uri.parse(
+                  'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'));
+              watchIsCanScreenRecording = true;
+            }),
+            row('Accessibility', bind.mainIsProcessTrusted(prompt: false), () {
+              bind.mainIsProcessTrusted(prompt: true);
+              watchIsProcessTrust = true;
+            }),
+            row('Input monitoring',
+                bind.mainIsCanInputMonitoring(prompt: false), () {
+              bind.mainIsCanInputMonitoring(prompt: true);
+              watchIsInputMonitoring = true;
+            }),
+          ]),
+        ),
+      ),
+    );
   }
 
   Widget buildLeftPane(BuildContext context) {
@@ -1216,6 +1369,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
       shouldBeBlocked(_block, canBeBlocked);
+      if (isMacOS && usesWorkspaceStyle) setState(() {});
     }
   }
 }

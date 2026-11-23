@@ -219,3 +219,86 @@ class WorkspaceSettingsChoice extends StatelessWidget {
         ),
       );
 }
+
+class WorkspaceSettingsThemePicker extends StatelessWidget {
+  const WorkspaceSettingsThemePicker({
+    super.key,
+    required this.value,
+    required this.labels,
+    this.onChanged,
+  });
+
+  final String value;
+  final Map<String, String> labels;
+  final ValueChanged<String>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final entry in labels.entries)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Semantics(
+              selected: value == entry.key,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.all(8),
+                  foregroundColor: theme.colorScheme.onSurface,
+                  side: BorderSide(
+                    color: value == entry.key
+                        ? theme.colorScheme.primary
+                        : theme.dividerColor,
+                    width: value == entry.key ? 2 : 1,
+                  ),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed:
+                    onChanged == null ? null : () => onChanged!(entry.key),
+                child: Column(children: [
+                  Container(
+                    height: 64,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      gradient: LinearGradient(
+                        colors: entry.key == 'system'
+                            ? const [Color(0xfff5f6f9), Color(0xff151921)]
+                            : List.filled(
+                                2,
+                                entry.key == 'dark'
+                                    ? const Color(0xff151921)
+                                    : const Color(0xfff5f6f9)),
+                        stops: const [0.5, 0.5],
+                      ),
+                    ),
+                    child: Row(children: [
+                      Container(
+                          width: 20,
+                          margin: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withOpacity(.2),
+                              borderRadius: BorderRadius.circular(3))),
+                      Expanded(
+                          child: Container(
+                              margin: const EdgeInsets.fromLTRB(0, 6, 6, 6),
+                              decoration: BoxDecoration(
+                                  color: entry.key == 'dark'
+                                      ? const Color(0xff262c38)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(3)))),
+                    ]),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(entry.value,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+    ]);
+  }
+}

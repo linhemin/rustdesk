@@ -862,5 +862,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("LAN", "區域網路"),
         ("Enter remote ID or device name…", "輸入遠端 ID 或裝置名稱…"),
         ("Scan QR code", "掃描 QR 碼"),
+        ("Audio and recording", "音訊與錄製"),
+        ("Display and quality", "顯示與畫質"),
+        ("Back to workspace", "返回工作區"),
+        ("Copy invitation", "複製邀請"),
+        ("Screen recording", "螢幕錄製"),
+        ("Accessibility", "輔助使用"),
+        ("Input monitoring", "輸入監控"),
+        ("Permission granted", "已授權"),
     ].iter().cloned().collect();
 }

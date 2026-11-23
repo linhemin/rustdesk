@@ -15,6 +15,7 @@ import 'package:flutter_hbb/common/widgets/keyboard_shortcuts/page_body.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_keyboard_shortcuts_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
+import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/printer_model.dart';
@@ -45,6 +46,9 @@ const Color _accentColor = MyTheme.accent;
 const String _kSettingPageControllerTag = 'settingPageController';
 const String _kSettingPageTabKeyTag = 'settingPageTabKey';
 
+bool get _expandedDesktopSettings =>
+    usesWorkspaceStyle && (isWindows || isMacOS);
+
 class _TabInfo {
   late final SettingsTabKey key;
   late final String label;
@@ -61,6 +65,9 @@ enum SettingsTabKey {
   account,
   printer,
   about,
+  appearance,
+  audio,
+  shortcuts,
 }
 
 class DesktopSettingPage extends StatefulWidget {
@@ -68,7 +75,11 @@ class DesktopSettingPage extends StatefulWidget {
   static final List<SettingsTabKey> tabKeys = [
     if (bind.mainGetBuildinOption(key: kOptionHideGeneralSetting) != 'Y')
       SettingsTabKey.general,
-    if (!isWeb &&
+    if (_expandedDesktopSettings &&
+        bind.mainGetBuildinOption(key: kOptionHideGeneralSetting) != 'Y')
+      SettingsTabKey.appearance,
+    if (!_expandedDesktopSettings &&
+        !isWeb &&
         !bind.isOutgoingOnly() &&
         !bind.isDisableSettings() &&
         bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
@@ -76,7 +87,19 @@ class DesktopSettingPage extends StatefulWidget {
     if (!bind.isDisableSettings() &&
         bind.mainGetBuildinOption(key: kOptionHideNetworkSetting) != 'Y')
       SettingsTabKey.network,
+    if (_expandedDesktopSettings &&
+        !bind.isOutgoingOnly() &&
+        !bind.isDisableSettings() &&
+        bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
+      SettingsTabKey.safety,
     if (!bind.isIncomingOnly()) SettingsTabKey.display,
+    if (_expandedDesktopSettings &&
+        bind.mainGetBuildinOption(key: kOptionHideGeneralSetting) != 'Y')
+      SettingsTabKey.audio,
+    if (_expandedDesktopSettings &&
+        !bind.isIncomingOnly() &&
+        bind.mainGetBuildinOption(key: kOptionHideGeneralSetting) != 'Y')
+      SettingsTabKey.shortcuts,
     if (!bind.isDisableAccount()) SettingsTabKey.account,
     if (isWindows &&
         !bind.isDisableSettings() &&
@@ -205,6 +228,18 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           settingTabs.add(_TabInfo(
               tab, 'General', Icons.settings_outlined, Icons.settings));
           break;
+        case SettingsTabKey.appearance:
+          settingTabs.add(_TabInfo(
+              tab, 'Appearance', Icons.palette_outlined, Icons.palette));
+          break;
+        case SettingsTabKey.audio:
+          settingTabs.add(
+              _TabInfo(tab, 'Audio and recording', Icons.mic_none, Icons.mic));
+          break;
+        case SettingsTabKey.shortcuts:
+          settingTabs.add(_TabInfo(tab, 'Keyboard shortcuts',
+              Icons.keyboard_outlined, Icons.keyboard));
+          break;
         case SettingsTabKey.safety:
           settingTabs.add(_TabInfo(tab, 'Security',
               Icons.enhanced_encryption_outlined, Icons.enhanced_encryption));
@@ -214,8 +249,11 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
               .add(_TabInfo(tab, 'Network', Icons.link_outlined, Icons.link));
           break;
         case SettingsTabKey.display:
-          settingTabs.add(_TabInfo(tab, 'Display',
-              Icons.desktop_windows_outlined, Icons.desktop_windows));
+          settingTabs.add(_TabInfo(
+              tab,
+              _expandedDesktopSettings ? 'Display and quality' : 'Display',
+              Icons.desktop_windows_outlined,
+              Icons.desktop_windows));
           break;
         case SettingsTabKey.account:
           settingTabs.add(
@@ -240,6 +278,11 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
       switch (tab) {
         case SettingsTabKey.general:
           children.add(const _General());
+          break;
+        case SettingsTabKey.appearance:
+        case SettingsTabKey.audio:
+        case SettingsTabKey.shortcuts:
+          children.add(_General(section: tab));
           break;
         case SettingsTabKey.safety:
           children.add(const _Safety());
@@ -295,13 +338,17 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         SettingsTabKey.account => WorkspaceStyle.indigo,
         SettingsTabKey.printer => WorkspaceStyle.purple,
         SettingsTabKey.about => const Color(0xff8e8e93),
+        SettingsTabKey.appearance => WorkspaceStyle.purple,
+        SettingsTabKey.audio => Colors.red,
+        SettingsTabKey.shortcuts => WorkspaceStyle.indigo,
       };
 
   String _groupFor(SettingsTabKey key) => switch (key) {
-        SettingsTabKey.general => 'General',
+        SettingsTabKey.general || SettingsTabKey.appearance => 'General',
         SettingsTabKey.safety ||
         SettingsTabKey.network ||
-        SettingsTabKey.display =>
+        SettingsTabKey.display ||
+        SettingsTabKey.audio =>
           'Connection',
         _ => 'Other',
       };
@@ -423,6 +470,17 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                               }),
                             ],
                           ])),
+                      if (_expandedDesktopSettings)
+                        Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: TextButton.icon(
+                            onPressed: () => Get.find<DesktopTabController>()
+                                .jumpToByKey(kTabLabelHomePage),
+                            icon:
+                                const Icon(Icons.arrow_back_rounded, size: 16),
+                            label: Text(translate('Back to workspace')),
+                          ),
+                        ),
                     ]),
               ),
             Expanded(
@@ -614,7 +672,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
 //#region pages
 
 class _General extends StatefulWidget {
-  const _General({Key? key}) : super(key: key);
+  const _General({Key? key, this.section = SettingsTabKey.general})
+      : super(key: key);
+  final SettingsTabKey section;
 
   @override
   State<_General> createState() => _GeneralState();
@@ -628,6 +688,42 @@ class _GeneralState extends State<_General> {
 
   @override
   Widget build(BuildContext context) {
+    if (_expandedDesktopSettings) {
+      if (widget.section == SettingsTabKey.network) {
+        return _Card(title: 'P2P', children: [
+          for (final option in {
+            kOptionEnableUdpPunch: 'Enable UDP hole punching',
+            kOptionEnableIpv6Punch: 'Enable IPv6 P2P connection',
+            kOptionEnableTcpPunch: 'Enable TCP hole punching',
+          }.entries)
+            _OptionCheckBox(context, option.value, option.key, isServer: false),
+          ...webrtcOptions(context),
+        ]);
+      }
+      if (widget.section == SettingsTabKey.display) return hwcodec();
+      return ListView(children: [
+        if (widget.section == SettingsTabKey.general) ...[
+          service(),
+          _Card(title: 'Language', children: [
+            Align(
+                alignment: AlignmentDirectional.centerEnd,
+                child: SizedBox(width: 200, child: language())),
+          ]),
+          if (!DesktopSettingPage.tabKeys.contains(SettingsTabKey.display))
+            hwcodec(),
+          WaylandCard(),
+          other(
+              includeNetwork:
+                  !DesktopSettingPage.tabKeys.contains(SettingsTabKey.network)),
+        ],
+        if (widget.section == SettingsTabKey.appearance) theme(),
+        if (widget.section == SettingsTabKey.audio) ...[
+          audio(context),
+          record(context),
+        ],
+        if (widget.section == SettingsTabKey.shortcuts) keyboardShortcuts(),
+      ]).marginOnly(bottom: _kListViewBottomMargin);
+    }
     final scrollController = ScrollController();
     return ListView(
       controller: scrollController,
@@ -697,6 +793,19 @@ class _GeneralState extends State<_General> {
     }
 
     final isOptFixed = isOptionFixed(kCommConfKeyTheme);
+    if (_expandedDesktopSettings) {
+      return _Card(title: 'Theme', children: [
+        WorkspaceSettingsThemePicker(
+          value: current,
+          labels: {
+            'light': translate('Light'),
+            'dark': translate('Dark'),
+            'system': translate('Follow System'),
+          },
+          onChanged: isOptFixed ? null : onChanged,
+        ),
+      ]);
+    }
     if (isWindows || isMacOS) {
       const themes = {
         'light': 'Light',
@@ -781,7 +890,7 @@ class _GeneralState extends State<_General> {
     });
   }
 
-  Widget other() {
+  Widget other({bool includeNetwork = true}) {
     final incomingOnly = bind.isIncomingOnly();
     final outgoingOnly = bind.isOutgoingOnly();
     final showAutoUpdate = (isWindows && bind.mainIsInstalled()) ||
@@ -876,7 +985,7 @@ class _GeneralState extends State<_General> {
           'Capture screen using DirectX',
           kOptionDirectxCapture,
         ),
-      if (!isWeb && !incomingOnly) ...[
+      if (includeNetwork && !isWeb && !incomingOnly) ...[
         _OptionCheckBox(
           context,
           'Enable TCP hole punching',
@@ -896,7 +1005,7 @@ class _GeneralState extends State<_General> {
           isServer: false,
         ),
       ],
-      if (!incomingOnly) ...webrtcOptions(context),
+      if (includeNetwork && !incomingOnly) ...webrtcOptions(context),
       if (!isWeb && !incomingOnly)
         Tooltip(
           message: translate('sync-clipboard-between-sessions-tip'),
@@ -2140,9 +2249,49 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
       preventMouseKeyBuilder(
         block: locked,
         child: Column(children: [
+          if (_expandedDesktopSettings &&
+              bind.mainGetBuildinOption(key: kOptionHideServerSetting) != 'Y')
+            _Card(title: 'ID/Relay Server', children: [
+              ListTile(
+                leading: const Icon(Icons.dns_outlined),
+                title: SelectableText(bind
+                        .mainGetOptionSync(key: 'custom-rendezvous-server')
+                        .isEmpty
+                    ? translate('Default')
+                    : bind.mainGetOptionSync(key: 'custom-rendezvous-server')),
+                subtitle: bind.mainGetOptionSync(key: 'relay-server').isEmpty
+                    ? null
+                    : SelectableText(
+                        bind.mainGetOptionSync(key: 'relay-server')),
+                trailing: OutlinedButton(
+                  onPressed: locked
+                      ? null
+                      : () => showServerSettings(gFFI.dialogManager, setState),
+                  child: Text(translate('Edit')),
+                ),
+              ),
+            ]),
           network(context),
         ]),
       ),
+      if (_expandedDesktopSettings) ...[
+        if (!bind.isIncomingOnly() &&
+            DesktopSettingPage.tabKeys.contains(SettingsTabKey.general))
+          const _General(section: SettingsTabKey.network),
+        _Card(title: 'Diagnostics', children: [
+          Obx(() => ListTile(
+                title: Text(translate('Status')),
+                subtitle: Text(translate(Get.find<RxBool>(tag: 'stop-service')
+                        .value
+                    ? 'Service is not running'
+                    : stateGlobal.svcStatus.value == SvcStatus.ready
+                        ? 'Ready'
+                        : stateGlobal.svcStatus.value == SvcStatus.connecting
+                            ? 'connecting_status'
+                            : 'not_ready_status')),
+              )),
+        ]),
+      ],
     ]).marginOnly(bottom: _kListViewBottomMargin);
   }
 
@@ -2155,6 +2304,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
         bind.mainGetBuildinOption(key: kOptionHideWebSocketSetting) == 'Y';
     final showP2pInterface = !hideServer && !isWeb && isWindows;
     final showDirectOnly = (isWindows || isMacOS) && !bind.isIncomingOnly();
+    final showServerRow = !hideServer && !_expandedDesktopSettings;
     final p2pInterface = showP2pInterface
         ? bind.mainGetOptionSync(key: kOptionP2pInterfaceIp)
         : '';
@@ -2241,20 +2391,20 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
 
     final divider = const Divider(height: 1, indent: 16, endIndent: 16);
     return _Card(
-      title: 'Network',
+      title: _expandedDesktopSettings ? 'Connection' : 'Network',
       children: [
         Container(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!hideServer)
+              if (showServerRow)
                 listTile(
                   icon: Icons.dns_outlined,
                   title: 'ID/Relay Server',
                   onTap: () => showServerSettings(gFFI.dialogManager, setState),
                 ),
               if (showDirectOnly) ...[
-                if (!hideServer) divider,
+                if (showServerRow) divider,
                 ListTileTheme.merge(
                   minLeadingWidth: 0,
                   horizontalTitleGap: 10,
@@ -2287,14 +2437,16 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                       : _selectP2pInterface,
                 ),
               ],
-              if (!hideProxy && (!hideServer || showDirectOnly)) divider,
+              if (!hideProxy && (showServerRow || showDirectOnly)) divider,
               if (!hideProxy)
                 listTile(
                   icon: Icons.network_ping_outlined,
                   title: 'Socks5/Http(s) Proxy',
                   onTap: changeSocks5Proxy,
                 ),
-              if (!hideWebSocket && (!hideServer || !hideProxy || showDirectOnly)) divider,
+              if (!hideWebSocket &&
+                  (showServerRow || !hideProxy || showDirectOnly))
+                divider,
               if (!hideWebSocket)
                 switchWidget(
                     Icons.web_asset_outlined,
@@ -2365,6 +2517,9 @@ class _DisplayState extends State<_Display> {
   Widget build(BuildContext context) {
     final scrollController = ScrollController();
     return ListView(controller: scrollController, children: [
+      if (_expandedDesktopSettings &&
+          DesktopSettingPage.tabKeys.contains(SettingsTabKey.general))
+        const _General(section: SettingsTabKey.display),
       viewStyle(context),
       scrollStyle(context),
       imageQuality(context),

@@ -9,6 +9,55 @@ import 'package:settings_ui/settings_ui.dart';
 
 void main() {
   testWidgets(
+      'desktop terminal offers labeled clipboard and disconnect actions',
+      (tester) async {
+    final actions = <String>[];
+    await tester.pumpWidget(MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.macOS),
+      home: Scaffold(
+          body: TerminalToolbar(
+        peer: '123456789',
+        copyLabel: 'Copy',
+        pasteLabel: 'Paste',
+        closeLabel: 'Disconnect',
+        onCopy: () => actions.add('copy'),
+        onPaste: () => actions.add('paste'),
+        onClose: () => actions.add('disconnect'),
+      )),
+    ));
+    for (final label in ['Copy', 'Paste', 'Disconnect']) {
+      await tester.tap(find.text(label));
+    }
+    expect(actions, ['copy', 'paste', 'disconnect']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('theme choices retain system preference and respect managed mode',
+      (tester) async {
+    var current = 'system';
+    Widget picker(bool managed) => MaterialApp(
+            home: Scaffold(
+          body: WorkspaceSettingsThemePicker(
+            value: current,
+            labels: const {
+              'light': 'Light',
+              'dark': 'Dark',
+              'system': 'Follow System'
+            },
+            onChanged: managed ? null : (value) => current = value,
+          ),
+        ));
+    await tester.pumpWidget(picker(false));
+    expect(find.text('Follow System'), findsOneWidget);
+    await tester.tap(find.text('Dark'));
+    expect(current, 'dark');
+    await tester.pumpWidget(picker(true));
+    await tester.tap(find.text('Light'));
+    expect(current, 'dark');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
       'terminal actions stay reachable with a long peer on a small phone',
       (tester) async {
     tester.view.devicePixelRatio = 1;

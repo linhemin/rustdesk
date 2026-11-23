@@ -211,26 +211,36 @@ class _TerminalPageState extends State<TerminalPage>
           : Theme.of(context).scaffoldBackgroundColor,
       body: Column(children: [
         if (usesWorkspaceStyle)
-          TerminalToolbar(
-            peer: widget.id,
-            copyLabel: translate('Copy'),
-            pasteLabel: translate('Paste'),
-            closeLabel: translate('Disconnect'),
-            onCopy: () async {
-              final selection = _terminalModel.terminalController.selection;
-              if (selection == null) return;
-              final text = _terminalModel.terminal.buffer.getText(selection);
-              await Clipboard.setData(ClipboardData(text: text));
-              _requestFocusIfSelected();
-            },
-            onPaste: () async {
-              final data = await Clipboard.getData(Clipboard.kTextPlain);
-              if (!mounted || data?.text == null) return;
-              await _terminalModel.pasteText(data!.text!);
-              _requestFocusIfSelected();
-            },
-            onClose: widget.onClose,
-          ),
+          ListenableBuilder(
+              listenable: _ffi.qualityMonitorModel,
+              builder: (context, _) => TerminalToolbar(
+                    peer: [
+                      widget.id,
+                      if (_ffi.qualityMonitorModel.data.delay?.isNotEmpty ==
+                          true)
+                        '${_ffi.qualityMonitorModel.data.delay} ms',
+                    ].join(' · '),
+                    copyLabel: translate('Copy'),
+                    pasteLabel: translate('Paste'),
+                    closeLabel: translate('Disconnect'),
+                    onCopy: () async {
+                      final selection =
+                          _terminalModel.terminalController.selection;
+                      if (selection == null) return;
+                      final text =
+                          _terminalModel.terminal.buffer.getText(selection);
+                      await Clipboard.setData(ClipboardData(text: text));
+                      _requestFocusIfSelected();
+                    },
+                    onPaste: () async {
+                      final data =
+                          await Clipboard.getData(Clipboard.kTextPlain);
+                      if (!mounted || data?.text == null) return;
+                      await _terminalModel.pasteText(data!.text!);
+                      _requestFocusIfSelected();
+                    },
+                    onClose: widget.onClose,
+                  )),
         Expanded(child: LayoutBuilder(
           builder: (context, constraints) {
             final heightPx = constraints.maxHeight;
