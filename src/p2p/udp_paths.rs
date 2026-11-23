@@ -44,19 +44,22 @@ pub(crate) struct Candidates {
     pub tickets: Vec<u8>,
 }
 
-async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool) -> Option<(Arc<UdpSocket>, Vec<u8>, bool)> {
-    let local = SocketAddr::new(source.ip(), 0);
-    #[cfg(target_os = "windows")]
-    let pinned =
-        super::Interface::configured().filter(|i| source.ip() == std::net::IpAddr::V4(i.address));
-    #[cfg(target_os = "windows")]
-    let socket = if let Some(i) = pinned {
-        crate::platform::bind_p2p_stun_udp(i.address, i.index, 0, 0)?
-    } else {
-        UdpSocket::bind(local).await.ok()?
+async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primary: Option<(&UdpSocket, Option<u16>)>) -> Option<(Arc<UdpSocket>, Vec<u8>, bool)> {
+    // The primary port is advertised independently of the secondary receipts.
+    // Use one existing observation slot to preserve that source port toward the peer.
+    let preferred = if let Some((socket, observed)) = primary {
+        let port = match observed {
+            Some(port) => Some(port),
+            None => super::udp_mapping::observe_v4_port(socket, nas).await.ok(),
+        };
+        if let Some(port) = port.filter(|p| *p >= 32768 && *p != source.port()) {
+            bind_observed_port(source, port).await
+        } else { None }
+    } else { None };
+    let socket = match preferred {
+        Some(socket) => socket,
+        None => bind_observed_port(source, 0).await?,
     };
-    #[cfg(not(target_os = "windows"))]
-    let socket = UdpSocket::bind(local).await.ok()?;
     let mut request = [0; 96];
     request[..8].copy_from_slice(&[0, 1, 0, 76, 0x21, 0x12, 0xa4, 0x42]);
     randombytes::randombytes_into(&mut request[8..20]);
@@ -97,13 +100,14 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool) -> Opt
 }
 
 impl Candidates {
-    pub async fn gather(source: SocketAddr, nas: SocketAddr, wide: bool) -> Self {
+    pub async fn gather(primary: &UdpSocket, nas: SocketAddr, wide: bool, observed: Option<u16>) -> Self {
         let mut result = Self::default();
+        let Ok(source) = primary.local_addr() else { return result; };
         if source.ip().is_unspecified() {
             return result;
         }
         let mut jobs: FuturesUnordered<_> = (0..EXTRA_SOCKETS)
-            .map(|_| observed_socket(source, nas, wide))
+            .map(|_| observed_socket(source, nas, wide, None))
             .collect();
         let mut extended = false;
         while let Some(candidate) = jobs.next().await {
@@ -112,7 +116,9 @@ impl Candidates {
                 result.tickets.extend(ticket);
                 if supported && !extended {
                     extended = true;
-                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(|_| observed_socket(source, nas, wide)));
+                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(|i| {
+                        observed_socket(source, nas, wide, (i == EXTRA_SOCKETS).then_some((primary, observed)))
+                    }));
                 }
             }
         }
@@ -372,6 +378,28 @@ async fn check_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn nas_observes_a_secondary_socket_on_the_primary_mapped_port() {
+        let nas = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let primary = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let observer = async {
+            let mut request = [0; 96];
+            let (_, from) = nas.recv_from(&mut request).await.unwrap();
+            let mut reply = [0; 76];
+            reply[..4].copy_from_slice(&[1, 1, 0, 56]);
+            reply[4..20].copy_from_slice(&request[4..20]);
+            reply[20..24].copy_from_slice(&[0, 0x20, 0, 8]);
+            reply[32..36].copy_from_slice(&[0xc0, 0x51, 0, 38]);
+            nas.send_to(&reply, from).await.unwrap();
+            from.port()
+        };
+        let candidate = observed_socket(primary.local_addr().unwrap(), nas.local_addr().unwrap(), true, Some((&primary, Some(port))));
+        let (from, candidate) = tokio::join!(observer, candidate);
+        assert!(candidate.is_some());
+        assert_eq!(from, port);
+    }
 
     #[tokio::test]
     async fn direct_path_works_when_the_peer_can_only_reach_the_nas_observed_port() {
