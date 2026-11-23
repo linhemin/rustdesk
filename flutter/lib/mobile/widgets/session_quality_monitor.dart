@@ -138,7 +138,7 @@ class _MobileSessionQualityMonitorState
 class _QualityPosition extends SingleChildLayoutDelegate {
   _QualityPosition(this.offset);
   final Offset offset;
-  // Keep readings outside the native rail and gamepad areas at every drop.
+  // Reserve native controls' space when the viewport has room.
   static const _rightInset = 68.0;
   static const _bottomInset = 240.0;
 
@@ -149,16 +149,22 @@ class _QualityPosition extends SingleChildLayoutDelegate {
           .deflate(const EdgeInsets.fromLTRB(12, 12, _rightInset, 12));
 
   @override
-  Offset getPositionForChild(Size size, Size childSize) => Offset(
-        offset.dx.clamp(
-            12.0,
-            (size.width - childSize.width - _rightInset)
-                .clamp(12.0, double.infinity)),
-        offset.dy.clamp(
-            12.0,
-            (size.height - childSize.height - _bottomInset)
-                .clamp(12.0, double.infinity)),
-      );
+  Offset getPositionForChild(Size size, Size childSize) {
+    // Preserve at least 44px of drag travel instead of pinning a compact HUD.
+    final bottomInset = size.height - childSize.height - _bottomInset >= 56
+        ? _bottomInset
+        : 12.0;
+    return Offset(
+      offset.dx.clamp(
+          12.0,
+          (size.width - childSize.width - _rightInset)
+              .clamp(12.0, double.infinity)),
+      offset.dy.clamp(
+          12.0,
+          (size.height - childSize.height - bottomInset)
+              .clamp(12.0, double.infinity)),
+    );
+  }
 
   @override
   bool shouldRelayout(_QualityPosition oldDelegate) =>

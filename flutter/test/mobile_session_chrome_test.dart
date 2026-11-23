@@ -84,6 +84,12 @@ void main() {
     await tester.pump();
     expect(tester.getRect(card).right, lessThan(viewport.right - 68));
     expect(tester.getRect(card).bottom, lessThan(viewport.bottom - 240));
+    await tester.binding.setSurfaceSize(const Size(760, 390));
+    await tester.pump();
+    final compact = tester.getRect(card);
+    await tester.drag(find.text('直接连接 · TCP'), const Offset(0, -60));
+    await tester.pump();
+    expect(tester.getRect(card).top, lessThan(compact.top));
     expect(tester.takeException(), isNull);
   });
 
