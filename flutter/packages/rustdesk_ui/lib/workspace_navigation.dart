@@ -42,12 +42,14 @@ class WorkspaceNavigation extends StatelessWidget {
         final primary = theme.colorScheme.primary;
         final inkDefault = theme.colorScheme.onSurface;
         final muted = theme.hintColor;
-        final wide = bounds.maxWidth >= 740;
-        final railWidth = !wide
-            ? 64.0
-            : bounds.maxWidth < 950
-                ? 184.0
-                : 216.0;
+        final wide = nativeNavigation != null || bounds.maxWidth >= 740;
+        final railWidth = nativeNavigation != null
+            ? (bounds.maxWidth < 760 ? 164.0 : 216.0)
+            : !wide
+                ? 64.0
+                : bounds.maxWidth < 950
+                    ? 184.0
+                    : 216.0;
         Widget item(
             String label, IconData icon, bool selected, VoidCallback action) {
           final ink = selected ? primary : WorkspaceStyle.tertiaryInk(context);
@@ -126,12 +128,12 @@ class WorkspaceNavigation extends StatelessWidget {
                                         letterSpacing: -.4)))
                           ]
                         ])),
-                    if (wide && identity != null)
+                    if (wide && identity != null && bounds.maxWidth >= 740)
                       Padding(
                           padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
                           child: identity!),
                     Expanded(
-                        child: wide && nativeNavigation != null
+                        child: nativeNavigation != null
                             ? nativeNavigation!
                             : ListView(
                                 padding:

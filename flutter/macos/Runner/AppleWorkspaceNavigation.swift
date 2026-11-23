@@ -72,6 +72,10 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         if #available(macOS 11.0, *) { table.style = .plain }
         table.delegate = self
         table.dataSource = self
+        if navigationOnly {
+            table.target = self
+            table.action = #selector(rowClicked)
+        }
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -84,6 +88,12 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
             content.addSubview(item)
         }
         listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        if navigationOnly {
+            listHeight.priority = .defaultHigh
+            scroll.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor).isActive = true
+            scroll.hasVerticalScroller = true
+            scroll.autohidesScrollers = true
+        }
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -244,7 +254,14 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
 
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !applyingConfiguration, labels.indices.contains(table.selectedRow) else { return }
+        if table.action != nil, let type = NSApp.currentEvent?.type,
+           type == .leftMouseDown || type == .leftMouseUp { return }
         channel.invokeMethod("select", arguments: table.selectedRow)
+    }
+
+    @objc private func rowClicked() {
+        guard !applyingConfiguration, labels.indices.contains(table.clickedRow) else { return }
+        channel.invokeMethod("select", arguments: table.clickedRow)
     }
 }
 

@@ -145,20 +145,21 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         identity: incoming ? _localIdentitySummary(context) : null,
         footer: incoming ? const OnlineStatusWidget(compact: true) : null,
         nativeNavigation: isMacOS
-            ? AppleWorkspaceNavigation(
-                labels: [for (final item in destinations) item.label],
-                symbols: [
-                  'house',
-                  if (incoming) 'laptopcomputer',
-                  'display.2',
-                  'folder',
-                  'terminal',
-                ],
-                selected: current,
-                compact: false,
-                navigationOnly: true,
-                onSelect: select,
-              )
+            ? LayoutBuilder(
+                builder: (_, bounds) => AppleWorkspaceNavigation(
+                      labels: [for (final item in destinations) item.label],
+                      symbols: [
+                        'house',
+                        if (incoming) 'laptopcomputer',
+                        'display.2',
+                        'folder',
+                        'terminal',
+                      ],
+                      selected: current,
+                      compact: bounds.maxWidth < 200,
+                      navigationOnly: true,
+                      onSelect: select,
+                    ))
             : null,
         settings: translate('Settings'),
         onSettings:
@@ -184,8 +185,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           ? (sessions.result as String).split(',').where((id) => id.isNotEmpty)
           : const <String>[];
       if (mounted && _destination == destination && ids.isNotEmpty) {
-        await rustDeskWinManager.call(
-            WindowType.RemoteDesktop, kWindowEventActiveSession, ids.first);
+        await windowOnTop(sessions.windowId);
       }
     } on PlatformException catch (error) {
       debugPrint('Unable to focus remote session: $error');
