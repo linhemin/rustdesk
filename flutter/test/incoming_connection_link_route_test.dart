@@ -12,13 +12,18 @@ void main() {
         ['--connect', '$id@public'],
       );
     }
-    expect(
-      urlLinkToCmdArgs(Uri.parse(incomingConnectionLink(
-          uriPrefix: 'customdesk://',
-          id: 'MyDesk_1',
-          server: 'hbbs.example.invalid:21116',
-          key: 'a+public/key='))),
-      ['--connect', 'MyDesk_1@hbbs.example.invalid:21116?key=a+public/key='],
-    );
+    for (final server in [
+      'hbbs.example.invalid:21116',
+      '[2001:db8::1]:21116'
+    ]) {
+      expect(
+        urlLinkToCmdArgs(Uri.parse(incomingConnectionLink(
+            uriPrefix: 'customdesk://',
+            id: 'MyDesk_1',
+            server: server,
+            key: 'a+public/key='))),
+        ['--connect', 'MyDesk_1@$server?key=a+public/key='],
+      );
+    }
   });
 }

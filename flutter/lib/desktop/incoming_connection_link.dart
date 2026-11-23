@@ -5,8 +5,7 @@ String incomingConnectionLink({
   String key = '',
 }) {
   final target = '$id@${server.isEmpty ? 'public' : server}';
-  return Uri.parse('${uriPrefix}connect')
-      .replace(
-          path: '/$target', queryParameters: key.isEmpty ? null : {'key': key})
+  return Uri.parse('$uriPrefix$target')
+      .replace(queryParameters: key.isEmpty ? null : {'key': key})
       .toString();
 }
