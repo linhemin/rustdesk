@@ -31,6 +31,15 @@ class _Options extends Fake implements RustdeskImpl {
   bool show = true;
 
   @override
+  Future<void> sessionToggleOption(
+      {required UuidValue sessionId,
+      required String value,
+      dynamic hint}) async {
+    expect(value, 'show-quality-monitor');
+    show = !show;
+  }
+
+  @override
   Future<bool?> sessionGetToggleOption(
       {required UuidValue sessionId, required String arg, dynamic hint}) async {
     expect(arg, 'show-quality-monitor');
@@ -100,7 +109,7 @@ void main() {
         '\n\nlocal port → destination | TX | TX err\n38000 → 198.51.100.3:51023 | 4 | 0');
     await tester.pump();
     expect(model.udpReports.length, 1);
-    await tester.tap(find.text('UDP #0123456789ab  RX 3  ACK TX 2'));
+    await tester.tap(find.text('UDP diagnostics'));
     await tester.pumpAndSettle();
     expect(find.text('51023'), findsOneWidget);
     expect(find.text('ACK TX'), findsOneWidget);
@@ -129,7 +138,10 @@ void main() {
       ));
       final initialTop =
           tester.getTopLeft(find.byType(DesktopQualityMonitor)).dy;
-      await tester.drag(find.text('Speed'), const Offset(-80, 0));
+      expect(initialTop, closeTo(68, 0.1));
+      expect(tester.getTopLeft(find.byType(DesktopQualityMonitor)).dx,
+          closeTo(20, 0.1));
+      await tester.drag(find.text('Connection quality'), const Offset(80, 0));
       await tester.pumpAndSettle();
       expect(tester.getTopLeft(find.byType(DesktopQualityMonitor)).dy,
           closeTo(initialTop, 0.1));
@@ -199,9 +211,9 @@ void main() {
       await tester.pump();
       expect(find.text('Direct Connection'), findsNothing);
     }
-    options.show = false;
-    await model.checkShowQualityMonitor(_sessionId);
-    await tester.pump();
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(options.show, isFalse);
     expect(find.text('Speed'), findsNothing);
   });
 }

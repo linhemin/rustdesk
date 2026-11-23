@@ -853,5 +853,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Direct connection required by server", "Le serveur exige une connexion directe"),
         ("Direct connection unavailable in direct-only mode", "La connexion directe est indisponible en mode direct uniquement"),
         ("Direct-only mode conflicts with forced relay", "Le mode direct uniquement est incompatible avec le relais forcé"),
+        ("Connection quality", ""),
+        ("UDP diagnostics", ""),
     ].iter().cloned().collect();
 }

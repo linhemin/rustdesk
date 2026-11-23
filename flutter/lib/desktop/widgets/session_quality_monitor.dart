@@ -2,6 +2,7 @@ import 'package:flutter_hbb/common/widgets/peer_udp_report.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/model.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:rustdesk_ui/desktop.dart';
 import 'package:rustdesk_ui/rustdesk_ui.dart';
 
@@ -77,10 +78,32 @@ class DesktopQualityMonitor extends StatelessWidget {
               width: 272,
               color: theme.cardColor.withOpacity(0.88),
               padding: const EdgeInsets.all(14),
-              child: Column(
+              child: SingleChildScrollView(
+                  child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  Row(children: [
+                    Icon(Icons.drag_indicator_rounded,
+                        size: 14, color: theme.hintColor),
+                    const SizedBox(width: 6),
+                    Expanded(
+                        child: Text(translate('Connection quality'),
+                            style: theme.textTheme.labelLarge)),
+                    IconButton(
+                      tooltip: translate('Close'),
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                      onPressed: () async {
+                        final sessionId = model.parent.target?.sessionId;
+                        if (sessionId == null) return;
+                        await bind.sessionToggleOption(
+                            sessionId: sessionId,
+                            value: 'show-quality-monitor');
+                        await model.checkShowQualityMonitor(sessionId);
+                      },
+                    ),
+                  ]),
+                  const Divider(height: 12),
                   Row(children: [
                     Container(
                       width: 7,
@@ -100,9 +123,6 @@ class DesktopQualityMonitor extends StatelessWidget {
                         flex: 2,
                         child: Text(data.speed ?? '—',
                             textAlign: TextAlign.end, style: number)),
-                    const SizedBox(width: 4),
-                    Icon(Icons.drag_indicator_rounded,
-                        size: 14, color: theme.hintColor.withOpacity(0.7)),
                   ]),
                   const Divider(height: 14),
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -115,7 +135,6 @@ class DesktopQualityMonitor extends StatelessWidget {
                   const Divider(height: 14),
                   detail(translate('Codec'), data.codecFormat ?? '—'),
                   detail(translate('Chroma'), data.chroma ?? '—'),
-                  if (model.udpReports.isNotEmpty) PeerUdpButton(model),
                   if (model.directConnection case final direct?) ...[
                     const Divider(height: 12),
                     detail(
@@ -123,8 +142,18 @@ class DesktopQualityMonitor extends StatelessWidget {
                             direct ? 'Direct Connection' : 'Relay Connection'),
                         model.activeTransport ?? '—'),
                   ],
+                  const SizedBox(height: 8),
+                  SizedBox(
+                      width: double.infinity,
+                      child: TextButton.icon(
+                        onPressed: model.udpReports.isEmpty
+                            ? null
+                            : () => showPeerUdpReport(context, model),
+                        icon: const Icon(Icons.expand_more_rounded, size: 16),
+                        label: Text(translate('UDP diagnostics')),
+                      )),
                 ],
-              ),
+              )),
             ),
           );
         },
@@ -149,76 +178,68 @@ class DraggableDesktopQualityMonitor extends StatefulWidget {
 
 class _DraggableDesktopQualityMonitorState
     extends State<DraggableDesktopQualityMonitor> {
-  static const _panelWidth = 272.0;
-  // Leave room for the metric cards, UDP report button and transport row.
-  static const _estimatedHeight = 280.0;
-  static const _edgeMargin = 10.0;
-
-  Offset? _offset;
+  Offset _offset = const Offset(20, 68);
   bool _dragging = false;
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(builder: (context, constraints) {
-      final maxW = constraints.maxWidth.isFinite ? constraints.maxWidth : 800.0;
-      final maxH =
-          constraints.maxHeight.isFinite ? constraints.maxHeight : 600.0;
-      final minX = _edgeMargin;
-      final maxX = (maxW - _panelWidth - _edgeMargin).clamp(minX, maxW);
-      final minY = _edgeMargin;
-      final maxY = (maxH - _estimatedHeight - _edgeMargin).clamp(minY, maxH);
-
-      final panel = MouseRegion(
-        cursor: _dragging
-            ? SystemMouseCursors.grabbing
-            : SystemMouseCursors.grab,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onPanStart: (_) {
-            setState(() {
-              _dragging = true;
-              _offset ??= Offset(maxX, 12);
-            });
-          },
-          onPanUpdate: (details) {
-            final current = _offset ?? Offset(maxX, 12);
-            setState(() {
-              _offset = Offset(
-                (current.dx + details.delta.dx).clamp(minX, maxX),
-                (current.dy - details.delta.dy).clamp(minY, maxY),
-              );
-            });
-          },
-          onPanEnd: (_) => setState(() => _dragging = false),
-          onPanCancel: () => setState(() => _dragging = false),
-          child: DesktopQualityMonitor(widget.model),
-        ),
-      );
-
-      final wrapped = widget.wrap != null ? widget.wrap!(panel) : panel;
-      final pos = _offset;
-      if (pos == null) {
-        return Stack(
-          fit: StackFit.passthrough,
-          children: [
-            Positioned(
-              right: _edgeMargin,
-              bottom: 12,
-              child: wrapped,
+    return CustomSingleChildLayout(
+        delegate: _DesktopQualityPosition(_offset),
+        child: Builder(builder: (cardContext) {
+          final panel = MouseRegion(
+            cursor: _dragging
+                ? SystemMouseCursors.grabbing
+                : SystemMouseCursors.grab,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onPanStart: (_) {
+                final card = cardContext.findRenderObject() as RenderBox?;
+                final viewport = context.findRenderObject() as RenderBox?;
+                setState(() {
+                  _dragging = true;
+                  if (card != null && viewport != null) {
+                    _offset =
+                        card.localToGlobal(Offset.zero, ancestor: viewport);
+                  }
+                });
+              },
+              onPanUpdate: (details) {
+                final card = cardContext.findRenderObject() as RenderBox?;
+                final viewport = context.findRenderObject() as RenderBox?;
+                if (card == null || viewport == null) return;
+                setState(() {
+                  _offset = _DesktopQualityPosition(_offset + details.delta)
+                      .getPositionForChild(viewport.size, card.size);
+                });
+              },
+              onPanEnd: (_) => setState(() => _dragging = false),
+              onPanCancel: () => setState(() => _dragging = false),
+              child: DesktopQualityMonitor(widget.model),
             ),
-          ],
-        );
-      }
-      return Stack(
-        fit: StackFit.passthrough,
-        children: [
-          Positioned(
-            left: pos.dx.clamp(minX, maxX),
-            bottom: pos.dy.clamp(minY, maxY),
-            child: wrapped,
-          ),
-        ],
-      );
-    });
+          );
+
+          return widget.wrap != null ? widget.wrap!(panel) : panel;
+        }));
   }
+}
+
+class _DesktopQualityPosition extends SingleChildLayoutDelegate {
+  _DesktopQualityPosition(this.offset);
+  final Offset offset;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      constraints.loosen().deflate(const EdgeInsets.all(10));
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) => Offset(
+        offset.dx.clamp(10.0,
+            (size.width - childSize.width - 10).clamp(10.0, double.infinity)),
+        offset.dy.clamp(10.0,
+            (size.height - childSize.height - 10).clamp(10.0, double.infinity)),
+      );
+
+  @override
+  bool shouldRelayout(_DesktopQualityPosition oldDelegate) =>
+      offset != oldDelegate.offset;
 }
