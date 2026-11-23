@@ -12,6 +12,7 @@ void main() {
     addTearDown(tester.view.reset);
     var fileTransfers = 0;
     var menus = 0;
+    var selections = 0;
     for (final brightness in Brightness.values) {
       await tester.pumpWidget(MaterialApp(
         theme: WorkspaceStyle.apply(ThemeData(brightness: brightness)),
@@ -20,24 +21,27 @@ void main() {
           child: Scaffold(
             body: Padding(
               padding: const EdgeInsets.all(16),
-              child: DeviceCard(
-                name: 'MacBook Pro M4 · A very long workspace name',
-                remoteId: '842 190 531',
-                platform: 'macOS',
-                platformIcon: Icons.desktop_mac_outlined,
-                online: true,
-                status: 'Online',
-                note: 'Saved device note',
-                actions: [
-                  IconButton(
-                      tooltip: 'Transfer file',
-                      onPressed: () => fileTransfers++,
-                      icon: const Icon(Icons.folder_outlined)),
-                  IconButton(
-                      tooltip: 'More',
-                      onPressed: () => menus++,
-                      icon: const Icon(Icons.more_horiz)),
-                ],
+              child: GestureDetector(
+                onLongPress: () => selections++,
+                child: DeviceCard(
+                  name: 'MacBook Pro M4 · A very long workspace name',
+                  remoteId: '842 190 531',
+                  platform: 'macOS',
+                  platformIcon: Icons.desktop_mac_outlined,
+                  online: true,
+                  status: 'Online',
+                  note: 'Saved device note',
+                  actions: [
+                    IconButton(
+                        tooltip: 'Transfer file',
+                        onPressed: () => fileTransfers++,
+                        icon: const Icon(Icons.folder_outlined)),
+                    IconButton(
+                        tooltip: 'More',
+                        onPressed: () => menus++,
+                        icon: const Icon(Icons.more_horiz)),
+                  ],
+                ),
               ),
             ),
           ),
@@ -45,6 +49,7 @@ void main() {
       ));
       await tester.tap(find.byTooltip('Transfer file'));
       await tester.tap(find.byTooltip('More'));
+      await tester.longPress(find.text('842 190 531 · Online'));
       expect(find.text('842 190 531 · Online'), findsOneWidget);
       expect(find.text('Saved device note'), findsOneWidget);
       expect(find.textContaining('ms'), findsNothing);
@@ -52,6 +57,7 @@ void main() {
     }
     expect(fileTransfers, 2);
     expect(menus, 2);
+    expect(selections, 2);
   });
 
   testWidgets(

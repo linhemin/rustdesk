@@ -97,6 +97,7 @@ class DeviceCard extends StatelessWidget {
       ],
     );
     return Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
       message: [name, remoteId, details, status, note, ...tags]
           .where((value) => value.isNotEmpty)
           .join(' · '),
