@@ -217,8 +217,15 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
             child: SizedBox(
               width: widget.labels.length * 78.0 + 8 + 60,
               height: height,
-              child: ClipPath(
+              // Keep the shadow outside the native clip without blocking its gaps.
+              child: PhysicalShape(
                 clipper: _QuickConnectDockClipper(Directionality.of(context)),
+                color: Colors.transparent,
+                shadowColor: _brightness == Brightness.dark
+                    ? Colors.black.withOpacity(0.48)
+                    : const Color(0xff0f172a).withOpacity(0.14),
+                elevation: _brightness == Brightness.dark ? 12 : 10,
+                clipBehavior: Clip.antiAlias,
                 child: _iosView(),
               ),
             ),

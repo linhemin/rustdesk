@@ -159,7 +159,13 @@ private struct WorkspaceDockContent: View {
                             colors: dark ? [.white.opacity(0.19), .white.opacity(0.08)]
                                 : [.white.opacity(0.95), Color(red: 235 / 255, green: 242 / 255, blue: 1).opacity(0.72)],
                             startPoint: .top, endPoint: .bottom
-                        ).opacity(selected ? 1 : 0), in: Capsule())
+                        ).clipShape(Capsule())
+                        .overlay(Capsule().strokeBorder(LinearGradient(
+                            colors: [.white.opacity(0.45), .clear],
+                            startPoint: .top, endPoint: .bottom
+                        ), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                        .opacity(selected ? 1 : 0))
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -210,10 +216,14 @@ private extension View {
         surface.background(.ultraThinMaterial, in: shape)
         #endif
         }
-        .overlay(shape.strokeBorder(LinearGradient(
-            colors: [.white.opacity(dark ? 0.45 : 0.95), .white.opacity(dark ? 0.14 : 0.62)],
+        .overlay(shape.strokeBorder(.white.opacity(dark ? 0.22 : 0.85), lineWidth: 1)
+            .allowsHitTesting(false))
+        .overlay(shape.inset(by: 1).strokeBorder(LinearGradient(
+            colors: [.white.opacity(dark ? 0.30 : 0.95),
+                     (dark ? .black : Color(red: 15 / 255, green: 23 / 255, blue: 42 / 255))
+                        .opacity(dark ? 0.35 : 0.08)],
             startPoint: .top, endPoint: .bottom
-        ), lineWidth: 1).allowsHitTesting(false))
+        ), lineWidth: dark ? 1 : 1.5).allowsHitTesting(false))
     }
 }
 
