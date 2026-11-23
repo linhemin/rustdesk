@@ -821,8 +821,49 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       BuildContext context, _ToolbarEdge edge, bool isHorizontal) {
     final List<Widget> toolbarItems = [];
     toolbarItems.add(_PinMenu(state: widget.state));
+    if (_ToolbarTheme.nativeDesktop) {
+      toolbarItems.add(AnimatedBuilder(
+        animation: widget.ffi.qualityMonitorModel,
+        builder: (context, _) {
+          final model = widget.ffi.qualityMonitorModel;
+          final color = model.directConnection == null
+              ? Theme.of(context).hintColor
+              : model.directConnection == true
+                  ? WorkspaceStyle.success(context)
+                  : Theme.of(context).colorScheme.primary;
+          return TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.onSurface,
+              backgroundColor: color.withOpacity(.10),
+              minimumSize: const Size(0, 34),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+            onPressed: () async {
+              await bind.sessionToggleOption(
+                  sessionId: widget.ffi.sessionId,
+                  value: 'show-quality-monitor');
+              await model.checkShowQualityMonitor(widget.ffi.sessionId);
+            },
+            icon: Icon(Icons.circle, size: 7, color: color),
+            label: Text(
+                [
+                  model.activeTransport ?? translate('Connection'),
+                  if (model.data.delay != null) '${model.data.delay} ms',
+                ].join(' · '),
+                style: Theme.of(context).textTheme.labelMedium),
+          );
+        },
+      ));
+    }
     toolbarItems.add(Obx(() {
       final privacyModeState = PrivacyModeState.find(widget.id);
+      if (_ToolbarTheme.nativeDesktop && pi.displaysCount.value == 1) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Text('${translate('Display')} 1 / 1',
+              style: Theme.of(context).textTheme.labelMedium),
+        );
+      }
       if ((privacyModeState.isEmpty ||
               allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value)) &&
           pi.displaysCount.value > 1 &&
@@ -851,16 +892,43 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       }
     }));
 
-    toolbarItems
-        .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
+    if (!_ToolbarTheme.nativeDesktop) {
+      toolbarItems
+          .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
+    }
     toolbarItems.add(_DisplayMenu(
       id: widget.id,
       ffi: widget.ffi,
       state: widget.state,
       setFullscreen: _setFullscreen,
     ));
+    if (_ToolbarTheme.nativeDesktop &&
+        widget.ffi.connType == ConnType.defaultConn) {
+      toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
+      toolbarItems.add(_IconMenuButton(
+        icon: const Icon(Icons.folder_open_rounded),
+        label: 'Transfer file',
+        tooltip: 'Transfer file',
+        color: _ToolbarTheme.commandColor,
+        hoverColor: _ToolbarTheme.hoverBlueColor,
+        onPressed: () => _launchSessionTool(context, isFileTransfer: true),
+      ));
+      toolbarItems.add(_IconMenuButton(
+        icon: const Icon(Icons.terminal_rounded),
+        label: '${translate('Terminal')} (beta)',
+        tooltip: 'Terminal',
+        color: _ToolbarTheme.commandColor,
+        hoverColor: _ToolbarTheme.hoverBlueColor,
+        onPressed: () => _launchSessionTool(context, isTerminal: true),
+      ));
+    }
+    if (_ToolbarTheme.nativeDesktop) {
+      toolbarItems
+          .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
+    }
     // Do not show keyboard for camera connection type.
-    if (widget.ffi.connType == ConnType.defaultConn) {
+    if (!_ToolbarTheme.nativeDesktop &&
+        widget.ffi.connType == ConnType.defaultConn) {
       toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
     }
     Widget groupDivider() => Padding(
@@ -922,6 +990,18 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       mainAxisSize: MainAxisSize.min,
       children: children,
     );
+  }
+
+  void _launchSessionTool(BuildContext context,
+      {bool isFileTransfer = false, bool isTerminal = false}) {
+    final ffi = widget.ffi;
+    connect(context, widget.id,
+        loginMethod: bind.sessionGetCommonSync(
+                sessionId: ffi.sessionId, key: 'login_method', param: '') ??
+            '',
+        connToken: bind.sessionGetConnToken(sessionId: ffi.sessionId),
+        isFileTransfer: isFileTransfer,
+        isTerminal: isTerminal);
   }
 
   ThemeData themeData() {
@@ -1121,6 +1201,8 @@ class _MonitorMenu extends StatelessWidget {
         globalMonitorsWidget(width, Colors.white, Colors.black38);
     return _IconSubmenuButton(
         tooltip: 'Select Monitor',
+        label:
+            '${translate('Display')} ${_MonitorCycle(id, ffi).label} / ${_MonitorCycle(id, ffi).total}',
         icon: monitorsIcon,
         ffi: ffi,
         width: width.value,
@@ -1337,6 +1419,7 @@ class _ControlMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     return _IconSubmenuButton(
         tooltip: 'Control Actions',
+        label: 'More',
         svg: "assets/actions.svg",
         color: _ToolbarTheme.commandColor,
         hoverColor: _ToolbarTheme.hoverBlueColor,
@@ -1840,6 +1923,7 @@ class _DisplayMenuState extends State<_DisplayMenu> {
 
     return _IconSubmenuButton(
       tooltip: 'Display Settings',
+      label: 'Image Quality',
       svg: "assets/display.svg",
       ffi: widget.ffi,
       color: _ToolbarTheme.commandColor,
@@ -2601,6 +2685,7 @@ class _KeyboardMenu extends StatelessWidget {
 
     return _IconSubmenuButton(
         tooltip: 'Keyboard Settings',
+        label: 'Control Actions',
         svg: "assets/keyboard_mouse.svg",
         ffi: ffi,
         color: _ToolbarTheme.commandColor,
@@ -3036,6 +3121,7 @@ class _CloseMenu extends StatelessWidget {
     return _IconMenuButton(
       assetName: 'assets/close.svg',
       tooltip: 'Close',
+      label: 'Disconnect',
       destructive: true,
       onPressed: () async {
         if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
@@ -3053,6 +3139,7 @@ class _IconMenuButton extends StatefulWidget {
   final String? assetName;
   final Widget? icon;
   final String tooltip;
+  final String? label;
   final Color color;
   final Color hoverColor;
   final VoidCallback? onPressed;
@@ -3066,6 +3153,7 @@ class _IconMenuButton extends StatefulWidget {
     this.assetName,
     this.icon,
     required this.tooltip,
+    this.label,
     required this.color,
     required this.hoverColor,
     required this.onPressed,
@@ -3088,7 +3176,9 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
     assert(widget.assetName != null || widget.icon != null);
     final colors = _ToolbarTheme.buttonColors(
         context, widget.color, widget.hoverColor,
-        hover: hover, hasAsset: widget.assetName != null, destructive: widget.destructive);
+        hover: hover,
+        hasAsset: widget.assetName != null || widget.label != null,
+        destructive: widget.destructive);
     final icon = widget.icon ??
         SvgPicture.asset(
           widget.assetName!,
@@ -3097,7 +3187,9 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
           height: _ToolbarTheme.buttonSize,
         );
     var button = SizedBox(
-      width: widget.width ?? _ToolbarTheme.buttonSize,
+      width: _ToolbarTheme.nativeDesktop && widget.label != null
+          ? null
+          : widget.width ?? _ToolbarTheme.buttonSize,
       height: _ToolbarTheme.buttonSize,
       child: MenuItemButton(
           style: ButtonStyle(
@@ -3118,7 +3210,22 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
                           BorderRadius.circular(_ToolbarTheme.iconRadius),
                       color: colors.background,
                     ),
-                    child: icon)),
+                    child: _ToolbarTheme.nativeDesktop && widget.label != null
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            child:
+                                Row(mainAxisSize: MainAxisSize.min, children: [
+                              IconTheme(
+                                  data: IconThemeData(color: colors.foreground),
+                                  child: SizedBox.square(
+                                      dimension: 18, child: icon)),
+                              const SizedBox(width: 6),
+                              Text(translate(widget.label!),
+                                  style: TextStyle(
+                                      fontSize: 12, color: colors.foreground)),
+                            ]),
+                          )
+                        : icon)),
           )),
     ).marginSymmetric(
         horizontal: widget.hMargin ?? _ToolbarTheme.buttonHMargin,
@@ -3137,6 +3244,7 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
 
 class _IconSubmenuButton extends StatefulWidget {
   final String tooltip;
+  final String? label;
   final String? svg;
   final Widget? icon;
   final Color color;
@@ -3151,6 +3259,7 @@ class _IconSubmenuButton extends StatefulWidget {
     this.svg,
     this.icon,
     required this.tooltip,
+    this.label,
     required this.color,
     required this.hoverColor,
     required this.menuChildrenGetter,
@@ -3185,7 +3294,9 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
           height: _ToolbarTheme.buttonSize,
         );
     final button = SizedBox(
-        width: widget.width ?? _ToolbarTheme.buttonSize,
+        width: _ToolbarTheme.nativeDesktop && widget.label != null
+            ? null
+            : widget.width ?? _ToolbarTheme.buttonSize,
         height: _ToolbarTheme.buttonSize,
         child: SubmenuButton(
             menuStyle:
@@ -3204,7 +3315,27 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
                               BorderRadius.circular(_ToolbarTheme.iconRadius),
                           color: colors.background,
                         ),
-                        child: icon))),
+                        child: _ToolbarTheme.nativeDesktop &&
+                                widget.label != null
+                            ? Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 10),
+                                child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      SizedBox.square(
+                                          dimension: 18, child: icon),
+                                      const SizedBox(width: 6),
+                                      Text(translate(widget.label!),
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: colors.foreground)),
+                                      const SizedBox(width: 2),
+                                      Icon(Icons.expand_more_rounded,
+                                          size: 14, color: colors.foreground),
+                                    ]),
+                              )
+                            : icon))),
             menuChildren: widget
                 .menuChildrenGetter(this)
                 .map((e) => _buildPointerTrackWidget(e, widget.ffi))

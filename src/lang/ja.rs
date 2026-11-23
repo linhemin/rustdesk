@@ -873,5 +873,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Home and devices", ""),
         ("Remote sessions", ""),
         ("Invalid QR code", ""),
+        ("Connection quality", ""),
+        ("UDP diagnostics", ""),
     ].iter().cloned().collect();
 }

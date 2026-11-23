@@ -38,6 +38,7 @@ import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
 import '../widgets/session_controls.dart';
 import '../widgets/session_keyboard.dart';
+import '../widgets/session_quality_monitor.dart';
 import '../widgets/session_touchpad.dart';
 
 final initText = '1' * 1024;
@@ -1841,6 +1842,7 @@ class _RemotePageState extends State<RemotePage>
             children: [
               Obx(() => getRawPointerAndKeyBody(
                   Overlay.wrap(child: _buildSessionCanvas()))),
+              if (isMobile) _mobileQualityMonitor(),
               if (isMobile && _showEdit && _canSendSessionIme)
                 _sessionImeEditor(),
               if (isMobile && !_nativeSessionActive)
@@ -2060,6 +2062,49 @@ class _RemotePageState extends State<RemotePage>
     });
   }
 
+  Widget _mobileQualityMonitor() => SafeArea(
+        maintainBottomViewPadding: _nativeSessionActive,
+        child: AnimatedBuilder(
+          animation: gFFI.qualityMonitorModel,
+          builder: (context, _) {
+            final model = gFFI.qualityMonitorModel;
+            final data = model.data;
+            final kbps = int.tryParse(data.targetBitrate ?? '');
+            final bitrate = switch (kbps) {
+              null => '—',
+              < 1000 => '$kbps kb/s',
+              _ => '${kbps / 1000} Mb/s',
+            };
+            final delay = data.delay == null
+                ? '—'
+                : '${(data.fps ?? "").replaceAll(" ", "").replaceAll("0", "").isEmpty ? 0 : data.delay} ms';
+            final direct = model.directConnection;
+            return Visibility(
+              visible: model.show,
+              maintainState: true,
+              child: MobileSessionQualityMonitor(
+                reserveGamepadSpace: _nativeSessionActive,
+                connection: direct == null
+                    ? translate('Quality')
+                    : '${translate(direct ? "Direct Connection" : "Relay Connection")} · ${model.activeTransport ?? "—"}',
+                direct: direct,
+                metrics: [
+                  (translate('Speed'), data.speed ?? '—'),
+                  ('FPS', data.fps ?? '—'),
+                  (translate('Delay'), delay),
+                  (translate('Bitrate'), bitrate),
+                  (translate('Codec'), data.codecFormat ?? '—'),
+                  (translate('Chroma'), data.chroma ?? '—'),
+                ],
+                diagnostics: model.udpReports.isEmpty
+                    ? null
+                    : PeerUdpButton(model, foreground: Colors.white),
+              ),
+            );
+          },
+        ),
+      );
+
   Widget getBodyForMobile() {
     return Container(
         color: isMobile ? Colors.black : MyTheme.canvasColor,
@@ -2084,12 +2129,13 @@ class _RemotePageState extends State<RemotePage>
               })
             else
               ImagePaint(ffiModel: gFFI.ffiModel),
-            Positioned(
-              top: 10,
-              left: _usesAwesunOverlay ? 10 : null,
-              right: _usesAwesunOverlay ? null : 10,
-              child: QualityMonitor(gFFI.qualityMonitorModel),
-            ),
+            if (!isMobile)
+              Positioned(
+                top: 10,
+                left: _usesAwesunOverlay ? 10 : null,
+                right: _usesAwesunOverlay ? null : 10,
+                child: QualityMonitor(gFFI.qualityMonitorModel),
+              ),
             if (!isMobile)
               Obx(() {
                 final chatKeyboardRequested =

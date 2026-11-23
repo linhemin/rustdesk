@@ -11,10 +11,11 @@ struct AwesunSessionView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if model.mouseVisible {
+            if model.mouseVisible && model.sheet != .gamepad && model.sheet != .guide && !model.functionsOpen {
                 AwesunVirtualMouseView(model: model, screenSize: size)
             }
             sessionControls
+                .zIndex(model.sheet == .gamepad && !model.functionsOpen ? 1 : 0)
                 .animation(panelAnimation, value: model.keyboardInset > 0)
                 .animation(panelAnimation, value: model.isKeyboardPanel)
 
@@ -59,7 +60,11 @@ struct AwesunSessionView: View {
 
     private var floatingControls: some View {
         ZStack {
-            AwesunDockButton(placement: $model.lockPlacement, size: size,
+            // Keep either lock dock above the gamepad without changing its saved placement.
+            AwesunDockButton(placement: $model.lockPlacement,
+                             size: model.sheet == .gamepad
+                                ? CGSize(width: size.width, height: max(68, size.height - 220))
+                                : size,
                              label: model.displayLocked ? "解除锁定" : "锁定显示",
                              tap: {
                 if model.displayLocked {
@@ -71,7 +76,7 @@ struct AwesunSessionView: View {
                 Image(systemName: model.displayLocked ? "lock.fill" : "lock.open")
                     .resizable().scaledToFit()
             }
-            control("keyboard", label: "键盘") { model.systemKeyboard() }
+            control("keyboard", label: "键盘") { model.showSystemKeyboardFromDeck() }
                 .position(AwesunControlLayout.rail(0, in: size))
             control("gamecontroller", label: "游戏键盘") { model.sheet = .gamepad }
                 .position(AwesunControlLayout.rail(1, in: size))
@@ -111,7 +116,9 @@ struct AwesunSessionView: View {
                 if model.isKeyboardPanel {
                     Color.clear.allowsHitTesting(false)
                 } else {
-                    Color.black.opacity(0.35).onTapGesture { model.closePanel() }
+                    Color.black.opacity(model.sheet == .gamepad ? 0 : 0.45)
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.closePanel() }
                 }
                 Group {
                     if model.functionsOpen {
@@ -404,7 +411,11 @@ struct AwesunVirtualMouseView: View {
                         .accessibilityAction { model.click("right", at: pointer) }
                     let hubActive = model.pressedMouseRegion == .hub || model.dragging
                     Circle()
-                        .fill(hubActive ? AwesunPalette.activeBlue : AwesunPalette.mouseFill)
+                        .fill(LinearGradient(
+                            colors: hubActive
+                                ? [AwesunPalette.activeIce, AwesunPalette.activeBlue]
+                                : [Color.white.opacity(0.26), AwesunPalette.mouseFill],
+                            startPoint: .topLeading, endPoint: .bottomTrailing))
                         .overlay(
                             Circle().strokeBorder(
                                 hubActive ? AwesunPalette.mouseActiveStroke : Color.white.opacity(0.34),
@@ -594,6 +605,7 @@ struct AwesunDockPlacement: Codable {
 }
 
 struct AwesunFloatingChrome: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     var accent = false
 
     @ViewBuilder
@@ -603,33 +615,28 @@ struct AwesunFloatingChrome: ViewModifier {
             .frame(width: AwesunControlLayout.controlRadius * 2,
                    height: AwesunControlLayout.controlRadius * 2)
             .contentShape(Circle())
-#if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            control
-                .foregroundColor(accent ? AwesunPalette.activeIce : .primary)
-                .glassEffect(.regular.interactive(), in: Circle())
-        } else {
-            fallback(control)
-        }
-#else
         fallback(control)
-#endif
     }
 
     private func fallback(_ control: some View) -> some View {
         control
             .foregroundColor(accent ? AwesunPalette.activeIce : .white)
-            .background(
-                Circle()
-                    .fill(AwesunPalette.padFill.opacity(0.86))
-                    .overlay(
-                        Circle().strokeBorder(
-                            accent ? AwesunPalette.activeIce.opacity(0.45) : AwesunPalette.mouseStroke,
-                            lineWidth: 1.0
-                        )
-                    )
-            )
-            .shadow(color: .black.opacity(0.38), radius: 10, x: 0, y: 4)
+            .background {
+                if reduceTransparency {
+                    Circle().fill(AwesunPalette.sheetSolid)
+                } else {
+                    Circle().fill(.ultraThinMaterial)
+                        .environment(\.colorScheme, .dark)
+                        .overlay(Circle().fill(LinearGradient(
+                            colors: [Color(awesun: 0xCD26344A), Color(awesun: 0xE6182030)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing)))
+                }
+            }
+            .overlay(Circle().strokeBorder(
+                accent ? AwesunPalette.activeIce.opacity(0.45) : AwesunPalette.mouseStroke,
+                lineWidth: 1).allowsHitTesting(false))
+            .shadow(color: accent ? AwesunPalette.brandBlue.opacity(0.32) : .black.opacity(0.36),
+                    radius: 11, x: 0, y: 8)
     }
 }
 
