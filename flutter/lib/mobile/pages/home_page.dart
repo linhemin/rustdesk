@@ -10,8 +10,8 @@ import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
 import 'ios_files_page.dart';
 import 'connection_page.dart';
-import '../android_sliding_navigation_bar.dart';
 import 'scan_page.dart';
+import '../android_sliding_navigation_bar.dart';
 
 abstract class PageShape extends Widget {
   final String title = "";
