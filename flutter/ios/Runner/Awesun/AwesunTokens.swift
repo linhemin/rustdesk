@@ -36,7 +36,11 @@ enum AwesunPalette {
     static let kbKeyOn = Color(awesun: 0xFF3B82F6)
     static let kbKeyText = Color(awesun: 0xFFF1F5FA)
     static let kbSecondText = Color(awesun: 0xFFA8B5C8)
-    static let sheetFill = Color(awesun: 0xF2101622)
+    static let sheetFill = Color(awesun: 0xC2101622)
+    static let sheetSolid = Color(awesun: 0xFF101622)
+    static let tileFill = Color.white.opacity(0.06)
+    static let tileStroke = Color.white.opacity(0.08)
+    static let tileActive = Color(awesun: 0x383B82F6)
     static let textPrimary = Color.white
     static let textSecondary = Color(awesun: 0xFFD6E0EE)
     static let textTertiary = Color(awesun: 0xFF94A3B8)
@@ -57,7 +61,7 @@ enum AwesunMetrics {
     static let kbPadV: CGFloat = 5
 
     // 面板
-    static let sheetRadius: CGFloat = 24
+    static let sheetRadius: CGFloat = 26
     static let sheetHPad: CGFloat = 20
     static let sheetTopPad: CGFloat = 18
     static let sheetBottomPad: CGFloat = 26

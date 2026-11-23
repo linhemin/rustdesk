@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
 import 'rustdesk_ui.dart';
@@ -7,8 +9,8 @@ class DesktopSessionStyle {
   DesktopSessionStyle._();
 
   static const buttonSize = 34.0;
-  static const buttonRadius = 9.0;
-  static const toolbarRadius = 14.0;
+  static const buttonRadius = 17.0;
+  static const toolbarRadius = 28.0;
   static const inactive = Color(0xFF1C212C);
   static const inactiveHover = Color(0xFF2B3445);
 
@@ -20,8 +22,8 @@ class DesktopSessionStyle {
         side: WidgetStatePropertyAll(
             BorderSide(color: Theme.of(context).dividerColor)),
         shape: WidgetStatePropertyAll(
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-        padding: const WidgetStatePropertyAll(EdgeInsets.all(6)),
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+        padding: const WidgetStatePropertyAll(EdgeInsets.all(10)),
       );
 }
 
@@ -30,15 +32,31 @@ class SessionToolbarSurface extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Material(
-        color: Theme.of(context).cardColor.withOpacity(0.94),
-        elevation: 10,
-        shadowColor: const Color(0x3805070B),
-        shape: RoundedRectangleBorder(
-            borderRadius:
-                BorderRadius.circular(DesktopSessionStyle.toolbarRadius),
-            side: BorderSide(color: Theme.of(context).dividerColor)),
-        child: child,
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius:
+              BorderRadius.circular(DesktopSessionStyle.toolbarRadius),
+          boxShadow: const [
+            BoxShadow(
+                color: Color(0x3805070B), blurRadius: 24, offset: Offset(0, 8)),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius:
+              BorderRadius.circular(DesktopSessionStyle.toolbarRadius),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+            child: Material(
+              color: Theme.of(context).cardColor.withOpacity(0.88),
+              shape: RoundedRectangleBorder(
+                borderRadius:
+                    BorderRadius.circular(DesktopSessionStyle.toolbarRadius),
+                side: BorderSide(color: WorkspaceStyle.strongBorder(context)),
+              ),
+              child: child,
+            ),
+          ),
+        ),
       );
 }
 
@@ -49,7 +67,7 @@ class SessionOverlayFrame extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
         decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Theme.of(context).dividerColor),
             boxShadow: const [
               BoxShadow(
@@ -57,7 +75,13 @@ class SessionOverlayFrame extends StatelessWidget {
                   blurRadius: 20,
                   offset: Offset(0, 6))
             ]),
-        child: ClipRRect(borderRadius: BorderRadius.circular(13), child: child),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(15),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+            child: child,
+          ),
+        ),
       );
 }
 

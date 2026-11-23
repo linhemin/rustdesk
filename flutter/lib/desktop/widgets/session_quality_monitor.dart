@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:rustdesk_ui/desktop.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 class DesktopQualityMonitor extends StatelessWidget {
   const DesktopQualityMonitor(this.model, {super.key});
@@ -33,13 +34,25 @@ class DesktopQualityMonitor extends StatelessWidget {
             fontFeatures: const [FontFeature.tabularFigures()],
           );
 
-          Widget reading(String label, String value) => Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(label, style: caption),
-                  Text(value, style: number),
-                ],
+          Widget reading(String label, String value) => Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: WorkspaceStyle.elevatedSurface(context),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: caption),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(value, style: number),
+                    ),
+                  ],
+                ),
               );
           Widget detail(String label, String value) => Padding(
                 padding: const EdgeInsets.only(top: 3),
@@ -61,16 +74,26 @@ class DesktopQualityMonitor extends StatelessWidget {
               );
           return SessionOverlayFrame(
             child: Container(
-              width: 236,
-              color: theme.cardColor.withOpacity(0.95),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              width: 272,
+              color: theme.cardColor.withOpacity(0.88),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Row(children: [
-                    Icon(Icons.south_west_rounded,
-                        size: 16, color: colors.primary),
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: model.directConnection == null
+                            ? theme.hintColor
+                            : model.directConnection == true
+                                ? WorkspaceStyle.success(context)
+                                : colors.primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
                     const SizedBox(width: 6),
                     Expanded(child: Text(translate('Speed'), style: caption)),
                     Expanded(
@@ -84,11 +107,12 @@ class DesktopQualityMonitor extends StatelessWidget {
                   const Divider(height: 14),
                   Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Expanded(child: reading(translate('FPS'), data.fps ?? '—')),
-                    const SizedBox(width: 12),
+                    const SizedBox(width: 6),
                     Expanded(child: reading(translate('Delay'), delay)),
+                    const SizedBox(width: 6),
+                    Expanded(child: reading(translate('Bitrate'), bitrate)),
                   ]),
                   const Divider(height: 14),
-                  detail(translate('Bitrate'), bitrate),
                   detail(translate('Codec'), data.codecFormat ?? '—'),
                   detail(translate('Chroma'), data.chroma ?? '—'),
                   if (model.udpReports.isNotEmpty) PeerUdpButton(model),
@@ -125,7 +149,7 @@ class DraggableDesktopQualityMonitor extends StatefulWidget {
 
 class _DraggableDesktopQualityMonitorState
     extends State<DraggableDesktopQualityMonitor> {
-  static const _panelWidth = 236.0;
+  static const _panelWidth = 272.0;
   static const _estimatedHeight = 200.0;
   static const _edgeMargin = 10.0;
 

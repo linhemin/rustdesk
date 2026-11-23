@@ -404,7 +404,11 @@ struct AwesunVirtualMouseView: View {
                         .accessibilityAction { model.click("right", at: pointer) }
                     let hubActive = model.pressedMouseRegion == .hub || model.dragging
                     Circle()
-                        .fill(hubActive ? AwesunPalette.activeBlue : AwesunPalette.mouseFill)
+                        .fill(LinearGradient(
+                            colors: hubActive
+                                ? [AwesunPalette.activeIce, AwesunPalette.activeBlue]
+                                : [Color.white.opacity(0.26), AwesunPalette.mouseFill],
+                            startPoint: .topLeading, endPoint: .bottomTrailing))
                         .overlay(
                             Circle().strokeBorder(
                                 hubActive ? AwesunPalette.mouseActiveStroke : Color.white.opacity(0.34),

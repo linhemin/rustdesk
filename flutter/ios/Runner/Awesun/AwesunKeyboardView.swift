@@ -352,8 +352,8 @@ struct AwesunKeyTile: View {
 }
 
 extension AwesunPalette {
-    static let keyboardDeck = Color(awesun: 0xFF171522)
-    static let keyboardCap = Color(awesun: 0xFF292834)
+    static let keyboardDeck = Color(awesun: 0xF2101622)
+    static let keyboardCap = Color.white.opacity(0.10)
 }
 
 struct AwesunAccessorySlot: Equatable {
