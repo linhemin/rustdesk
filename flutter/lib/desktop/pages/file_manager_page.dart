@@ -220,7 +220,7 @@ class _FileManagerPageState extends State<FileManagerPage>
         color: Theme.of(context).cardColor,
         border: Border.all(color: Theme.of(context).dividerColor),
         borderRadius: const BorderRadius.all(
-          Radius.circular(15.0),
+          Radius.circular(12.0),
         ),
       ),
       child: child,
@@ -332,7 +332,8 @@ class _FileManagerPageState extends State<FileManagerPage>
                                   ),
                                   barRadius: Radius.circular(15),
                                   percent: item.percent,
-                                  progressColor: MyTheme.accent,
+                                  progressColor:
+                                      Theme.of(context).colorScheme.primary,
                                   backgroundColor: Theme.of(context).hoverColor,
                                   lineHeight: kDesktopFileTransferRowHeight,
                                 ).paddingSymmetric(vertical: 8),
@@ -386,14 +387,10 @@ class _FileManagerPageState extends State<FileManagerPage>
     if (isWindows || isMacOS) {
       return PreferredSize(
         preferredSize: const Size(200, double.infinity),
-        child: TransferPane(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            TransferPaneHeading(
-              leading:
-                  const WorkspaceIcon(icon: Icons.swap_horiz_rounded, size: 36),
-              title: translate('Transfer file'),
-            ),
             Expanded(
               child: Obx(
                 () => jobController.jobTable.isEmpty
@@ -554,7 +551,11 @@ class _FileManagerViewState extends State<FileManagerView> {
         ],
       );
       if (nativeWorkspace) {
-        return TransferPane(padding: const EdgeInsets.all(12), child: content);
+        return Container(
+          color: WorkspaceStyle.canvas(context),
+          padding: const EdgeInsets.all(12),
+          child: content,
+        );
       }
       return Container(
         margin: const EdgeInsets.all(8),
@@ -607,11 +608,12 @@ class _FileManagerViewState extends State<FileManagerView> {
     final native = isWindows || isMacOS;
     final label = translate(isLocal ? 'Local Computer' : 'Remote Computer');
     final platform = Container(
-      width: native ? 40 : 34,
-      height: native ? 40 : 34,
+      width: native ? 28 : 34,
+      height: native ? 28 : 34,
       decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(8), color: MyTheme.accent),
-      padding: const EdgeInsets.all(8),
+          borderRadius: BorderRadius.circular(8),
+          color: Theme.of(context).colorScheme.primary),
+      padding: EdgeInsets.all(native ? 5 : 8),
       child: FutureBuilder<String>(
         future: bind.sessionGetPlatform(
             sessionId: _ffi.sessionId, isRemote: !isLocal),
@@ -626,7 +628,17 @@ class _FileManagerViewState extends State<FileManagerView> {
       child: Column(
         children: [
           if (native)
-            TransferPaneHeading(leading: platform, title: label)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(children: [
+                platform,
+                const SizedBox(width: 8),
+                Expanded(
+                    child: Text(label,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontSize: 12, fontWeight: FontWeight.w600))),
+              ]),
+            )
           else
             Padding(
                 padding: const EdgeInsets.only(bottom: 8),
@@ -686,7 +698,9 @@ class _FileManagerViewState extends State<FileManagerView> {
                   padding: const EdgeInsets.symmetric(horizontal: 3.0),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Theme.of(context).cardColor,
+                      color: native
+                          ? WorkspaceStyle.elevatedSurface(context)
+                          : Theme.of(context).cardColor,
                       borderRadius: BorderRadius.all(
                         Radius.circular(8.0),
                       ),
@@ -1240,14 +1254,15 @@ class _FileManagerViewState extends State<FileManagerView> {
             child: Obx(() => Container(
                 decoration: BoxDecoration(
                   color: selectedItems.items.contains(entry)
-                      ? MyTheme.button
-                      : Theme.of(context).cardColor,
+                      ? WorkspaceStyle.accentSoft(context)
+                      : Colors.transparent,
                   borderRadius: BorderRadius.all(
-                    Radius.circular(5.0),
+                    Radius.circular(8.0),
                   ),
-                  border: rightClickEntry.value == entry
+                  border: rightClickEntry.value == entry ||
+                          selectedItems.items.contains(entry)
                       ? Border.all(
-                          color: MyTheme.button,
+                          color: WorkspaceStyle.accentBorder(context),
                           width: 1.0,
                         )
                       : null,
@@ -1282,18 +1297,19 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                 entry.isFile
                                                     ? "assets/file.svg"
                                                     : "assets/folder.svg",
-                                                colorFilter: svgColor(
-                                                    Theme.of(context)
-                                                        .tabBarTheme
-                                                        .labelColor),
+                                                colorFilter: svgColor(entry
+                                                        .isDirectory
+                                                    ? WorkspaceStyle.warning(
+                                                        context)
+                                                    : Theme.of(context)
+                                                        .hintColor),
                                               ),
                                         Expanded(
                                             child: Text(entry.name.nonBreaking,
-                                                style: TextStyle(
-                                                    color: selectedItems.items
-                                                            .contains(entry)
-                                                        ? Colors.white
-                                                        : null),
+                                                style: const TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight:
+                                                        FontWeight.w500),
                                                 overflow:
                                                     TextOverflow.ellipsis))
                                       ]),
@@ -1318,10 +1334,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: selectedItems.items
-                                                  .contains(entry)
-                                              ? Colors.white70
-                                              : MyTheme.darkGray,
+                                          color: Theme.of(context).hintColor,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures()
+                                          ],
                                         ),
                                       )),
                                 ),
@@ -1344,11 +1360,11 @@ class _FileManagerViewState extends State<FileManagerView> {
                                     sizeStr,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                        fontSize: 10,
-                                        color:
-                                            selectedItems.items.contains(entry)
-                                                ? Colors.white70
-                                                : MyTheme.darkGray),
+                                        fontSize: 11,
+                                        fontFeatures: const [
+                                          FontFeature.tabularFigures()
+                                        ],
+                                        color: Theme.of(context).hintColor),
                                   ),
                                 ),
                                 onTap: onTap,
@@ -1579,7 +1595,7 @@ class _FileManagerViewState extends State<FileManagerView> {
     return Container(
       decoration: isWindows || isMacOS
           ? BoxDecoration(
-              color: Theme.of(context).scaffoldBackgroundColor,
+              color: WorkspaceStyle.elevatedSurface(context),
               borderRadius: BorderRadius.circular(8))
           : null,
       key: _globalHeaderKey,

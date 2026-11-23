@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 /// Keeps both file browsers mounted while changing the visible pane.
 class FileTransferWorkspace extends StatefulWidget {
@@ -49,8 +50,10 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
           child: TextButton(
             style: TextButton.styleFrom(
               backgroundColor: !_showQueue && _local == local
-                  ? Theme.of(context).colorScheme.primary.withOpacity(.12)
+                  ? WorkspaceStyle.accentSoft(context)
                   : null,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
             ),
             onPressed: () => setState(() {
               _local = local;
@@ -65,28 +68,35 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, bounds) {
           final dualPane = bounds.maxWidth >= 780;
-          final sideQueue = _showQueue && bounds.maxWidth >= 1100;
-          final queueWidth = sideQueue ? 280.0 : 0.0;
-          final showBrowsers = !_showQueue || sideQueue;
+          final showBrowsers = !_showQueue || dualPane;
           final queueButton = TextButton.icon(
             onPressed: () => setState(() => _showQueue = !_showQueue),
-            icon: Icon(_showQueue ? Icons.expand_more : Icons.swap_vert,
-                size: 18),
+            icon: const Icon(Icons.swap_vert_rounded, size: 18),
             label: Row(mainAxisSize: MainAxisSize.min, children: [
               Flexible(
                 child: Text(widget.queueLabel,
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(width: 6),
-              widget.queueCount,
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: WorkspaceStyle.accentSoft(context),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: widget.queueCount,
+              ),
+              const SizedBox(width: 8),
+              Icon(_showQueue ? Icons.expand_more : Icons.expand_less,
+                  size: 16),
             ]),
           );
-          return Column(children: [
-            Expanded(
-              child: Stack(fit: StackFit.expand, children: [
-                Padding(
-                  padding: EdgeInsetsDirectional.only(end: queueWidth),
-                  child: Stack(fit: StackFit.expand, children: [
+          return ColoredBox(
+            color: WorkspaceStyle.canvas(context),
+            child: Column(children: [
+              Expanded(
+                child: Stack(fit: StackFit.expand, children: [
+                  Stack(fit: StackFit.expand, children: [
                     _browser(widget.local, showBrowsers && (dualPane || _local),
                         AlignmentDirectional.centerStart, dualPane ? .5 : 1),
                     _browser(
@@ -94,31 +104,33 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
                         showBrowsers && (dualPane || !_local),
                         AlignmentDirectional.centerEnd,
                         dualPane ? .5 : 1),
+                    if (dualPane) Center(child: VerticalDivider(width: 1)),
+                  ]),
+                  if (_showQueue && !dualPane) widget.queue,
+                ]),
+              ),
+              const Divider(height: 1),
+              Material(
+                color: Theme.of(context).cardColor,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  child: Row(children: [
+                    if (!dualPane) ...[
+                      _sideButton(widget.localLabel, true),
+                      _sideButton(widget.remoteLabel, false),
+                    ],
+                    Flexible(child: queueButton),
                   ]),
                 ),
-                if (_showQueue)
-                  PositionedDirectional(
-                    top: 0,
-                    bottom: 0,
-                    start: sideQueue ? null : 0,
-                    end: 0,
-                    width: sideQueue ? queueWidth : null,
-                    child: widget.queue,
-                  ),
-              ]),
-            ),
-            const Divider(height: 1),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                if (!dualPane) ...[
-                  _sideButton(widget.localLabel, true),
-                  _sideButton(widget.remoteLabel, false),
-                ],
-                Flexible(child: queueButton),
-              ]),
-            ),
-          ]);
+              ),
+              if (_showQueue && dualPane)
+                SizedBox(
+                  height: (bounds.maxHeight * .38).clamp(100.0, 260.0),
+                  child: widget.queue,
+                ),
+            ]),
+          );
         },
       );
 }

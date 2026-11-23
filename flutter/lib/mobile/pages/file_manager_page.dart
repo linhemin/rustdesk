@@ -71,6 +71,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
   final selectMode = SelectMode.none.obs;
 
   var showLocal = true;
+  bool _showTransferQueue = false;
 
   FileController get currentFileController =>
       showLocal ? model.localController : model.remoteController;
@@ -313,24 +314,32 @@ class _FileManagerPageState extends State<FileManagerPage> {
         return false;
       },
       child: Scaffold(
-        // backgroundColor: MyTheme.grayBg,
+        backgroundColor: WorkspaceStyle.canvas(context),
         appBar: AppBar(
           leading: Row(children: [
             IconButton(
-                icon: Icon(Icons.close),
+                tooltip: translate('Close'),
+                icon: const Icon(Icons.close_rounded, size: 20),
                 onPressed: () => clientClose(gFFI.sessionId, gFFI)),
           ]),
-          centerTitle: true,
-          title: _LocalRemoteSegment(
-            showLocal: showLocal,
-            onChanged: (local) {
-              if (local != showLocal) setState(() => showLocal = local);
-            },
+          centerTitle: false,
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(translate('Transfer file'),
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.w700)),
+              Text(widget.id,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 11, color: Theme.of(context).hintColor)),
+            ],
           ),
           actions: [
             PopupMenuButton<String>(
                 tooltip: "",
-                icon: Icon(Icons.more_vert),
+                icon: const Icon(Icons.more_horiz_rounded),
                 itemBuilder: (context) {
                   return [
                     if (isAndroid && showLocal) ...[
@@ -521,16 +530,34 @@ class _FileManagerPageState extends State<FileManagerPage> {
                 }),
           ],
         ),
-        body: showLocal
-            ? FileManagerView(
-                controller: model.localController,
-                selectMode: selectMode,
-              )
-            : FileManagerView(
-                controller: model.remoteController,
-                selectMode: selectMode,
+        body: Stack(children: [
+          Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+              child: _LocalRemoteSegment(
+                showLocal: showLocal,
+                onChanged: (local) {
+                  if (local != showLocal) setState(() => showLocal = local);
+                },
               ),
-        bottomSheet: bottomSheet(),
+            ),
+            Expanded(
+                child: showLocal
+                    ? FileManagerView(
+                        controller: model.localController,
+                        selectMode: selectMode,
+                      )
+                    : FileManagerView(
+                        controller: model.remoteController,
+                        selectMode: selectMode,
+                      )),
+          ]),
+          PositionedDirectional(
+              start: 0,
+              end: 0,
+              bottom: 0,
+              child: bottomSheet() ?? const SizedBox.shrink()),
+        ]),
       ));
 
   Widget? bottomSheet() {
@@ -637,38 +664,116 @@ class _FileManagerPageState extends State<FileManagerPage> {
               .firstWhereOrNull((job) => job.state == JobState.inProgress) ??
           jobTable.last;
 
+      final Widget summary;
+      final queueToggle = IconButton(
+        tooltip: translate('Status'),
+        icon: Icon(_showTransferQueue
+            ? Icons.keyboard_arrow_down_rounded
+            : Icons.keyboard_arrow_up_rounded),
+        onPressed: () =>
+            setState(() => _showTransferQueue = !_showTransferQueue),
+      );
       switch (activeJob.state) {
         case JobState.inProgress:
-          return BottomSheetBody(
-            leading: CircularProgressIndicator(),
-            title: translate("Waiting"),
-            text: "${readableFileSize(activeJob.speed)}/s",
+          summary = BottomSheetBody(
+            leading: SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                    value: activeJob.percent, strokeWidth: 3)),
+            title: '${translate("Transfer file")} · ${jobTable.length}',
+            text:
+                '${activeJob.percentText} · ${readableFileSize(activeJob.speed)}/s',
+            actions: [queueToggle],
             onCanceled: () {
               model.jobController.cancelJob(activeJob.id);
               jobTable.clear();
             },
           );
+          break;
         case JobState.done:
-          return BottomSheetBody(
-            leading: Icon(Icons.check),
+          summary = BottomSheetBody(
+            leading: Icon(Icons.check_circle_outline_rounded,
+                color: WorkspaceStyle.success(context)),
             title: "${translate("Successful")}!",
             text: activeJob.display(),
+            actions: [queueToggle],
             onCanceled: () => jobTable.clear(),
           );
+          break;
         case JobState.error:
-          return BottomSheetBody(
-            leading: Icon(Icons.error),
+          summary = BottomSheetBody(
+            leading: Icon(Icons.error_outline_rounded,
+                color: WorkspaceStyle.danger(context)),
             title: "${translate("Error")}!",
             text: "",
+            actions: [queueToggle],
             onCanceled: () => jobTable.clear(),
           );
+          break;
         case JobState.none:
-          break;
         case JobState.paused:
-          // TODO: Handle this case.
-          break;
+          return Offstage();
       }
-      return Offstage();
+      return Column(mainAxisSize: MainAxisSize.min, children: [
+        if (_showTransferQueue)
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              border: Border.all(color: Theme.of(context).dividerColor),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .32),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: jobTable.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final job = jobTable[index];
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: WorkspaceStyle.elevatedSurface(context),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(job.jobName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                              value: job.percent,
+                              minHeight: 5,
+                              backgroundColor: Theme.of(context).dividerColor),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                            '${job.getStatus()} · ${job.percentText} · ${readableFileSize(job.speed)}/s',
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: Theme.of(context).hintColor,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures()
+                                ])),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        summary,
+      ]);
     });
   }
 
@@ -752,7 +857,7 @@ class _FileManagerViewState extends State<FileManagerView> {
             final entry = entries[index];
             final (badgeIcon, badgeColor) = _fileEntryVisual(entry);
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3.5),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
               child: Material(
                 color: selected ? primary.withOpacity(0.11) : theme.cardColor,
                 shape: RoundedRectangleBorder(
@@ -794,7 +899,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -903,20 +1008,21 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   (IconData, Color) _fileEntryVisual(Entry entry) {
-    if (entry.isDirectory) return (Icons.folder_rounded, WorkspaceStyle.amber);
+    if (entry.isDirectory)
+      return (Icons.folder_outlined, WorkspaceStyle.warning(context));
     final lower = entry.name.toLowerCase();
     if (lower.endsWith('.mp4') ||
         lower.endsWith('.mov') ||
         lower.endsWith('.mkv') ||
         lower.endsWith('.avi')) {
-      return (Icons.movie_outlined, WorkspaceStyle.purple);
+      return (Icons.movie_outlined, WorkspaceStyle.information(context));
     }
     if (lower.endsWith('.zip') ||
         lower.endsWith('.tar') ||
         lower.endsWith('.gz') ||
         lower.endsWith('.7z') ||
         lower.endsWith('.rar')) {
-      return (Icons.inventory_2_outlined, WorkspaceStyle.green);
+      return (Icons.inventory_2_outlined, WorkspaceStyle.success(context));
     }
     if (lower.endsWith('.json') ||
         lower.endsWith('.yaml') ||
@@ -926,7 +1032,7 @@ class _FileManagerViewState extends State<FileManagerView> {
         lower.endsWith('.ts') ||
         lower.endsWith('.js') ||
         lower.endsWith('.py')) {
-      return (Icons.code_rounded, WorkspaceStyle.blue);
+      return (Icons.code_rounded, Theme.of(context).colorScheme.primary);
     }
     if (lower.endsWith('.png') ||
         lower.endsWith('.jpg') ||
@@ -935,7 +1041,7 @@ class _FileManagerViewState extends State<FileManagerView> {
       return (Icons.image_outlined, WorkspaceStyle.indigo);
     }
     if (lower.endsWith('.pdf')) {
-      return (Icons.description_outlined, WorkspaceStyle.red);
+      return (Icons.description_outlined, WorkspaceStyle.danger(context));
     }
     return (Icons.insert_drive_file_outlined, WorkspaceStyle.neutralTile);
   }
@@ -954,7 +1060,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   Widget headTools() {
     final theme = Theme.of(context);
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+      margin: const EdgeInsets.fromLTRB(16, 6, 16, 6),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: WorkspaceStyle.elevatedSurface(context),
@@ -1084,16 +1190,20 @@ class BottomSheetBody extends StatelessWidget {
   final List<IconButton>? actions;
 
   @override
-  BottomSheet build(BuildContext context) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return BottomSheet(
-      backgroundColor: theme.cardColor,
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-        side: BorderSide(color: theme.dividerColor),
-      ),
-      builder: (context) => SafeArea(
-          top: false,
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+        child: Material(
+          color: theme.cardColor,
+          elevation: 4,
+          shadowColor: Colors.black.withOpacity(.15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: WorkspaceStyle.strongBorder(context)),
+          ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
             child: LayoutBuilder(builder: (context, bounds) {
@@ -1107,8 +1217,12 @@ class BottomSheetBody extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                      Text(title, style: theme.textTheme.titleMedium),
+                      Text(title,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
                       Text(text,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.hintColor,
                             fontFeatures: const [FontFeature.tabularFigures()],
@@ -1133,9 +1247,9 @@ class BottomSheetBody extends StatelessWidget {
                 Flexible(fit: FlexFit.loose, child: controls)
               ]);
             }),
-          )),
-      onClosing: () {},
-      enableDrag: false,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1155,44 +1269,49 @@ class _LocalRemoteSegment extends StatelessWidget {
     final accent = theme.colorScheme.primary;
     Widget item(bool local, String label, IconData icon) {
       final active = showLocal == local;
-      return InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => onChanged(local),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: active ? accent : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon,
-                  size: 15,
-                  color: active ? Colors.white : theme.hintColor),
-              const SizedBox(width: 5),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: active ? Colors.white : theme.hintColor,
+      return Expanded(
+          child: Semantics(
+              selected: active,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => onChanged(local),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: active ? accent : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon,
+                          size: 15,
+                          color: active ? Colors.white : theme.hintColor),
+                      const SizedBox(width: 5),
+                      Flexible(
+                          child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: active ? Colors.white : theme.hintColor,
+                        ),
+                      )),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-      );
+              )));
     }
 
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: WorkspaceStyle.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(13),
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: theme.dividerColor),
       ),
       child: Row(
