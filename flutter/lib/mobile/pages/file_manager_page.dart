@@ -873,10 +873,8 @@ class FileManagerView extends StatefulWidget {
   FileManagerView(
       {required this.controller,
       required this.selectMode,
-      this.sessionActions = true,
-      this.onFile});
+      this.sessionActions = true});
   final bool sessionActions;
-  final VoidCallback? onFile;
 
   @override
   State<StatefulWidget> createState() => _FileManagerViewState();
@@ -1001,12 +999,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                                     }
                                     setState(() {});
                                   })
-                              : IconButton(
-                                  tooltip: translate('Transfer file'),
-                                  icon: const Icon(Icons.upload_file_outlined,
-                                      size: 20),
-                                  onPressed: widget.onFile),
-                  onTap: () {
+                              : null,
+                  onTap: !widget.sessionActions && entry.isFile ? null : () {
                     if (showCheckBox) {
                       if (selected) {
                         _selectedItems.remove(entry);
@@ -1018,8 +1012,6 @@ class _FileManagerViewState extends State<FileManagerView> {
                     }
                     if (entry.isDirectory || entry.isDrive) {
                       controller.openDirectory(entry.path);
-                    } else if (!widget.sessionActions) {
-                      widget.onFile?.call();
                     } else if (widget.selectMode.value == SelectMode.none) {
                       _selectedItems.clear();
                       widget.selectMode.toggle(isLocal);

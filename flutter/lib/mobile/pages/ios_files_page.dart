@@ -134,8 +134,7 @@ class _IOSFilesPageState extends State<IOSFilesPage> {
               child: FileManagerView(
                   controller: _files.localController,
                   selectMode: _selection,
-                  sessionActions: false,
-                  onFile: _connect)),
+                  sessionActions: false)),
           Padding(
               padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
               child: SizedBox(
