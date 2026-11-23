@@ -8,8 +8,8 @@ import '../../native/apple_workspace_navigation.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
-import 'connection_page.dart';
 import 'ios_files_page.dart';
+import 'connection_page.dart';
 
 abstract class PageShape extends Widget {
   final String title = "";
