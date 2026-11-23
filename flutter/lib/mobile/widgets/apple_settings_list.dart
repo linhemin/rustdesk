@@ -449,11 +449,15 @@ class _SettingsRow extends StatelessWidget {
               ),
               if (inlineValue) ...[
                 const SizedBox(width: 8),
-                Flexible(
-                    child: DefaultTextStyle(
-                  style: theme.textTheme.bodyMedium!
-                      .copyWith(color: WorkspaceStyle.tertiaryInk(context)),
-                  child: tile.value!,
+                Expanded(
+                    child: Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: DefaultTextStyle(
+                    textAlign: TextAlign.end,
+                    style: theme.textTheme.bodyMedium!
+                        .copyWith(color: WorkspaceStyle.tertiaryInk(context)),
+                    child: tile.value!,
+                  ),
                 )),
               ],
               if (tile.trailing != null) ...[

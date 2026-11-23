@@ -6,6 +6,35 @@ import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:settings_ui/settings_ui.dart';
 
 void main() {
+  testWidgets('inline values and actions align at the end of settings rows',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.iOS),
+      home: Scaffold(
+          body: AppleSettingsList(sections: [
+        SettingsSection(tiles: [
+          SettingsTile(title: const Text('Display'), onPressed: (_) {}),
+          SettingsTile(
+              title: const Text('Language'),
+              value: const Text('中文'),
+              onPressed: (_) {}),
+          SettingsTile(
+              title: const Text('Version'),
+              value: const Text('1.5.3'),
+              description: const Text('Build date'),
+              trailing: const Icon(Icons.open_in_new)),
+        ]),
+      ])),
+    ));
+    final arrows = find.byIcon(Icons.chevron_right_rounded);
+    final edge = tester.getTopRight(arrows.first).dx;
+    final link = find.byIcon(Icons.open_in_new);
+    expect(tester.getTopRight(arrows.last).dx, edge);
+    expect(tester.getTopRight(link).dx, edge);
+    expect(tester.getTopRight(find.text('1.5.3')).dx,
+        tester.getTopLeft(link).dx - 8);
+  });
+
   testWidgets('settings search filters rows and retains row and QR actions',
       (tester) async {
     tester.view.devicePixelRatio = 1;
