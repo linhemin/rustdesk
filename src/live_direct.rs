@@ -1674,8 +1674,11 @@ mod tests {
         let ticket = listener.response()[native::ACCEPT.len()..].try_into().unwrap();
         let mut host_path = wrap_native(&mut controlled, native::Mode::Listen(listener)).unwrap();
         let (stall, stalled) = watch::channel(false);
+        let dials = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let dialed = dials.clone();
         let dial = Box::new(move || -> BoxFuture<'static, ResultType<_>> {
             let stalled = stalled.clone();
+            dialed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Box::pin(async move {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let addr = listener.local_addr().unwrap();
@@ -1723,6 +1726,8 @@ mod tests {
         assert!(!path.has_changed().unwrap() && !host_path.has_changed().unwrap());
         assert_eq!((*path.borrow(), *host_path.borrow()), (Some("TCP"), Some("TCP")));
 
+        // Old enough that the next punch is due: a path that just died must not be retried at once.
+        tokio::time::sleep(Duration::from_secs(2)).await;
         stall.send_replace(true);
         let video = vec![7; 256 * 1024];
         tokio::join!(
@@ -1738,6 +1743,8 @@ mod tests {
             },
         );
         assert!(path.borrow().is_none());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(dials.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -2269,12 +2276,12 @@ async fn run(
                     }
                 }
                 if let Some(mode @ native::Mode::Call(..)) = &native {
-                    if direct.is_none() && now >= next_attempt && native_task.is_none() {
+                    if direct.is_none() && established.is_none() && now >= next_attempt && native_task.is_none() {
                         attempt += 1;
                         native_task = mode.start(attempt, event_tx.clone());
                     }
                 } else if let Some(mode) = offer_mode {
-                    if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
+                    if direct.is_none() && established.is_none() && Instant::now() >= next_attempt && setup.is_none() {
                         attempt += 1;
                         // Only an authenticated peer advertising the new capability can enter full mode.
                         let mode = retries.next(mode, attempt);
