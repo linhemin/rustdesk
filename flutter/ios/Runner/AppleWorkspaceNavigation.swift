@@ -97,11 +97,6 @@ private final class WorkspaceQuickConnectDock: NSObject, FlutterPlatformView, UI
         tabFrame.contains(touch.location(in: controller.view))
     }
 
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool { true }
-
     @objc private func releaseTab(_ gesture: UILongPressGestureRecognizer) {
         let point = gesture.location(in: controller.view)
         let frame = tabFrame
