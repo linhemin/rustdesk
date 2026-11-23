@@ -64,6 +64,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void initState() {
     super.initState();
     _allPeersLoader.init(setState);
+    if (isIOS) _allPeersLoader.getAllPeers();
     _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
