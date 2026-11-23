@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
@@ -38,6 +39,24 @@ class _Binding extends Fake implements RustdeskImpl {
 }
 
 void main() {
+  test('autocomplete survives closing another connection input', () async {
+    isTest = true;
+    platformFFI.setBindingForTesting(_Binding());
+    await initGlobalFFI();
+    final inline = AllPeersLoader()..init((update) => update());
+    final sheet = AllPeersLoader()..init((update) => update());
+    addTearDown(inline.clear);
+    inline.peers.add(Peer.fromJson({'id': '123456789'}));
+    sheet.clear();
+
+    await platformFFI.tryHandle({
+      'name': 'callback_query_onlines',
+      'onlines': '123456789',
+      'offlines': '',
+    });
+    expect(inline.peers.single.online, isTrue);
+  });
+
   testWidgets('recent device opens with the selected desktop connection mode',
       (tester) async {
     isTest = true;
