@@ -2083,6 +2083,7 @@ class _RemotePageState extends State<RemotePage>
               visible: model.show,
               maintainState: true,
               child: MobileSessionQualityMonitor(
+                reserveGamepadSpace: _nativeSessionActive,
                 connection: direct == null
                     ? translate('Quality')
                     : '${translate(direct ? "Direct Connection" : "Relay Connection")} · ${model.activeTransport ?? "—"}',

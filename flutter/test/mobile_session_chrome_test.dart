@@ -44,6 +44,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(
         body: MobileSessionQualityMonitor(
+          reserveGamepadSpace: true,
           connection: '直接连接 · TCP',
           direct: true,
           metrics: [
@@ -101,6 +102,7 @@ void main() {
         body: MediaQuery(
           data: const MediaQueryData(textScaler: TextScaler.linear(1.5)),
           child: MobileSessionQualityMonitor(
+            reserveGamepadSpace: true,
             connection: '中继连接 · WebRTC/IPv6 / TURN',
             direct: false,
             metrics: const [
@@ -132,6 +134,7 @@ void main() {
         home: Scaffold(
           body: MobileSessionQualityMonitor(
             key: ValueKey(height),
+            reserveGamepadSpace: true,
             connection: 'Direct · TCP',
             direct: true,
             metrics: const [
@@ -163,6 +166,25 @@ void main() {
     }
   });
 
+  testWidgets('compact HUD without native gamepad uses the full viewport',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(760, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(
+        home: Scaffold(
+      body: MobileSessionQualityMonitor(
+        connection: 'Direct · TCP',
+        direct: true,
+        metrics: [('FPS', '60')],
+      ),
+    )));
+    expect(find.text('FPS'), findsOneWidget);
+    await tester.drag(find.text('Direct · TCP'), const Offset(1000, 1000));
+    await tester.pump();
+    expect(tester.getRect(find.byType(BackdropFilter)).bottom, 308);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('HUD hides when heading and a full action cannot clear game keys',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(760, 320));
@@ -170,6 +192,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(
           body: MobileSessionQualityMonitor(
+        reserveGamepadSpace: true,
         connection: 'Direct · TCP',
         direct: true,
         metrics: [('FPS', '60')],
