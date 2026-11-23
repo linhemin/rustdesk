@@ -1009,7 +1009,6 @@ class _RemotePageState extends State<RemotePage>
       Positioned.fill(
         child: DraggableDesktopQualityMonitor(
           _ffi.qualityMonitorModel,
-          wrap: (child) => _buildRawTouchAndPointerRegion(child, null, null),
         ),
       ),
     );

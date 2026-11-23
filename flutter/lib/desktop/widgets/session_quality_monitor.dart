@@ -165,11 +165,9 @@ class DraggableDesktopQualityMonitor extends StatefulWidget {
   const DraggableDesktopQualityMonitor(
     this.model, {
     super.key,
-    this.wrap,
   });
 
   final QualityMonitorModel model;
-  final Widget Function(Widget child)? wrap;
 
   @override
   State<DraggableDesktopQualityMonitor> createState() =>
@@ -218,7 +216,7 @@ class _DraggableDesktopQualityMonitorState
             ),
           );
 
-          return widget.wrap != null ? widget.wrap!(panel) : panel;
+          return panel;
         }));
   }
 }
