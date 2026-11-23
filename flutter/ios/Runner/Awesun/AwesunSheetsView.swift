@@ -860,6 +860,22 @@ struct AwesunGamePanel: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            // Keep the original arrows away from the home gesture and the rail.
+            HStack(spacing: 4) {
+                gameKey("Up", label: "↑", width: 24, height: 28)
+                gameKey("Left", label: "←", width: 24, height: 28)
+                gameKey("Down", label: "↓", width: 24, height: 28)
+                gameKey("Right", label: "→", width: 24, height: 28)
+                Button(action: model.closeSheet) {
+                    Text("退出游戏键盘")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(AwesunPalette.textPrimary)
+                        .padding(.horizontal, 5).frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
+                        .background(Capsule().fill(AwesunPalette.sheetFill))
+                        .overlay(Capsule().strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
+                        .contentShape(Capsule())
+                }
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 ZStack {
                     Circle().fill(AwesunPalette.sheetFill)
@@ -881,24 +897,8 @@ struct AwesunGamePanel: View {
                 .background(RoundedRectangle(cornerRadius: 16).fill(AwesunPalette.sheetFill))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
             }
-            // Retain the original arrow keys without covering the right-edge rail.
-            HStack(spacing: 4) {
-                gameKey("Up", label: "↑", width: 24, height: 28)
-                gameKey("Left", label: "←", width: 24, height: 28)
-                gameKey("Down", label: "↓", width: 24, height: 28)
-                gameKey("Right", label: "→", width: 24, height: 28)
-                Button(action: model.closeSheet) {
-                    Text("退出游戏键盘")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(AwesunPalette.textPrimary)
-                        .padding(.horizontal, 5).frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
-                        .background(Capsule().fill(AwesunPalette.sheetFill))
-                        .overlay(Capsule().strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
-                        .contentShape(Capsule())
-                }
-            }
         }
-        .padding(.leading, 12).padding(.trailing, 68).padding(.bottom, 24)
+        .padding(.leading, 12).padding(.trailing, 68).padding(.bottom, 44)
         .buttonStyle(.plain)
     }
 
