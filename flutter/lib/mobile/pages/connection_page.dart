@@ -19,21 +19,6 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'home_page.dart';
 
-Future<void> showIPhoneQuickConnect(BuildContext context) async {
-  FocusScope.of(context).unfocus();
-  final initialId = Get.isRegistered<IDTextEditingController>()
-      ? Get.find<IDTextEditingController>().text
-      : await bind.mainGetLastRemoteId();
-  if (!context.mounted) return;
-  final id = await showModalBottomSheet<String>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    builder: (_) => _IPhoneConnectionSheet(initialId: initialId),
-  );
-  if (id != null && context.mounted) connect(context, id);
-}
-
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget implements PageShape {
   ConnectionPage({Key? key, required this.appBarActions}) : super(key: key);
