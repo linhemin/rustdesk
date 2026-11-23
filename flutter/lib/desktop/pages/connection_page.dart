@@ -614,7 +614,10 @@ class _ConnectionPageState extends State<ConnectionPage>
                       counterText: '',
                       hintText: _idInputFocused.value
                           ? null
-                          : translate('Enter Remote ID'),
+                          : translate(
+                              usesWorkspaceStyle && (isMacOS || isWindows)
+                                  ? 'Enter remote ID or device name…'
+                                  : 'Enter Remote ID'),
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 15, vertical: 13)),
                   controller: fieldTextEditingController,

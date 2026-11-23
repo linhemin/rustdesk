@@ -98,7 +98,7 @@ class DeviceCard extends StatelessWidget {
     );
     return Tooltip(
       triggerMode: TooltipTriggerMode.manual,
-      message: [name, remoteId, details, status, note, ...tags]
+      message: [name, remoteId, if (grid) platform, details, status, note, ...tags]
           .where((value) => value.isNotEmpty)
           .join(' · '),
       child: Container(
@@ -116,7 +116,29 @@ class DeviceCard extends StatelessWidget {
                     child: Row(children: [
                   Expanded(child: identity),
                   const SizedBox(width: 8),
-                  icon,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 84),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: WorkspaceStyle.elevatedSurface(context),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(platformIcon, size: 12, color: theme.hintColor),
+                        if (platform.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          Flexible(
+                              child: Text(platform,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(fontSize: 10))),
+                        ],
+                      ]),
+                    ),
+                  ),
                 ])),
                 if (note.isNotEmpty)
                   Align(
@@ -126,15 +148,21 @@ class DeviceCard extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall)),
                 Divider(height: 18),
-                Row(children: [
-                  Expanded(
-                      child: Text(status,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: statusColor))),
-                  ...actions,
-                ]),
+                SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(status,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: statusColor)),
+                          ...actions,
+                        ])),
               ])
             : Row(children: [
                 icon,

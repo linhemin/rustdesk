@@ -12,6 +12,7 @@ import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_test/flutter_test.dart' hide isWindows, isMacOS;
 import 'package:provider/provider.dart';
+import 'package:rustdesk_ui/device_card.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
   @override
@@ -110,7 +111,7 @@ void main() {
       'View camera'
     ];
     for (var i = 0; i < modes.length; i++) {
-      await tester.tap(find.text(modes[i]));
+      await tester.tap(find.text(modes[i]).first);
       await settle();
       await tester.tap(find.text('Studio Mac'));
       await settle();
@@ -120,6 +121,19 @@ void main() {
       expect(request['isFileTransfer'], i == 1);
       expect(request['isTerminal'], i == 2);
       expect(request['isViewCamera'], i == 3);
+    }
+    for (final action in [
+      ('Transfer file', true, false),
+      ('Terminal', false, true),
+      ('Connect', false, false),
+    ]) {
+      await tester.tap(find.descendant(
+          of: find.byType(DeviceCard), matching: find.text(action.$1)));
+      await settle();
+      expect(requests.last['id'], '123456789');
+      expect(requests.last['isFileTransfer'], action.$2);
+      expect(requests.last['isTerminal'], action.$3);
+      expect(requests.last['isViewCamera'], isFalse);
     }
     await mount(devicesOnly: true);
     expect(peerCardUiType.value, PeerUiType.grid);

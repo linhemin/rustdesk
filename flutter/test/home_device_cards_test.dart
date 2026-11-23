@@ -91,7 +91,54 @@ void main() {
     expect(find.text('391 048 227 · owner@workstation'), findsOneWidget);
     expect(find.text('Offline'), findsOneWidget);
     expect(find.byIcon(Icons.key_rounded), findsOneWidget);
+    expect(find.text('Windows'), findsOneWidget);
     expect(tester.widget<Checkbox>(find.byType(Checkbox)).value, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop card keeps actions visible with enlarged text',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: WorkspaceStyle.apply(ThemeData(platform: TargetPlatform.windows)),
+      home: MediaQuery(
+        data: const MediaQueryData(textScaler: TextScaler.linear(1.5)),
+        child: Scaffold(
+          body: SizedBox(
+              width: 340,
+              height: 226,
+              child: DeviceCard(
+                name: 'Workstation with a long device name',
+                remoteId: '391 048 227',
+                platform: 'Windows',
+                platformIcon: Icons.window_outlined,
+                online: true,
+                status: 'Online',
+                note: 'Build machine',
+                grid: true,
+                actions: [
+                  for (final label in ['Transfer file', 'Terminal', 'Connect'])
+                    TextButton(
+                        style: TextButton.styleFrom(
+                            minimumSize: const Size(0, 28),
+                            padding: const EdgeInsets.all(6),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            textStyle: const TextStyle(fontSize: 11)),
+                        onPressed: () {},
+                        child: Text(label)),
+                  IconButton(
+                      constraints:
+                          const BoxConstraints.tightFor(width: 28, height: 28),
+                      padding: EdgeInsets.zero,
+                      onPressed: () {},
+                      icon: const Icon(Icons.more_horiz)),
+                ],
+              )),
+        ),
+      ),
+    ));
+    for (final label in ['Windows', 'Transfer file', 'Terminal', 'Connect']) {
+      expect(find.text(label), findsOneWidget);
+    }
     expect(tester.takeException(), isNull);
   });
 }
