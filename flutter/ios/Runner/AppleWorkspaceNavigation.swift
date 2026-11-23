@@ -52,7 +52,7 @@ final class AppleWorkspaceNavigationFactory: NSObject, FlutterPlatformViewFactor
     }
 }
 
-private final class WorkspaceQuickConnectDock: NSObject, FlutterPlatformView, UIGestureRecognizerDelegate {
+private final class WorkspaceQuickConnectDock: NSObject, FlutterPlatformView {
     private let channel: FlutterMethodChannel
     private let controller: UIHostingController<WorkspaceDockContent>
 
@@ -64,11 +64,6 @@ private final class WorkspaceQuickConnectDock: NSObject, FlutterPlatformView, UI
         ))
         super.init()
         controller.view.backgroundColor = .clear
-        let scrub = UILongPressGestureRecognizer(target: self, action: #selector(releaseTab(_:)))
-        scrub.minimumPressDuration = 0.25
-        scrub.allowableMovement = .greatestFiniteMagnitude
-        scrub.delegate = self
-        controller.view.addGestureRecognizer(scrub)
         update(arguments)
         channel.setMethodCallHandler { [weak self] call, result in
             guard call.method == "update" else {
@@ -83,32 +78,6 @@ private final class WorkspaceQuickConnectDock: NSObject, FlutterPlatformView, UI
     deinit { channel.setMethodCallHandler(nil) }
 
     func view() -> UIView { controller.view }
-
-    private var tabFrame: CGRect {
-        var frame = controller.view.bounds
-        frame.size.width -= 60
-        if (controller.rootView.arguments as? [String: Any])?["rtl"] as? Bool == true {
-            frame.origin.x += 60
-        }
-        return frame
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-        tabFrame.contains(touch.location(in: controller.view))
-    }
-
-    @objc private func releaseTab(_ gesture: UILongPressGestureRecognizer) {
-        let point = gesture.location(in: controller.view)
-        let frame = tabFrame
-        guard gesture.state == .ended, frame.width > 8, frame.contains(point),
-              let settings = WorkspaceTabConfiguration(controller.rootView.arguments),
-              !settings.labels.isEmpty else { return }
-        let width = (frame.width - 8) / CGFloat(settings.labels.count)
-        let column = min(settings.labels.count - 1, max(0, Int((point.x - frame.minX - 4) / width)))
-        let rtl = (controller.rootView.arguments as? [String: Any])?["rtl"] as? Bool == true
-        let index = rtl ? settings.labels.count - 1 - column : column
-        if index != settings.selected { channel.invokeMethod("select", arguments: index) }
-    }
 
     private func update(_ arguments: Any?) {
         guard let config = WorkspaceTabConfiguration(arguments) else { return }
@@ -140,7 +109,7 @@ private struct WorkspaceDockContent: View {
         let rtl = options["rtl"] as? Bool ?? false
         let dark = settings.appearance == .dark
         return HStack(spacing: 10) {
-            GeometryReader { _ in
+            GeometryReader { bounds in
             HStack(spacing: 0) {
                 ForEach(settings.labels.indices, id: \.self) { index in
                     let selected = settings.selected == index
@@ -176,6 +145,13 @@ private struct WorkspaceDockContent: View {
             .padding(4)
             .workspaceDockGlass(Capsule(), dark: dark)
             .contentShape(Capsule())
+            .highPriorityGesture(DragGesture(minimumDistance: 0).onEnded { value in
+                guard bounds.size.width > 8, !settings.labels.isEmpty,
+                      CGRect(origin: .zero, size: bounds.size).contains(value.location) else { return }
+                let width = (bounds.size.width - 8) / CGFloat(settings.labels.count)
+                let column = min(settings.labels.count - 1, max(0, Int((value.location.x - 4) / width)))
+                onSelect(rtl ? settings.labels.count - 1 - column : column)
+            })
             }
             Button(action: onQuickConnect) {
                 Image(systemName: "arrow.right")
