@@ -235,6 +235,7 @@ struct AwesunFunctionSheet: View {
                 .cornerRadius(10)
                 .overlay(RoundedRectangle(cornerRadius: 10)
                     .strokeBorder(selected ? accent.opacity(0.55) : Color.clear, lineWidth: 1))
+                .contentShape(Rectangle())
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
