@@ -3,6 +3,76 @@ import 'package:flutter_hbb/desktop/widgets/file_transfer_workspace.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('deep paths show whole labels or an ancestor menu',
+      (tester) async {
+    const parts = [
+      '/',
+      'Users',
+      'devin',
+      'ft_demo_local',
+      'projects',
+      '2026',
+      'q4'
+    ];
+    List<String>? opened;
+    Widget workspace(double width) => MaterialApp(
+        home: Scaffold(
+            body: SizedBox(
+                width: width,
+                height: 32,
+                child: FileTransferBreadcrumbs(
+                    parts: parts, onSelected: (path) => opened = path))));
+    await tester.pumpWidget(workspace(320));
+    expect(find.text('/'), findsOneWidget);
+    expect(find.text('q4'), findsOneWidget);
+    expect(find.text('ft_demo_local'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ft_demo_local'));
+    await tester.pumpAndSettle();
+    expect(opened, ['/', 'Users', 'devin', 'ft_demo_local']);
+
+    await tester.pumpWidget(workspace(1200));
+    expect(find.byIcon(Icons.more_horiz), findsNothing);
+    expect(find.text('ft_demo_local'), findsOneWidget);
+    await tester.tap(find.text('devin'));
+    expect(opened, ['/', 'Users', 'devin']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('long UNC roots and leaf names leave adjacent controls reachable',
+      (tester) async {
+    final root = r'\\server-with-a-long-name\share-with-a-long-name';
+    final leaf = 'very-long-directory-${'name-' * 30}';
+    List<String>? opened;
+    var dropdownOpened = false;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: SizedBox(
+                width: 240,
+                height: 32,
+                child: Row(children: [
+                  Expanded(
+                      child: FileTransferBreadcrumbs(
+                          parts: [root, leaf],
+                          onSelected: (path) => opened = path)),
+                  IconButton(
+                      onPressed: () => dropdownOpened = true,
+                      icon: const Icon(Icons.arrow_drop_down)),
+                ])))));
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.text(leaf)).height, lessThan(32));
+    await tester.tap(find.byIcon(Icons.arrow_drop_down));
+    expect(dropdownOpened, isTrue);
+    await tester.tap(find.byIcon(Icons.more_horiz));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(root));
+    await tester.pumpAndSettle();
+    expect(opened, [root]);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('expanded desktop queue stays below both full-width browsers',
       (tester) async {
     tester.view.devicePixelRatio = 1;

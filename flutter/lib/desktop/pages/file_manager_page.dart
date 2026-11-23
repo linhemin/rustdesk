@@ -263,6 +263,7 @@ class _FileManagerPageState extends State<FileManagerPage>
 
     statusListView(List<JobProgress> jobs) => ListView.builder(
           controller: ScrollController(),
+          padding: isWindows || isMacOS ? const EdgeInsets.only(bottom: 12) : null,
           itemBuilder: (BuildContext context, int index) {
             final item = jobs[index];
             final status = item.getStatus();
@@ -270,7 +271,7 @@ class _FileManagerPageState extends State<FileManagerPage>
               final theme = Theme.of(context);
               return Container(
                 margin: const EdgeInsets.only(top: 6),
-                padding: const EdgeInsets.fromLTRB(12, 4, 6, 4),
+                padding: const EdgeInsets.fromLTRB(12, 3, 6, 3),
                 decoration: BoxDecoration(
                     color: WorkspaceStyle.elevatedSurface(context),
                     borderRadius: BorderRadius.circular(10)),
@@ -1990,22 +1991,28 @@ class _FileManagerViewState extends State<FileManagerView> {
       }
       controller.openDirectory(path);
     });
-
-    final pinRoot = (isWindows || isMacOS) && items.length > 1 &&
-        !(controller.options.value.isWindows &&
-            controller.directory.value.path.replaceAll(r'\', '/').startsWith('//'));
     return items.isEmpty
         ? Offstage()
         : Row(
             key: _locationBarKey,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-                if (pinRoot) ...[
-                  items.first.content,
-                  const Icon(Icons.keyboard_arrow_right_rounded, size: 16),
-                ],
                 Expanded(
-                  child: Listener(
+                  child: (isWindows || isMacOS) &&
+                          !(controller.options.value.isWindows &&
+                              controller.directory.value.path == '/')
+                      ? FileTransferBreadcrumbs(
+                          parts: PathUtil.split(controller.directory.value.path,
+                              controller.options.value.isWindows),
+                          onSelected: (list) {
+                            var path = '';
+                            for (final part in list) {
+                              path = PathUtil.join(path, part,
+                                  controller.options.value.isWindows);
+                            }
+                            controller.openDirectory(path);
+                          })
+                      : Listener(
                     // handle mouse wheel
                     onPointerSignal: (e) {
                       if (e is PointerScrollEvent) {
@@ -2015,7 +2022,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                       }
                     },
                     child: BreadCrumb(
-                      items: pinRoot ? items.sublist(1) : items,
+                      items: items,
                       divider: const Icon(Icons.keyboard_arrow_right_rounded),
                       overflow: ScrollableOverflow(
                         controller: _breadCrumbScroller,
@@ -2135,14 +2142,6 @@ class _FileManagerViewState extends State<FileManagerView> {
                 content: TextButton(
                   child: Text(e.value),
                   style: ButtonStyle(
-                    padding: (isWindows || isMacOS)
-                        ? WidgetStateProperty.all(
-                            const EdgeInsets.symmetric(horizontal: 4))
-                        : null,
-                    textStyle: (isWindows || isMacOS)
-                        ? WidgetStateProperty.all(const TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w500))
-                        : null,
                     minimumSize: MaterialStateProperty.all(
                       Size(0, 0),
                     ),

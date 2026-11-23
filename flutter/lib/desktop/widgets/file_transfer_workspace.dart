@@ -1,6 +1,95 @@
 import 'package:flutter/material.dart';
 import 'package:rustdesk_ui/rustdesk_ui.dart';
 
+/// Collapses ancestors into a menu rather than clipping part of a path label.
+class FileTransferBreadcrumbs extends StatelessWidget {
+  const FileTransferBreadcrumbs(
+      {super.key, required this.parts, required this.onSelected});
+
+  final List<String> parts;
+  final ValueChanged<List<String>> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (parts.isEmpty) return const SizedBox.shrink();
+    const buttonInset = 4.0;
+    const chevronSize = 16.0;
+    final style = Theme.of(context)
+        .textTheme
+        .labelLarge!
+        .copyWith(fontSize: 12, fontWeight: FontWeight.w500);
+    Widget button(int index) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: buttonInset),
+        child: Tooltip(
+            message: parts[index],
+            child: TextButton(
+                style: TextButton.styleFrom(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: buttonInset),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    alignment: AlignmentDirectional.centerStart,
+                    textStyle: style),
+                onPressed: () => onSelected(parts.sublist(0, index + 1)),
+                child: Text(parts[index],
+                    maxLines: 1, overflow: TextOverflow.ellipsis))));
+    return LayoutBuilder(builder: (context, bounds) {
+      final painter = TextPainter(
+          textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context));
+      double width = parts.length * buttonInset * 4 +
+          (parts.length - 1) * chevronSize +
+          buttonInset * 2;
+      for (final part in parts) {
+        painter.text = TextSpan(text: part, style: style);
+        painter.layout();
+        width += painter.width;
+      }
+      painter.dispose();
+      final shortRoot = parts.first == '/' ||
+          (parts.first.length <= 3 && parts.first.contains(':'));
+      final hiddenStart = shortRoot ? 1 : 0;
+      final collapse =
+          width > bounds.maxWidth && parts.length - hiddenStart > 1;
+      final visible = collapse
+          ? [if (shortRoot) 0, -1, parts.length - 1]
+          : List.generate(parts.length, (index) => index);
+      return Row(children: [
+        for (var position = 0; position < visible.length; position++) ...[
+          if (position > 0)
+            const Icon(Icons.keyboard_arrow_right_rounded, size: chevronSize),
+          if (visible[position] < 0)
+            SizedBox(
+                width: 28,
+                height: 28,
+                child: PopupMenuButton<int>(
+                    tooltip: parts.take(parts.length - 1).join(' › '),
+                    padding: EdgeInsets.zero,
+                    icon: const Icon(Icons.more_horiz, size: 18),
+                    onSelected: (index) =>
+                        onSelected(parts.sublist(0, index + 1)),
+                    itemBuilder: (_) => [
+                          for (var index = hiddenStart;
+                              index < parts.length - 1;
+                              index++)
+                            PopupMenuItem(
+                                value: index,
+                                child: Tooltip(
+                                    message: parts[index],
+                                    child: Text(parts[index],
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis))),
+                        ]))
+          else if (visible[position] == parts.length - 1)
+            Expanded(child: button(visible[position]))
+          else
+            button(visible[position]),
+        ],
+      ]);
+    });
+  }
+}
+
 /// Keeps both file browsers mounted while changing the visible pane.
 class FileTransferWorkspace extends StatefulWidget {
   const FileTransferWorkspace({
