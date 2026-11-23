@@ -857,5 +857,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("LAN", "區域網路"),
         ("Enter remote ID or device name…", "輸入遠端 ID 或裝置名稱…"),
         ("Scan QR code", "掃描 QR 碼"),
+        ("Home and devices", "首頁與裝置"),
+        ("Remote sessions", "遠端工作階段"),
     ].iter().cloned().collect();
 }
