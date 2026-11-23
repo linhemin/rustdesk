@@ -329,9 +329,8 @@ class _ConnectionPageState extends State<ConnectionPage>
   @override
   void didUpdateWidget(covariant ConnectionPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.requestedMode != null &&
-        widget.requestedMode != oldWidget.requestedMode) {
-      _mode = widget.requestedMode!;
+    if (widget.requestedMode != oldWidget.requestedMode) {
+      _mode = widget.requestedMode ?? 0;
     }
   }
 
