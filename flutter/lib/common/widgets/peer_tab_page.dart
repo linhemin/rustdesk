@@ -813,7 +813,9 @@ class _PeerTabPageState extends State<PeerTabPage>
         offstage: model.currentTabCachedPeers.isEmpty,
         child: _createMultiSelection(),
       ),
-      if (usesWorkspaceStyle ||
+      if ((usesWorkspaceStyle &&
+              const {TargetPlatform.macOS, TargetPlatform.windows}
+                  .contains(Theme.of(context).platform)) ||
           ConnectionPeerList.of(context)?.onConnect == null)
         _createPeerViewTypeSwitch(context),
       Offstage(
