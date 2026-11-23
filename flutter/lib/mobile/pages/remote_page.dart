@@ -28,6 +28,7 @@ import '../../models/platform_model.dart';
 import '../../models/shortcut_model.dart';
 import '../../utils/image.dart';
 import '../../utils/scale.dart';
+import '../awesun/awesun_flutter_overlay.dart';
 import '../awesun/awesun_native_bridge.dart';
 import '../ios_p2p_diagnostics.dart';
 import '../session_canvas_drag.dart';
@@ -160,7 +161,7 @@ class _RemotePageState extends State<RemotePage>
   bool _nativeSessionActive = false;
   late final _canvasDrag = SessionCanvasDrag(this, (delta) {
     final canvas = gFFI.canvasModel;
-    if (!_nativeSessionActive ||
+    if (!_usesAwesunOverlay ||
         !gFFI.ffiModel.touchMode ||
         gFFI.ffiModel.isPeerMobile ||
         canvas.locked) return false;
@@ -908,8 +909,20 @@ class _RemotePageState extends State<RemotePage>
         canvas.getDisplayHeight() * canvas.scale,
       );
 
+  final GlobalKey _androidAwesunOverlayKey = GlobalKey();
+  bool get _usesAndroidAwesun => isAndroid && _sessionReady;
+  bool get _usesAwesunOverlay => _nativeSessionActive || _usesAndroidAwesun;
+
+  Offset _androidAwesunGlobalPoint(Offset localPoint) {
+    final box = _androidAwesunOverlayKey.currentContext?.findRenderObject();
+    if (box is RenderBox && box.attached) {
+      return box.localToGlobal(localPoint);
+    }
+    return localPoint;
+  }
+
   Future<bool> _moveToNativePointer(Offset point, {Offset pan = Offset.zero}) async {
-    if (!mounted || !_nativeSessionActive || !_canSendSessionInput) return false;
+    if (!mounted || !_usesAwesunOverlay || !_canSendSessionInput) return false;
     final box = _sessionViewportKey.currentContext?.findRenderObject();
     if (box is! RenderBox || !box.attached || !box.hasSize) return false;
     final local = box.globalToLocal(point);
@@ -1566,10 +1579,10 @@ class _RemotePageState extends State<RemotePage>
     final model = context.watch<FfiModel>();
     return Obx(() {
       _scheduleSessionViewportUpdate();
-      if (!_sessionReady || !_canSendSessionInput) {
+      if (!_sessionReady) {
         return const SizedBox.shrink();
       }
-      if (_showSessionKeyboard) {
+      if (_showSessionKeyboard && _canSendSessionInput) {
         return SafeArea(
           minimum: const EdgeInsets.fromLTRB(8, 0, 8, 8),
           child: LayoutBuilder(
@@ -1611,7 +1624,107 @@ class _RemotePageState extends State<RemotePage>
           ),
         );
       }
-      if (_showGestureHelp || model.isPeerAndroid || !model.touchMode) {
+      if (_usesAndroidAwesun && !_showGestureHelp) {
+        return AnimatedBuilder(
+          animation: Listenable.merge([
+            gFFI.canvasModel,
+            gFFI.qualityMonitorModel,
+          ]),
+          builder: (context, _) {
+            final canvas = gFFI.canvasModel;
+            final peer = model.pi;
+            final soundMuted = bind.sessionGetToggleOptionSync(
+                sessionId: sessionId, arg: 'disable-audio');
+            return AwesunFlutterOverlay(
+              key: _androidAwesunOverlayKey,
+              touchMode: model.touchMode,
+              canInput: _canSendSessionInput && !model.isPeerAndroid,
+              canSwitchMode: _canSendSessionInput && !model.isPeerAndroid,
+              displayLocked: canvas.locked,
+              soundOn: !soundMuted,
+              qualityVisible: gFFI.qualityMonitorModel.show,
+              displayCount: peer.displays.length,
+              translateLabel: translate,
+              onMovePointer: (local) => _moveNativePointer(
+                _androidAwesunGlobalPoint(local),
+                Offset.zero,
+              ),
+              onLeftClick: (local) {
+                final pt = _androidAwesunGlobalPoint(local);
+                _queueVirtualMouse(
+                    () => _clickSessionMouse(MouseButtons.left, nativePoint: pt));
+              },
+              onRightClick: (local) {
+                final pt = _androidAwesunGlobalPoint(local);
+                _queueVirtualMouse(
+                    () => _clickSessionMouse(MouseButtons.right, nativePoint: pt));
+              },
+              onMiddleClick: (local) {
+                final pt = _androidAwesunGlobalPoint(local);
+                _queueVirtualMouse(
+                    () => _clickSessionMouse(MouseButtons.wheel, nativePoint: pt));
+              },
+              onLeftDragStart: (local) => _holdVirtualMouse(
+                nativePoint: _androidAwesunGlobalPoint(local),
+              ),
+              onLeftDragEnd: _releaseVirtualMouse,
+              onScroll: (steps, local) {
+                final pt = _androidAwesunGlobalPoint(local);
+                _queueVirtualMouse(() async {
+                  if (await _moveToNativePointer(pt) &&
+                      mounted &&
+                      _canSendSessionInput) {
+                    await inputModel.scroll(steps);
+                  }
+                });
+              },
+              onToggleLock: () =>
+                  setState(() => canvas.setLocked(!canvas.locked)),
+              onSelectTouchMode: (touch) => unawaited(_setSessionInputMode(
+                  touch ? SessionInputMode.touch : SessionInputMode.pointer)),
+              onOpenSystemKeyboard: openKeyboard,
+              onOpenVirtualKeyboard: _openSessionKeyboard,
+              onOpenDisplaySettings: () =>
+                  _sessionAction(SessionAction.display),
+              onToggleQuality: () {
+                unawaited(bind
+                    .sessionToggleOption(
+                        sessionId: sessionId, value: 'show-quality-monitor')
+                    .then((_) => gFFI.qualityMonitorModel
+                        .checkShowQualityMonitor(sessionId)));
+              },
+              onToggleSound: () {
+                unawaited(bind
+                    .sessionToggleOption(
+                        sessionId: sessionId, value: 'disable-audio')
+                    .then((_) {
+                  if (mounted) setState(() {});
+                }));
+              },
+              onSwitchDisplay: peer.displays.length > 1
+                  ? () {
+                      final next =
+                          (peer.currentDisplay + 1) % peer.displays.length;
+                      bind.sessionSwitchDisplay(
+                          sessionId: sessionId, value: next);
+                    }
+                  : null,
+              onOpenChat: () => _sessionAction(SessionAction.chat),
+              onOpenMore: () => _sessionAction(SessionAction.more),
+              onDisconnect: () => _sessionAction(SessionAction.disconnect),
+              onPointerVisibilityChanged: (visible) {
+                if (mounted && _nativePointerVisible != visible) {
+                  setState(() => _nativePointerVisible = visible);
+                }
+              },
+            );
+          },
+        );
+      }
+      if (!_canSendSessionInput ||
+          _showGestureHelp ||
+          model.isPeerAndroid ||
+          !model.touchMode) {
         return const SizedBox.shrink();
       }
       return ListenableBuilder(
@@ -1678,7 +1791,8 @@ class _RemotePageState extends State<RemotePage>
               ? FABLocation(FloatingActionButtonLocation.endFloat, 0, -35)
               : null,
           floatingActionButton: isMobile
-              ? (_nativeSessionActive ||
+              ? (isAndroid ||
+                      _nativeSessionActive ||
                       (keyboardVisibilityController.isVisible && !_showEdit)
                   ? null
                   : _sessionDock())
@@ -1756,8 +1870,8 @@ class _RemotePageState extends State<RemotePage>
           : RawTouchGestureDetectorRegion(
               child: getBodyForMobile(),
               ffi: gFFI,
-              awesunCanvas: _nativeSessionActive,
-              canvasDrag: _nativeSessionActive && !gFFI.ffiModel.isPeerMobile
+              awesunCanvas: _usesAwesunOverlay,
+              canvasDrag: _usesAwesunOverlay && !gFFI.ffiModel.isPeerMobile
                   ? _canvasDrag
                   : null,
             ));
@@ -1973,7 +2087,8 @@ class _RemotePageState extends State<RemotePage>
               ImagePaint(ffiModel: gFFI.ffiModel),
             Positioned(
               top: 10,
-              right: 10,
+              left: _usesAwesunOverlay ? 10 : null,
+              right: _usesAwesunOverlay ? null : 10,
               child: QualityMonitor(gFFI.qualityMonitorModel),
             ),
             if (!isMobile)
@@ -2020,11 +2135,11 @@ class _RemotePageState extends State<RemotePage>
           if (showCursorPaint && !_nativePointerVisible) {
             paints.add(CursorPaint(widget.id));
           }
-          if (!_nativeSessionActive && gFFI.ffiModel.touchMode && !isMobile) {
+          if (!_usesAwesunOverlay && gFFI.ffiModel.touchMode && !isMobile) {
             paints.add(FloatingMouse(
               ffi: gFFI,
             ));
-          } else if (!_nativeSessionActive &&
+          } else if (!_usesAwesunOverlay &&
               !gFFI.ffiModel.touchMode &&
               !_showSessionKeyboard) {
             paints.add(FloatingMouseWidgets(

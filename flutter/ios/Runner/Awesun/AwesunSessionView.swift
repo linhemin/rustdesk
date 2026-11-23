@@ -234,7 +234,7 @@ struct AwesunKeyboardAccessory: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
                 .frame(width: width, height: 28)
-                .background(selected ? AwesunPalette.brandRed : Color.white.opacity(0.09))
+                .background(selected ? AwesunPalette.brandBlue : Color.white.opacity(0.09))
                 .cornerRadius(7)
                 .frame(height: Self.height)
                 .contentShape(Rectangle())
@@ -402,10 +402,34 @@ struct AwesunVirtualMouseView: View {
                         .accessibilityAction { model.click("left", at: pointer) }
                     arc(.right).accessibilityLabel("鼠标右键")
                         .accessibilityAction { model.click("right", at: pointer) }
+                    let hubActive = model.pressedMouseRegion == .hub || model.dragging
                     Circle()
-                        .fill(model.pressedMouseRegion == .hub || model.dragging
-                              ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
-                        .overlay(Circle().strokeBorder(.black.opacity(0.68), lineWidth: 2))
+                        .fill(hubActive ? AwesunPalette.activeBlue : AwesunPalette.mouseFill)
+                        .overlay(
+                            Circle().strokeBorder(
+                                hubActive ? AwesunPalette.mouseActiveStroke : Color.white.opacity(0.34),
+                                lineWidth: 1.5
+                            )
+                        )
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                                .padding(6)
+                        )
+                        .overlay {
+                            ZStack {
+                                ForEach(0..<4, id: \.self) { idx in
+                                    Capsule()
+                                        .fill(Color.white.opacity(hubActive ? 0.85 : 0.45))
+                                        .frame(width: 1.5, height: 4)
+                                        .offset(y: -10)
+                                        .rotationEffect(.degrees(Double(idx) * 90))
+                                }
+                                Circle()
+                                    .fill(hubActive ? Color.white : AwesunPalette.activeIce)
+                                    .frame(width: 6.5, height: 6.5)
+                            }
+                        }
                         .frame(width: AwesunControlLayout.hub * 2, height: AwesunControlLayout.hub * 2)
                         .accessibilityLabel("移动光标")
                     smallButton(.wheelTop).offset(y: -AwesunControlLayout.wheelOffset)
@@ -417,14 +441,19 @@ struct AwesunVirtualMouseView: View {
                         .accessibilityAction { model.click("middle", at: pointer) }
                 }
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.55))
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.85))
                     .frame(width: 26, height: 26)
-                    .background(Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1))
+                    .background(
+                        Circle()
+                            .fill(AwesunPalette.mouseFill)
+                            .overlay(Circle().strokeBorder(AwesunPalette.mouseStroke, lineWidth: 1.2))
+                    )
                     .accessibilityLabel(model.wheelOpen ? "退出圆形滚轮" : "收起虚拟鼠标")
                     .accessibilityAction { model.closeWheelOrMouse() }
                     .offset(AwesunControlLayout.closeOffset)
             }
+            .shadow(color: .black.opacity(0.45), radius: 14, x: 0, y: 6)
             .frame(width: AwesunControlLayout.mouseSize, height: AwesunControlLayout.mouseSize)
             .scaleEffect(geometry.scale)
             .position(center)
@@ -443,15 +472,30 @@ struct AwesunVirtualMouseView: View {
 
     private func scrollRing(at pointer: CGPoint) -> some View {
         AwesunAnnulus()
-            .fill(.white.opacity(0.27), style: FillStyle(eoFill: true))
-            .overlay(AwesunAnnulus().stroke(.black.opacity(0.68), lineWidth: 2))
+            .fill(AwesunPalette.mouseFill, style: FillStyle(eoFill: true))
+            .overlay(AwesunAnnulus().stroke(AwesunPalette.mouseStroke, lineWidth: 1.2))
             .overlay {
-                if let angle = model.wheelIndicator {
-                    Circle().fill(Color(awesun: 0xFFF4BA58))
-                        .frame(width: 23, height: 23)
-                        .blur(radius: 2)
+                ZStack {
+                    ForEach(0..<24, id: \.self) { idx in
+                        Capsule()
+                            .fill(idx % 6 == 0 ? AwesunPalette.activeIce.opacity(0.75) : Color.white.opacity(0.24))
+                            .frame(width: idx % 6 == 0 ? 1.6 : 1.0, height: idx % 6 == 0 ? 10 : 6)
+                            .offset(y: -AwesunControlLayout.ringRadius)
+                            .rotationEffect(.degrees(Double(idx) * 15))
+                    }
+                    if let angle = model.wheelIndicator {
+                        ZStack {
+                            Circle()
+                                .fill(AwesunPalette.activeIce)
+                                .frame(width: 21, height: 21)
+                                .blur(radius: 3)
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 9, height: 9)
+                        }
                         .offset(x: AwesunControlLayout.ringRadius * cos(angle),
                                 y: AwesunControlLayout.ringRadius * sin(angle))
+                    }
                 }
             }
             .accessibilityLabel("圆形滚轮")
@@ -463,22 +507,33 @@ struct AwesunVirtualMouseView: View {
 
     private func arc(_ side: AwesunMouseRegion) -> some View {
         let band = AwesunControlLayout.band(side)
-        return band.fill(model.pressedMouseRegion == side
-                         ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
-            .overlay(band.stroke(.black.opacity(0.72), lineWidth: 2))
+        let active = model.pressedMouseRegion == side || (side == .left && model.dragging)
+        return ZStack {
+            band.fill(active ? AwesunPalette.activeBlue : AwesunPalette.mouseFill)
+                .overlay(band.stroke(active ? AwesunPalette.mouseActiveStroke : AwesunPalette.mouseStroke, lineWidth: 1.4))
+            Text(side == .left ? "L" : "R")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(active ? .white : AwesunPalette.textSecondary)
+                .offset(x: side == .left ? -AwesunControlLayout.arcRadius : AwesunControlLayout.arcRadius)
+        }
     }
 
     private func smallButton(_ region: AwesunMouseRegion) -> some View {
-        Circle()
-            .fill(model.pressedMouseRegion == region ? AwesunPalette.brandRed : AwesunPalette.mouseFill)
-            .overlay(Circle().strokeBorder(.black.opacity(0.68), lineWidth: 2))
+        let active = model.pressedMouseRegion == region
+        return Circle()
+            .fill(active ? AwesunPalette.activeBlue : AwesunPalette.mouseFill)
+            .overlay(Circle().strokeBorder(active ? AwesunPalette.mouseActiveStroke : AwesunPalette.mouseStroke, lineWidth: 1.4))
             .overlay {
                 if region == .wheelBottom {
                     VStack(spacing: 2) {
                         ForEach(0..<5, id: \.self) { _ in
-                            Capsule().fill(.black.opacity(0.30)).frame(width: 13, height: 1.5)
+                            Capsule().fill(Color.white.opacity(0.68)).frame(width: 12, height: 1.4)
                         }
                     }
+                } else if region == .wheelTop {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.88))
                 }
             }
             .frame(width: 28, height: 28)
@@ -551,7 +606,7 @@ struct AwesunFloatingChrome: ViewModifier {
 #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             control
-                .foregroundColor(accent ? AwesunPalette.brandRed : .primary)
+                .foregroundColor(accent ? AwesunPalette.activeIce : .primary)
                 .glassEffect(.regular.interactive(), in: Circle())
         } else {
             fallback(control)
@@ -563,8 +618,18 @@ struct AwesunFloatingChrome: ViewModifier {
 
     private func fallback(_ control: some View) -> some View {
         control
-            .foregroundColor(accent ? AwesunPalette.brandRed : .white)
-            .background(Circle().fill(Color.black.opacity(0.78)))
+            .foregroundColor(accent ? AwesunPalette.activeIce : .white)
+            .background(
+                Circle()
+                    .fill(AwesunPalette.padFill.opacity(0.86))
+                    .overlay(
+                        Circle().strokeBorder(
+                            accent ? AwesunPalette.activeIce.opacity(0.45) : AwesunPalette.mouseStroke,
+                            lineWidth: 1.0
+                        )
+                    )
+            )
+            .shadow(color: .black.opacity(0.38), radius: 10, x: 0, y: 4)
     }
 }
 
