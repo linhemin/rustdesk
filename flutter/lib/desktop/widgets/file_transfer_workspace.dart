@@ -63,7 +63,7 @@ class FileTransferBreadcrumbs extends StatelessWidget {
           ? [if (shortRoot) 0, -1, parts.length - 1]
           : List.generate(parts.length, (index) => index);
       Widget menu() => PopupMenuButton<int>(
-          tooltip: parts.take(parts.length - 1).join(' › '),
+          tooltip: parts.join(' › '),
           padding: EdgeInsets.zero,
           icon: compact ? null : const Icon(Icons.more_horiz, size: 18),
           child: compact
