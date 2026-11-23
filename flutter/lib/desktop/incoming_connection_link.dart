@@ -4,8 +4,9 @@ String incomingConnectionLink({
   String server = '',
   String key = '',
 }) {
-  final target = server.isEmpty ? id : '$id@$server';
-  return Uri.parse('$uriPrefix$target')
-      .replace(queryParameters: key.isEmpty ? null : {'key': key})
+  final target = '$id@${server.isEmpty ? 'public' : server}';
+  return Uri.parse('${uriPrefix}connect')
+      .replace(
+          path: '/$target', queryParameters: key.isEmpty ? null : {'key': key})
       .toString();
 }

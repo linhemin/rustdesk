@@ -2,9 +2,11 @@ import 'package:flutter_hbb/desktop/incoming_connection_link.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('public invitation opens a connection without sharing a password', () {
+  test(
+      'public invitation explicitly routes to the public server without a password',
+      () {
     expect(incomingConnectionLink(uriPrefix: 'rustdesk://', id: '123456789'),
-        'rustdesk://123456789');
+        'rustdesk://connect/123456789@public');
   });
 
   test('self-hosted invitation retains its server and public key', () {
@@ -14,7 +16,19 @@ void main() {
       server: 'hbbs.example.invalid:21116',
       key: 'a+public/key=',
     ));
-    expect(uri.authority, 'my_desk-1@hbbs.example.invalid:21116');
+    expect(uri.authority, 'connect');
+    expect(uri.path, '/my_desk-1@hbbs.example.invalid:21116');
     expect(uri.queryParameters, {'key': 'a+public/key='});
+  });
+
+  test(
+      'mixed-case and command-like IDs stay case-preserving connection targets',
+      () {
+    for (final id in ['MyDesk_1', 'terminal', 'config', 'password']) {
+      final uri =
+          Uri.parse(incomingConnectionLink(uriPrefix: 'rustdesk://', id: id));
+      expect(uri.authority, 'connect');
+      expect(uri.path.substring(1), '$id@public');
+    }
   });
 }
