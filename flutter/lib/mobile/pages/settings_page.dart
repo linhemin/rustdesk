@@ -24,6 +24,7 @@ import '../widgets/dialog.dart';
 import 'home_page.dart';
 import 'mobile_keyboard_shortcuts_page.dart';
 import 'scan_page.dart';
+import 'server_settings_page.dart';
 
 Widget _mobileSettingsList(BuildContext context,
         {required List<AbstractSettingsSection> sections}) =>
@@ -31,12 +32,10 @@ Widget _mobileSettingsList(BuildContext context,
         ? SettingsList(sections: sections)
         : AppleSettingsList(sections: sections);
 
-class SettingsPage extends StatefulWidget implements PageShape {
-  SettingsPage() : _networkOnly = false;
+class SettingsPage extends StatelessWidget implements PageShape {
+  SettingsPage({super.key});
 
-  SettingsPage._network() : _networkOnly = true;
-
-  final bool _networkOnly;
+  final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   final title = translate("Settings");
@@ -48,7 +47,28 @@ class SettingsPage extends StatefulWidget implements PageShape {
   final appBarActions = bind.isDisableSettings() ? [] : [ScanButton()];
 
   @override
-  State<SettingsPage> createState() => _SettingsState();
+  Widget build(BuildContext context) {
+    if (Theme.of(context).platform != TargetPlatform.iOS) {
+      return const _SettingsContent();
+    }
+    return NavigatorPopHandler(
+      onPop: () => _navigatorKey.currentState!.pop(),
+      child: Navigator(
+        key: _navigatorKey,
+        onGenerateRoute: (_) =>
+            MaterialPageRoute<void>(builder: (_) => const _SettingsContent()),
+      ),
+    );
+  }
+}
+
+class _SettingsContent extends StatefulWidget {
+  const _SettingsContent({bool networkOnly = false})
+      : _networkOnly = networkOnly;
+  final bool _networkOnly;
+
+  @override
+  State<_SettingsContent> createState() => _SettingsState();
 }
 
 const url = 'https://rustdesk.com/';
@@ -81,7 +101,11 @@ KeepScreenOn optionToKeepScreenOn(String value) {
   }
 }
 
-class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
+class _SettingsState extends State<_SettingsContent>
+    with WidgetsBindingObserver {
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _language = '';
   final _hasIgnoreBattery =
       false; //androidVersion >= 26; // remove because not work on every device
   var _ignoreBatteryOpt = false;
@@ -258,6 +282,19 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         _isUsingPublicServer = isUsingPublicServer;
       }
 
+      final langs = jsonDecode(await bind.mainGetLangs()) as List<dynamic>;
+      final selectedLanguage = bind.mainGetLocalOption(key: kCommConfKeyLang);
+      final currentLanguage = selectedLanguage.isEmpty
+          ? localeName.split('_').first
+          : selectedLanguage;
+      for (final entry in langs) {
+        if (entry[0] == currentLanguage) {
+          _language = translate(entry[1] as String);
+          update = true;
+          break;
+        }
+      }
+
       if (update && mounted) {
         setState(() {});
       }
@@ -266,6 +303,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _searchController.dispose();
     if (!widget._networkOnly) WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -310,10 +348,11 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           bool disabledSettings, bool incomingOnly, bool outgoingOnly) =>
       <AbstractSettingsTile>[
         if (Theme.of(context).platform == TargetPlatform.iOS &&
-            !disabledSettings && !_hideNetwork && !incomingOnly)
+            !disabledSettings &&
+            !_hideNetwork &&
+            !incomingOnly)
           SettingsTile.switchTile(
             title: Text(translate('Direct connections only')),
-            description: Text(translate('direct-only-tip')),
             initialValue: mainGetLocalBoolOptionSync(kOptionDirectOnly),
             onToggle: isOptionFixed(kOptionDirectOnly)
                 ? null
@@ -462,16 +501,57 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
           ),
       ];
 
+  Future<void> _showServerPage([ServerConfig? config]) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => ServerSettingsPage(initialConfig: config)));
+    final public = await bind.mainIsUsingPublicServer();
+    if (mounted) setState(() => _isUsingPublicServer = public);
+  }
+
   @override
   Widget build(BuildContext context) {
     Provider.of<FfiModel>(context);
     final outgoingOnly = bind.isOutgoingOnly();
     final incomingOnly = bind.isIncomingOnly();
     if (widget._networkOnly) {
+      final tiles =
+          _networkTiles(bind.isDisableSettings(), incomingOnly, outgoingOnly);
+      const p2p = [
+        'Enable UDP hole punching',
+        'Enable TCP hole punching',
+        'Enable IPv6 P2P connection',
+        'Enable WebRTC P2P connection'
+      ];
+      String title(AbstractSettingsTile tile) =>
+          tile is SettingsTile && tile.title is Text
+              ? (tile.title as Text).data ?? ''
+              : '';
+      final p2pLabels = p2p.map(translate).toList();
+      final diagnostics = translate('Record P2P diagnostics');
+      final connection = tiles
+          .where((tile) =>
+              !p2pLabels.contains(title(tile)) && title(tile) != diagnostics)
+          .toList();
+      final punch = [
+        for (final label in p2pLabels)
+          ...tiles.where((tile) => title(tile) == label)
+      ];
       return AppleSettingsList(sections: [
+        if (connection.isNotEmpty)
+          SettingsSection(
+              title: Text(translate('Connection')), tiles: connection),
+        if (!bind.isDisableSettings() && !_hideNetwork && !incomingOnly)
+          CustomSettingsSection(
+              child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            child: Text(translate('direct-only-tip'),
+                style: Theme.of(context).textTheme.bodySmall),
+          )),
+        if (punch.isNotEmpty)
+          SettingsSection(title: const Text('P2P'), tiles: punch),
         SettingsSection(
-            tiles: _networkTiles(
-                bind.isDisableSettings(), incomingOnly, outgoingOnly)),
+            title: Text(translate('Diagnostics')),
+            tiles: tiles.where((tile) => title(tile) == diagnostics).toList()),
       ]);
     }
     final customClientSection = CustomSettingsSection(
@@ -921,8 +1001,15 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       if (!disabledSettings && !_hideNetwork && !_hideServer)
         SettingsTile(
             title: Text(translate('ID/Relay Server')),
-            leading: Icon(Icons.cloud),
-            onPressed: (context) {
+            leading: Icon(apple ? Icons.hub_outlined : Icons.cloud),
+            value: apple
+                ? Text(translate(_isUsingPublicServer ? 'Default' : 'Custom'))
+                : null,
+            onPressed: (context) async {
+              if (apple) {
+                await _showServerPage();
+                return;
+              }
               showServerSettings(gFFI.dialogManager, (callback) async {
                 _isUsingPublicServer = await bind.mainIsUsingPublicServer();
                 setState(callback);
@@ -934,22 +1021,28 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       SettingsTile(
           title: Text(translate('Language')),
           leading: Icon(Icons.translate),
+          value: apple
+              ? Text(_language.isEmpty ? translate('Default') : _language)
+              : null,
           onPressed: (context) {
             showLanguageSettings(gFFI.dialogManager);
           }),
       SettingsTile(
         title: Text(translate(apple
-            ? 'Theme'
+            ? 'Appearance'
             : Theme.of(context).brightness == Brightness.light
                 ? 'Light Theme'
                 : 'Dark Theme')),
         value: apple
-            ? Text(translate(Theme.of(context).brightness == Brightness.light
-                ? 'Light Theme'
-                : 'Dark Theme'))
+            ? Text(
+                translate(MyTheme.getThemeModePreference() == ThemeMode.system
+                    ? 'Follow System'
+                    : Theme.of(context).brightness == Brightness.light
+                        ? 'Light'
+                        : 'Dark'))
             : null,
         leading: Icon(apple
-            ? Icons.contrast_rounded
+            ? Icons.nightlight_round
             : Theme.of(context).brightness == Brightness.light
                 ? Icons.dark_mode
                 : Icons.light_mode),
@@ -963,9 +1056,17 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         SettingsTile.navigation(
           leading: Icon(Icons.keyboard_outlined),
           title: Text(translate('Keyboard shortcuts')),
-          description: Text(
-              ShortcutModel.isEnabled() ? translate('On') : translate('Off')),
-          trailing: Icon(Icons.arrow_forward_ios),
+          description: apple
+              ? null
+              : Text(ShortcutModel.isEnabled()
+                  ? translate('On')
+                  : translate('Off')),
+          value: apple
+              ? Text(ShortcutModel.isEnabled()
+                  ? '${ShortcutModel.config().bindings.length}'
+                  : translate('Off'))
+              : null,
+          trailing: apple ? null : Icon(Icons.arrow_forward_ios),
           onPressed: (context) {
             Navigator.push(
                 context,
@@ -981,6 +1082,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       if (!bind.isDisableAccount())
         SettingsTile.switchTile(
           title: Text(translate('note-at-conn-end-tip')),
+          leading: apple ? const Icon(Icons.edit_note) : null,
           initialValue: _allowAskForNoteAtEndOfConnection,
           onToggle: (v) async {
             if (v && !gFFI.userModel.isLogin) {
@@ -999,6 +1101,7 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
       if (!incomingOnly)
         SettingsTile.switchTile(
           title: Text(translate('keep-awake-during-outgoing-sessions-label')),
+          leading: apple ? const Icon(Icons.power_settings_new) : null,
           initialValue: _preventSleepWhileConnected,
           onToggle: (v) async {
             await mainSetLocalBoolOption(
@@ -1010,11 +1113,11 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
         ),
     ];
 
-    return _mobileSettingsList(
+    return _buildSettingsList(
       context,
       sections: [
-        customClientSection,
-        if (!bind.isDisableAccount())
+        if (!apple || bind.isCustomClient()) customClientSection,
+        if (!apple && !bind.isDisableAccount())
           SettingsSection(
             title: Text(translate('Account')),
             tiles: [
@@ -1062,25 +1165,61 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
               network.isNotEmpty)
             SettingsSection(title: Text(translate('Connection')), tiles: [
               ...server,
-              if (!incomingOnly) ...defaultDisplaySection().tiles,
-              ...shortcuts,
               if (network.isNotEmpty)
                 SettingsTile.navigation(
                   title: Text(translate('Network')),
-                  leading: const Icon(Icons.hub_outlined),
-                  onPressed: (context) => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                        builder: (_) => Scaffold(
-                              appBar: AppBar(title: Text(translate('Network'))),
-                              body: SettingsPage._network(),
-                            )),
-                  ),
+                  leading: const Icon(Icons.public),
+                  value: Text(translate(
+                      mainGetLocalBoolOptionSync(kOptionDirectOnly)
+                          ? 'Direct connections only'
+                          : 'Auto')),
+                  onPressed: (context) async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                          builder: (_) => Scaffold(
+                                appBar: AppBar(
+                                    leadingWidth: 120,
+                                    leading: TextButton.icon(
+                                      onPressed: () =>
+                                          Navigator.of(context).pop(),
+                                      icon: const Icon(Icons.chevron_left,
+                                          size: 20),
+                                      label: Text(translate('Settings'),
+                                          overflow: TextOverflow.ellipsis),
+                                    ),
+                                    title: Text(translate('Network'),
+                                        style: const TextStyle(fontSize: 15)),
+                                    centerTitle: true),
+                                body: const _SettingsContent(networkOnly: true),
+                              )),
+                    );
+                    if (mounted) {
+                      setState(() {
+                        _allowWebSocket =
+                            mainGetBoolOptionSync(kOptionAllowWebSocket);
+                        _allowInsecureTlsFallback = mainGetBoolOptionSync(
+                            kOptionAllowInsecureTLSFallback);
+                        _enableTcpPunch =
+                            mainGetLocalBoolOptionSync(kOptionEnableTcpPunch);
+                        _enableUdpPunch =
+                            mainGetLocalBoolOptionSync(kOptionEnableUdpPunch);
+                        _enableIpv6Punch =
+                            mainGetLocalBoolOptionSync(kOptionEnableIpv6Punch);
+                        _enableWebrtc =
+                            mainGetLocalBoolOptionSync(kOptionEnableWebrtc);
+                      });
+                    }
+                  },
                 ),
             ]),
+          if (_searchQuery.trim().isNotEmpty && network.isNotEmpty)
+            SettingsSection(title: Text(translate('Network')), tiles: network),
           SettingsSection(title: Text(translate('General')), tiles: [
             ...appearance,
+            ...shortcuts,
             ...preferences,
           ]),
+          if (!incomingOnly) defaultDisplaySection(),
         ] else
           SettingsSection(title: Text(translate('Settings')), tiles: [
             ...server,
@@ -1187,30 +1326,37 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                 onPressed: (context) async {
                   await launchUrl(Uri.parse(url));
                 },
-                title: Text('${translate('Version')}: $version'),
+                title: Text(apple
+                    ? translate('Version')
+                    : '${translate('Version')}: $version'),
+                description: apple
+                    ? Text('${translate('Build Date')}: $_buildDate')
+                    : null,
                 trailing: apple ? const Icon(Icons.open_in_new_rounded) : null,
                 value: Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text('rustdesk.com',
+                  child: Text(apple ? version : 'rustdesk.com',
                       style: TextStyle(
                         decoration: TextDecoration.underline,
                       )),
                 ),
                 leading: Icon(Icons.info)),
-            SettingsTile(
-                title: Text(translate("Build Date")),
-                value: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(_buildDate),
-                ),
-                leading: Icon(Icons.query_builder)),
-            if (isAndroid)
+            if (!apple)
+              SettingsTile(
+                  title: Text(translate("Build Date")),
+                  value: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text(_buildDate),
+                  ),
+                  leading: Icon(Icons.query_builder)),
+            if (isAndroid || apple)
               SettingsTile(
                   onPressed: (context) => onCopyFingerprint(_fingerprint),
                   title: Text(translate("Fingerprint")),
                   value: Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text(_fingerprint),
+                    child: Text(_fingerprint,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
                   ),
                   leading: Icon(Icons.fingerprint)),
             SettingsTile(
@@ -1235,6 +1381,52 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildSettingsList(BuildContext context,
+      {required List<AbstractSettingsSection> sections}) {
+    if (Theme.of(context).platform != TargetPlatform.iOS) {
+      return _mobileSettingsList(context, sections: sections);
+    }
+    return SafeArea(
+        bottom: false,
+        child: AppleSettingsList(
+          searchQuery: _searchQuery,
+          header: AppleSettingsHeader(
+            title: translate('Settings'),
+            searchHint: translate('Search'),
+            controller: _searchController,
+            onSearch: (value) => setState(() => _searchQuery = value),
+            scan: bind.isDisableSettings()
+                ? null
+                : ScanButton(onServerConfig: _showServerPage),
+          ),
+          leading: [
+            if (!bind.isDisableAccount() && _searchQuery.trim().isEmpty)
+              Obx(() {
+                final user = gFFI.userModel;
+                final avatar =
+                    bind.mainResolveAvatarUrl(avatar: user.avatar.value);
+                return AppleSettingsAccountCard(
+                  title: user.isLogin
+                      ? user.accountLabelWithHandle
+                      : translate('Login'),
+                  subtitle:
+                      '${bind.mainGetAppNameSync()} · ${translate('Account')}',
+                  avatar: buildAvatarWidget(
+                          avatar: avatar,
+                          size: 54,
+                          borderRadius: null,
+                          fallback: const Icon(Icons.person,
+                              color: Colors.white, size: 28)) ??
+                      const Icon(Icons.person, color: Colors.white, size: 28),
+                  onTap: () =>
+                      user.isLogin ? logOutConfirmDialog() : loginDialog(),
+                );
+              }),
+          ],
+          sections: sections,
+        ));
+  }
+
   Future<bool> canStartOnBoot() async {
     // start on boot depends on ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS and SYSTEM_ALERT_WINDOW
     if (_hasIgnoreBattery && !_ignoreBatteryOpt) {
@@ -1248,7 +1440,9 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
 
   SettingsSection defaultDisplaySection() {
     return SettingsSection(
-      title: Text(translate("Display Settings")),
+      title: Text(translate(Theme.of(context).platform == TargetPlatform.iOS
+          ? 'Display & encoding'
+          : 'Display Settings')),
       tiles: [
         SettingsTile(
             title: Text(translate('Display Settings')),
@@ -1355,11 +1549,16 @@ void showAbout(OverlayDialogManager dialogManager) {
 }
 
 class ScanButton extends StatelessWidget {
+  const ScanButton({super.key, this.onServerConfig});
+
+  final ValueChanged<ServerConfig>? onServerConfig;
+
   @override
   Widget build(BuildContext context) {
     return IconButton(
       icon: Icon(Icons.qr_code_scanner),
-      onPressed: () => ScanPage.open(context),
+      tooltip: translate('Scan QR to import'),
+      onPressed: () => ScanPage.open(context, onServerConfig: onServerConfig),
     );
   }
 }

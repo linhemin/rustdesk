@@ -15,7 +15,7 @@ class WorkspaceSettingsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Align(
-      alignment: AlignmentDirectional.topStart,
+      alignment: AlignmentDirectional.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
         child: Padding(
@@ -41,11 +41,16 @@ class WorkspaceSettingsSection extends StatelessWidget {
               ),
               if (children.isNotEmpty)
                 WorkspacePanel(
-                  radius: 14,
+                  radius: 12,
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: children,
+                    children: [
+                      for (var i = 0; i < children.length; i++) ...[
+                        if (i > 0) const Divider(height: 16),
+                        children[i],
+                      ],
+                    ],
                   ),
                 ),
             ],
@@ -81,19 +86,19 @@ class WorkspaceSettingsNavItem extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 3),
       child: Material(
         color: selected ? accent : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(6),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             child: Row(children: [
               WorkspaceIconTile(
                 icon: icon,
-                color: selected ? Colors.white.withOpacity(0.22) : tileTint,
-                size: 22,
-                radius: 6,
-                iconSize: 13,
+                color: tileTint,
+                size: 20,
+                radius: 5.5,
+                iconSize: 12,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -103,7 +108,8 @@ class WorkspaceSettingsNavItem extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13,
-                    color: selected ? Colors.white : theme.colorScheme.onSurface,
+                    color:
+                        selected ? Colors.white : theme.colorScheme.onSurface,
                     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
@@ -131,7 +137,7 @@ class WorkspaceSettingsHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Align(
-      alignment: AlignmentDirectional.topStart,
+      alignment: AlignmentDirectional.topCenter,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
         child: Padding(
@@ -212,4 +218,87 @@ class WorkspaceSettingsChoice extends StatelessWidget {
           ),
         ),
       );
+}
+
+class WorkspaceSettingsThemePicker extends StatelessWidget {
+  const WorkspaceSettingsThemePicker({
+    super.key,
+    required this.value,
+    required this.labels,
+    this.onChanged,
+  });
+
+  final String value;
+  final Map<String, String> labels;
+  final ValueChanged<String>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      for (final entry in labels.entries)
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Semantics(
+              selected: value == entry.key,
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.all(8),
+                  foregroundColor: theme.colorScheme.onSurface,
+                  side: BorderSide(
+                    color: value == entry.key
+                        ? theme.colorScheme.primary
+                        : theme.dividerColor,
+                    width: value == entry.key ? 2 : 1,
+                  ),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed:
+                    onChanged == null ? null : () => onChanged!(entry.key),
+                child: Column(children: [
+                  Container(
+                    height: 64,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      gradient: LinearGradient(
+                        colors: entry.key == 'system'
+                            ? const [Color(0xfff5f6f9), Color(0xff151921)]
+                            : List.filled(
+                                2,
+                                entry.key == 'dark'
+                                    ? const Color(0xff151921)
+                                    : const Color(0xfff5f6f9)),
+                        stops: const [0.5, 0.5],
+                      ),
+                    ),
+                    child: Row(children: [
+                      Container(
+                          width: 20,
+                          margin: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withOpacity(.2),
+                              borderRadius: BorderRadius.circular(3))),
+                      Expanded(
+                          child: Container(
+                              margin: const EdgeInsets.fromLTRB(0, 6, 6, 6),
+                              decoration: BoxDecoration(
+                                  color: entry.key == 'dark'
+                                      ? const Color(0xff262c38)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(3)))),
+                    ]),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(entry.value,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12)),
+                ]),
+              ),
+            ),
+          ),
+        ),
+    ]);
+  }
 }

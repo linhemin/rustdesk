@@ -81,64 +81,70 @@ class HomePageState extends State<HomePage> {
         child: Scaffold(
           extendBody: isIOS && _pages.length > 1,
           // backgroundColor: MyTheme.grayBg,
-          appBar: AppBar(
-            toolbarHeight: isIOS && _pages[_selectedIndex] is ConnectionPage
-                ? 48
-                : null,
-            titleSpacing: isIOS ? 16 : null,
-            centerTitle: !isIOS,
-            title: isIOS
-                ? Row(children: [
-                    if (_pages[_selectedIndex] is ConnectionPage &&
-                        !bind.isCustomClient())
-                      Container(
-                        width: 28,
-                        height: 28,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primary,
-                            borderRadius: BorderRadius.circular(8)),
-                        child: const Text('R',
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold)),
-                      )
-                    else
-                      loadIcon(26),
-                    const SizedBox(width: 8),
-                    Flexible(
-                        child: Text(
-                            _pages[_selectedIndex] is SettingsPage
-                                ? _pages[_selectedIndex].title
-                                : bind.mainGetAppNameSync(),
-                            overflow: TextOverflow.ellipsis,
-                            style: _pages[_selectedIndex] is ConnectionPage
-                                ? const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: -0.3)
-                                : null)),
-                  ])
-                : appTitle(),
-            actions: [
-              ..._pages.elementAt(_selectedIndex).appBarActions,
-              if (isIOS && _pages[_selectedIndex] is ConnectionPage)
-                Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 8),
-                  child: IconButton(
-                    tooltip: translate('Scan QR code'),
-                    onPressed: () => ScanPage.openConnection(context),
-                    style: IconButton.styleFrom(
-                      minimumSize: const Size(32, 32),
-                      backgroundColor: Theme.of(context).cardColor,
-                      side: BorderSide(color: Theme.of(context).dividerColor),
-                    ),
-                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 15),
-                  ),
+          appBar: isIOS && _pages[_selectedIndex] is SettingsPage
+              ? null
+              : AppBar(
+                  toolbarHeight:
+                      isIOS && _pages[_selectedIndex] is ConnectionPage
+                          ? 48
+                          : null,
+                  titleSpacing: isIOS ? 16 : null,
+                  centerTitle: !isIOS,
+                  title: isIOS
+                      ? Row(children: [
+                          if (_pages[_selectedIndex] is ConnectionPage &&
+                              !bind.isCustomClient())
+                            Container(
+                              width: 28,
+                              height: 28,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.primary,
+                                  borderRadius: BorderRadius.circular(8)),
+                              child: const Text('R',
+                                  style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold)),
+                            )
+                          else
+                            loadIcon(26),
+                          const SizedBox(width: 8),
+                          Flexible(
+                              child: Text(
+                                  _pages[_selectedIndex] is SettingsPage
+                                      ? _pages[_selectedIndex].title
+                                      : bind.mainGetAppNameSync(),
+                                  overflow: TextOverflow.ellipsis,
+                                  style:
+                                      _pages[_selectedIndex] is ConnectionPage
+                                          ? const TextStyle(
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w700,
+                                              letterSpacing: -0.3)
+                                          : null)),
+                        ])
+                      : appTitle(),
+                  actions: [
+                    ..._pages.elementAt(_selectedIndex).appBarActions,
+                    if (isIOS && _pages[_selectedIndex] is ConnectionPage)
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(end: 8),
+                        child: IconButton(
+                          tooltip: translate('Scan QR code'),
+                          onPressed: () => ScanPage.openConnection(context),
+                          style: IconButton.styleFrom(
+                            minimumSize: const Size(32, 32),
+                            backgroundColor: Theme.of(context).cardColor,
+                            side: BorderSide(
+                                color: Theme.of(context).dividerColor),
+                          ),
+                          icon: const Icon(Icons.qr_code_scanner_rounded,
+                              size: 15),
+                        ),
+                      ),
+                  ],
                 ),
-            ],
-          ),
           bottomNavigationBar: _pages.length < 2 ||
                   (isIOS && MediaQuery.viewInsetsOf(context).bottom > 0)
               ? null
@@ -194,7 +200,9 @@ class HomePageState extends State<HomePage> {
                         }),
                       )),
                     ),
-          body: _pages.elementAt(_selectedIndex),
+          body: isIOS
+              ? IndexedStack(index: _selectedIndex, children: _pages)
+              : _pages.elementAt(_selectedIndex),
         ));
   }
 
