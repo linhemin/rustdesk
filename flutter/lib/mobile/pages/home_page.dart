@@ -10,6 +10,7 @@ import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
 import 'connection_page.dart';
 import 'scan_page.dart';
+import '../android_sliding_navigation_bar.dart';
 
 abstract class PageShape extends Widget {
   final String title = "";
@@ -156,10 +157,6 @@ class HomePageState extends State<HomePage> {
                       compact: MediaQuery.sizeOf(context).shortestSide < 600,
                       onSelect: (index) =>
                           setState(() => _selectedIndex = index),
-                      onQuickConnect: bind.isIncomingOnly()
-                          ? null
-                          : () => showIPhoneQuickConnect(context),
-                      quickConnectLabel: translate('New Connection'),
                     )
                   : DecoratedBox(
                       decoration: BoxDecoration(
@@ -167,7 +164,8 @@ class HomePageState extends State<HomePage> {
                           top: BorderSide(color: Theme.of(context).dividerColor),
                         ),
                       ),
-                      child: BottomNavigationBar(
+                      child: AndroidSlidingNavigationBar(
+                          child: BottomNavigationBar(
                         key: navigationBarKey,
                         backgroundColor: Theme.of(context).cardColor,
                         elevation: 0,
@@ -192,7 +190,7 @@ class HomePageState extends State<HomePage> {
                             }
                           }
                         }),
-                      ),
+                      )),
                     ),
           body: _pages.elementAt(_selectedIndex),
         ));
