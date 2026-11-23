@@ -119,15 +119,13 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
 
     private static func makeSurface(_ content: NSView) -> NSView {
         content.wantsLayer = true
-        content.layer?.backgroundColor = NSColor.workspaceSidebar.cgColor
+        content.layer?.backgroundColor = NSColor.workspaceSidebar(for: content.effectiveAppearance).cgColor
         return content
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            subviews.first?.layer?.backgroundColor = NSColor.workspaceSidebar.cgColor
-        }
+        subviews.first?.layer?.backgroundColor = NSColor.workspaceSidebar(for: effectiveAppearance).cgColor
     }
 
     private static func appMark() -> NSImage? {
@@ -291,8 +289,8 @@ private final class WorkspaceDestinationRow: NSTableRowView {
 }
 
 private extension NSColor {
-    static var workspaceSidebar: NSColor {
-        NSAppearance.current.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    static func workspaceSidebar(for appearance: NSAppearance) -> NSColor {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(srgbRed: 16 / 255, green: 19 / 255, blue: 25 / 255, alpha: 1)
             : NSColor(srgbRed: 236 / 255, green: 239 / 255, blue: 244 / 255, alpha: 1)
     }

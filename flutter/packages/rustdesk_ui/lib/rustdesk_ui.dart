@@ -52,7 +52,8 @@ class WorkspaceStyle {
   static bool _dark(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark;
 
-  static Color canvas(BuildContext context) => _dark(context) ? night : background;
+  static Color canvas(BuildContext context) =>
+      _dark(context) ? night : background;
   static Color well(BuildContext context) => _dark(context) ? wellDark : wellLight;
   static Color tertiaryInk(BuildContext context) =>
       _dark(context) ? tertiaryDark : tertiaryLight;
