@@ -1991,7 +1991,9 @@ class _FileManagerViewState extends State<FileManagerView> {
       controller.openDirectory(path);
     });
 
-    final pinRoot = (isWindows || isMacOS) && items.length > 1;
+    final pinRoot = (isWindows || isMacOS) && items.length > 1 &&
+        !(controller.options.value.isWindows &&
+            controller.directory.value.path.replaceAll(r'\', '/').startsWith('//'));
     return items.isEmpty
         ? Offstage()
         : Row(
