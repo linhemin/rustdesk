@@ -6,7 +6,7 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicU32, Ordering::Relaxed},
-        Mutex,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -53,7 +53,8 @@ static PENDING: Mutex<VecDeque<Pending>> = Mutex::new(VecDeque::new());
 
 pub(crate) struct Recording {
     id: Id,
-    pub(super) ports: Vec<Port>,
+    pub(super) ports: Vec<Arc<Port>>,
+    extended: Mutex<Vec<Arc<Port>>>,
     finished: Option<oneshot::Sender<UdpProbeReport>>,
 }
 
@@ -61,7 +62,7 @@ impl Recording {
     pub(super) fn start(id: Id, ports: impl Iterator<Item = u16>) -> Self {
         let (recording, rx) = Self::local(id, ports);
         let mut pending = PENDING.lock().unwrap();
-        pending.retain(|(_, start, _)| start.elapsed() < Duration::from_secs(60));
+        pending.retain(|(_, start, _)| start.elapsed() < Duration::from_secs(90));
         if pending.len() >= 64 {
             pending.pop_front();
         }
@@ -74,13 +75,20 @@ impl Recording {
         (Self {
             id,
             ports: ports
-                .map(|local| Port {
+                .map(|local| Arc::new(Port {
                     local,
                     ..Default::default()
-                })
+                }))
                 .collect(),
+            extended: Mutex::default(),
             finished: Some(tx),
         }, rx)
+    }
+
+    pub(super) fn add_socket(&self, local: u16) -> Arc<Port> {
+        let row = Arc::new(Port { local, ..Default::default() });
+        self.extended.lock().unwrap().push(row.clone());
+        row
     }
 }
 
@@ -90,6 +98,7 @@ impl Drop for Recording {
             let ports = self
                 .ports
                 .iter()
+                .chain(self.extended.get_mut().unwrap().iter())
                 .map(|p| UdpProbePort {
                     local_port: p.local.into(),
                     received: p.rx.load(Relaxed),
@@ -119,7 +128,7 @@ pub(crate) fn take(raw: &[u8]) -> Option<oneshot::Receiver<UdpProbeReport>> {
     let mut pending = PENDING.lock().unwrap();
     let index = pending
         .iter()
-        .position(|(stored, start, _)| stored == id && start.elapsed() < Duration::from_secs(60))?;
+        .position(|(stored, start, _)| stored == id && start.elapsed() < Duration::from_secs(90))?;
     pending.remove(index).map(|(_, _, rx)| rx)
 }
 

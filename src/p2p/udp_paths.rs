@@ -10,12 +10,15 @@ use hbb_common::{
     },
     ResultType,
 };
-use std::{net::SocketAddr, sync::{atomic::Ordering::Relaxed, Arc}};
+use std::{net::SocketAddr, sync::{atomic::{AtomicBool, Ordering::Relaxed}, Arc}};
+
+#[path = "udp_paths/tiered.rs"]
+mod tiered;
 
 const EXTRA_SOCKETS: usize = 3;
 const WIDE_EXTRA_SOCKETS: usize = 11;
 const RECEIPT_SIZE: usize = 38;
-pub(crate) const MAX_LOCAL_SOCKETS: usize = 1 + WIDE_EXTRA_SOCKETS + 2;
+pub(crate) const MAX_LOCAL_SOCKETS: usize = 500;
 const MAX_PEERS: usize = 8;
 
 #[derive(Debug, Default)]
@@ -28,6 +31,7 @@ pub(crate) struct Counts {
     pub received: u32,
     pub valid_foreign: u32,
     pub verified_foreign: u32,
+    verified: u32,
 }
 
 impl std::fmt::Display for Counts {
@@ -44,6 +48,7 @@ pub(crate) struct Candidates {
     pub tickets: Vec<u8>,
     pub observed_ipv4: u32,
     pub lan_peer: Option<SocketAddr>,
+    wide: bool,
 }
 
 async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primary: Option<(&UdpSocket, Option<u16>)>) -> Option<(Arc<UdpSocket>, Vec<u8>, bool, u32)> {
@@ -134,7 +139,10 @@ impl Candidates {
                 }
             }
         }
-        if extended { result.bind_observed_ports(source).await; }
+        if extended {
+            result.bind_observed_ports(source).await;
+            result.wide = true;
+        }
         result
     }
 
@@ -220,6 +228,10 @@ impl Paths {
         }
         let key = self.key;
         let count = self.local.sockets.len() + 1;
+        let start = Instant::now();
+        let wide = if self.local.wide {
+            tiered::Plan::new(&primary, &self.local.sockets, peer, &self.ports)
+        } else { None };
         let mut jobs: FuturesUnordered<_> = std::iter::once(primary)
             .chain(self.local.sockets)
             .enumerate()
@@ -230,7 +242,7 @@ impl Paths {
                         peers.insert(1, lan);
                     }
                 }
-                check_socket(s, peers, listen, &key, report.and_then(|r| r.ports.get(i)))
+                check_socket(s, peers, listen, &key, report.and_then(|r| r.ports.get(i)).map(AsRef::as_ref), None)
             })
             .collect();
         let mut totals = Counts {
@@ -248,6 +260,7 @@ impl Paths {
                         totals.errors += c.errors;
                         totals.authenticated += c.authenticated;
                         totals.received += c.received;
+                        totals.verified += c.verified;
                         totals.valid_foreign += c.valid_foreign;
                         totals.verified_foreign += c.verified_foreign;
                     } else {
@@ -259,6 +272,11 @@ impl Paths {
         if totals.sent == 0 && totals.errors == 0 {
             if let Some(error) = socket_error {
                 return Err(error);
+            }
+        }
+        if totals.sent != 0 && totals.verified == 0 {
+            if let Some(plan) = wide {
+                return plan.run(start, listen, &key, report, totals).await;
             }
         }
         Err(totals.into())
@@ -290,6 +308,7 @@ async fn check_socket(
     listen: bool,
     key: &auth::Key,
     row: Option<&Port>,
+    extended: Option<(Instant, &AtomicBool)>,
 ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
     let ip = peers[0].ip();
     let mut nonce = [0; 8];
@@ -302,7 +321,7 @@ async fn check_socket(
     let mut pending: Vec<PendingAddress> = Vec::new();
     let mut buf = [0; 1500];
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(6);
+    let deadline = extended.map_or(start + Duration::from_secs(6), |(end, _)| end);
     let mut next = start;
     let max_peers = MAX_PEERS.max(peers.len() + 4);
     let mut cursor = 0;
@@ -316,11 +335,15 @@ async fn check_socket(
                 return Err(Counts { sent, errors, authenticated: authenticated.len(), ..traffic }.into());
             }
             _ = tokio::time::sleep_until(next) => {
-                for _ in 0..peers.len().min(4) {
+                for _ in 0..peers.len().min(if extended.is_some() { 1 } else { 4 }) {
                     match probe_send(&socket, &probe, peers[cursor], row).await { Ok(_) => sent += 1, Err(_) => errors += 1 }
                     cursor = (cursor + 1) % peers.len();
                 }
-                next = Instant::now() + Duration::from_millis(if start.elapsed().as_millis() < 250 { 90 } else { 350 });
+                // Staggered admission and a slow repeat limit aggregate traffic at 500 sockets.
+                let interval = if extended.is_some() {
+                    4000
+                } else if start.elapsed().as_millis() < 250 { 90 } else { 350 };
+                next = Instant::now() + Duration::from_millis(interval);
             }
             received = socket.recv_from(&mut buf) => {
                 let (n, from) = match received {
@@ -339,6 +362,8 @@ async fn check_socket(
                 if n != 45 || &buf[..4] != b"RDU2" { continue; }
                 let Some(tag) = auth::Tag::from_slice(&buf[13..45]) else { continue };
                 if !auth::verify(&tag, &buf[..13], key) { continue; }
+                traffic.verified += 1;
+                if let Some((_, seen)) = extended { seen.store(true, Relaxed); }
                 if let Some(row) = row { row.verified.fetch_add(1, Relaxed); }
                 let known = peers.contains(&from);
                 if !known && from.ip() != ip {
@@ -402,6 +427,34 @@ async fn check_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn udp_direct_can_use_a_new_local_port_after_the_light_ports_time_out() {
+        let initial = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let first = initial.local_addr().unwrap();
+        let remote = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let target = remote.local_addr().unwrap();
+        let key = auth::gen_key();
+        let paths = Paths {
+            local: Candidates { wide: true, ..Default::default() },
+            ports: vec![u32::from(target.port())],
+            key: key.clone(),
+        };
+        let answer = async {
+            let mut data = [0; 45];
+            loop {
+                let (size, from) = remote.recv_from(&mut data).await.unwrap();
+                if from != first && size == 45 && data[4] == 0 {
+                    remote.send_to(&packet(1, &data[5..13], &key), from).await.unwrap();
+                    break;
+                }
+            }
+        };
+        let (chosen, _) = timeout(Duration::from_secs(12), async {
+            tokio::join!(paths.select(initial, target, false), answer)
+        }).await.unwrap();
+        assert_ne!(chosen.unwrap().0.local_addr().unwrap(), first);
+    }
 
     #[tokio::test]
     async fn private_candidate_carries_kcp_when_the_public_route_is_unreachable() {
