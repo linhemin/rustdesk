@@ -361,12 +361,14 @@ class _PeerTabPageState extends State<PeerTabPage>
                         children: [
                           if (model.currentTab != PeerTabIndex.recent.index)
                             PeerSortDropdown(),
-                          _createRefresh(
-                              index: PeerTabIndex.ab,
-                              loading: gFFI.abModel.currentAbLoading),
-                          _createRefresh(
-                              index: PeerTabIndex.group,
-                              loading: gFFI.groupModel.groupLoading),
+                          if (model.currentTab == PeerTabIndex.ab.index ||
+                              model.currentTab == PeerTabIndex.group.index)
+                            TextButton.icon(
+                              label: Text(translate('Refresh')),
+                              icon: const Icon(Icons.refresh, size: 18),
+                              onPressed: () =>
+                                  entries[model.currentTab].load?.call(),
+                            ),
                           if (_showWebConsole(model)) _openWebConsole(),
                           if (model.currentTab == PeerTabIndex.ab.index)
                             _toggleTags(),
