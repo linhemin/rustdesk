@@ -70,6 +70,13 @@ const MAX_IN_FLIGHT: u64 = 24;
 const MAX_PENDING_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_FRAMES: usize = 128;
 const PATH_TIMEOUT: Duration = Duration::from_secs(3);
+// Slow is not dead. A path that has delivered data keeps the session while acknowledgements
+// still advance; it is left only after standing still, or falling behind, for this long.
+// The application pipe stops draining once the in-flight window is full and closes the session
+// after 8s, so a stalled path has to be left for the relay well before that.
+const STALL_TIMEOUT: Duration = Duration::from_secs(5);
+const LAG_TIMEOUT: Duration = Duration::from_secs(8);
+const STEADY_PATH: Duration = Duration::from_secs(60);
 const RTC_TIMEOUT: u64 = 18_000;
 const LITE_TIMEOUT: u64 = 12_000;
 const LITE_IDLE_WINDOW: Duration = Duration::from_secs(5);
@@ -306,6 +313,7 @@ struct Direct {
     first_sent: Option<Instant>,
     first_received: Option<Instant>,
     reported: bool,
+    acked_at: Option<Instant>,
 }
 
 enum Lane {
@@ -343,7 +351,7 @@ impl Direct {
     fn new(id: u64, lane: Lane) -> Self {
         let last_rx_progress = match &lane { Lane::WebRtc(rtc) => rtc.0.rx_progress(), Lane::Native(_) => 0 };
         Self { id, lane, since: Instant::now(), active: false, ice_silent_since: None,
-            last_rx_progress, first_sent: None, first_received: None, reported: false }
+            last_rx_progress, first_sent: None, first_received: None, reported: false, acked_at: None }
     }
 }
 
@@ -358,6 +366,24 @@ fn ice_stalled(
         return false;
     }
     now.duration_since(*since.get_or_insert(now)) >= PATH_TIMEOUT
+}
+
+fn stalled(now: Instant, waiting_since: Instant, acked_at: Option<Instant>) -> bool {
+    match acked_at {
+        Some(at) => now.duration_since(at.max(waiting_since)) >= STALL_TIMEOUT,
+        None => now.duration_since(waiting_since) >= PATH_TIMEOUT,
+    }
+}
+
+// A direct path that keeps failing early is the less stable one: each such failure doubles the
+// time the session stays on the relay before punching again.
+fn relay_hold(flaps: &mut u32, lived: Duration) -> Duration {
+    if lived >= STEADY_PATH {
+        *flaps = 0;
+        return Duration::ZERO;
+    }
+    *flaps = (*flaps + 1).min(6);
+    Duration::from_secs(10 << (*flaps - 1))
 }
 
 struct PendingFrame {
@@ -1640,6 +1666,99 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_slow_direct_path_is_kept_and_a_dead_one_returns_to_relay() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut controller, mut controlled) = encrypted_pair().await;
+        let listener = native::Listener::new();
+        let ticket = listener.response()[native::ACCEPT.len()..].try_into().unwrap();
+        let mut host_path = wrap_native(&mut controlled, native::Mode::Listen(listener)).unwrap();
+        let (stall, stalled) = watch::channel(false);
+        let dials = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let dialed = dials.clone();
+        let dial = Box::new(move || -> BoxFuture<'static, ResultType<_>> {
+            let stalled = stalled.clone();
+            dialed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Box::pin(async move {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap();
+                let (first, near) = tokio::join!(TcpStream::connect(addr), listener.accept());
+                let (far, second) = tokio::join!(TcpStream::connect(addr), listener.accept());
+                let (first, near, far, second) = (first.unwrap(), near.unwrap().0, far.unwrap(), second.unwrap().0);
+                for socket in [&first, &near, &far, &second] {
+                    socket.set_nodelay(true).unwrap();
+                }
+                let (mut first, mut second) = (Stream::from(first, addr), Stream::from(second, addr));
+                let kx = KxTranscript { initiator_pk: &[1; 32], responder_pk: &[2; 32], advertised: 1, picked: 1 };
+                let key = secretbox::gen_key();
+                first.set_negotiated_key(key.clone(), true, &kx).unwrap();
+                second.set_negotiated_key(key, false, &kx).unwrap();
+                let ((near_rx, near_tx), (far_rx, far_tx)) = (near.into_split(), far.into_split());
+                for (mut from, mut to) in [(near_rx, far_tx), (far_rx, near_tx)] {
+                    let mut stalled = stalled.clone();
+                    tokio::spawn(async move {
+                        let mut bytes = [0; 4096];
+                        while let Ok(n @ 1..) = from.read(&mut bytes).await {
+                            if stalled.wait_for(|stalled| !stalled).await.is_err() { break }
+                            if to.write_all(&bytes[..n]).await.is_err() { break }
+                        }
+                    });
+                }
+                tokio::spawn(async move { native::accept(second).await.unwrap().await.ok(); });
+                Ok((first, None, "TCP"))
+            })
+        });
+        let mut path = wrap_native(&mut controller, native::Mode::Call(ticket, dial)).unwrap();
+        controller.send_raw(b"on the relay".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"on the relay");
+        timeout(Duration::from_secs(8), async {
+            path.changed().await.unwrap();
+            host_path.changed().await.unwrap();
+        }).await.unwrap();
+        controller.send_raw(b"direct".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"direct");
+
+        stall.send_replace(true);
+        controller.send_raw(b"slow".to_vec()).await.unwrap();
+        tokio::time::sleep(PATH_TIMEOUT + Duration::from_secs(1)).await;
+        stall.send_replace(false);
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"slow");
+        assert!(!path.has_changed().unwrap() && !host_path.has_changed().unwrap());
+        assert_eq!((*path.borrow(), *host_path.borrow()), (Some("TCP"), Some("TCP")));
+
+        // Old enough that the next punch is due: a path that just died must not be retried at once.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        stall.send_replace(true);
+        let video = vec![7; 256 * 1024];
+        tokio::join!(
+            async {
+                for _ in 0..12 {
+                    controller.send_raw(video.clone()).await.unwrap();
+                }
+            },
+            async {
+                for _ in 0..12 {
+                    assert_eq!(controlled.next_timeout(12_000).await.unwrap().unwrap().len(), video.len());
+                }
+            },
+        );
+        assert!(path.borrow().is_none());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(dials.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_direct_path_that_keeps_failing_early_stays_on_the_relay_longer() {
+        let mut flaps = 0;
+        let early = Duration::from_secs(20);
+        assert_eq!(relay_hold(&mut flaps, early), Duration::from_secs(10));
+        assert_eq!(relay_hold(&mut flaps, early), Duration::from_secs(20));
+        assert_eq!(relay_hold(&mut flaps, early), Duration::from_secs(40));
+        assert_eq!(relay_hold(&mut flaps, STEADY_PATH), Duration::ZERO);
+        assert_eq!(relay_hold(&mut flaps, early), Duration::from_secs(10));
+    }
+
+    #[tokio::test]
     async fn relayed_session_keeps_legacy_and_large_bidirectional_frames() {
         let (mut first, mut second) = encrypted_pair().await;
         first
@@ -1796,6 +1915,7 @@ async fn run(
     let offerer = offer_mode.is_some() || matches!(native, Some(native::Mode::Call(..)));
     let mut native_task = None;
     let mut retries = RetrySchedule::default();
+    let mut flaps = 0;
     let mut accepted_lite = None;
     let mut full_plan = None;
     let mut last_lite_step = None;
@@ -1812,6 +1932,7 @@ async fn run(
     loop {
         // A direct frame must never overtake a relay frame at the switch.
         let switching = direct.as_ref().map_or(false, |d| !d.active);
+        let established = direct.as_ref().filter(|d| d.active).map(|d| d.since);
         tokio::select! {
             _ = async {
                 #[cfg(target_os = "ios")]
@@ -1829,7 +1950,15 @@ async fn run(
                         first_relay_data.get_or_insert_with(Instant::now);
                         receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
                     }
-                    Some((ACK, number, [])) => seq.acknowledge(number),
+                    Some((ACK, number, [])) => {
+                        let acked = seq.acked;
+                        seq.acknowledge(number);
+                        if seq.acked > acked {
+                            if let Some(direct) = direct.as_mut().filter(|d| d.active) {
+                                direct.acked_at = Some(Instant::now());
+                            }
+                        }
+                    }
                     Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER | LITE_OFFER | FULL_OFFER), number, data))
                         if native.is_none() && !offerer && direct.is_none() && number > attempt
                             && data.len() <= MAX_SDP + usize::from(kind == FULL_OFFER) * 2
@@ -2133,8 +2262,10 @@ async fn run(
                     } else { false };
                     let reason = if !d.active && now.duration_since(d.since) >= PATH_TIMEOUT {
                         Some("relay drain timed out")
-                    } else if seq.pending.front().is_some_and(|p| now.duration_since(p.sent) >= PATH_TIMEOUT) {
+                    } else if seq.pending.front().is_some_and(|p| stalled(now, p.sent, d.acked_at)) {
                         Some("direct application acknowledgement timed out")
+                    } else if seq.pending.front().is_some_and(|p| now.duration_since(p.sent) >= LAG_TIMEOUT) {
+                        Some("direct path fell too far behind")
                     } else if ice_timeout {
                         Some("ICE stopped receiving")
                     } else {
@@ -2145,12 +2276,12 @@ async fn run(
                     }
                 }
                 if let Some(mode @ native::Mode::Call(..)) = &native {
-                    if direct.is_none() && now >= next_attempt && native_task.is_none() {
+                    if direct.is_none() && established.is_none() && now >= next_attempt && native_task.is_none() {
                         attempt += 1;
                         native_task = mode.start(attempt, event_tx.clone());
                     }
                 } else if let Some(mode) = offer_mode {
-                    if direct.is_none() && Instant::now() >= next_attempt && setup.is_none() {
+                    if direct.is_none() && established.is_none() && Instant::now() >= next_attempt && setup.is_none() {
                         attempt += 1;
                         // Only an authenticated peer advertising the new capability can enter full mode.
                         let mode = retries.next(mode, attempt);
@@ -2180,6 +2311,9 @@ async fn run(
         } else {
             // The old data channel is closed. Its unacknowledged frames have been replayed.
             direct_write = None;
+            if let Some(since) = established.filter(|_| offerer) {
+                next_attempt = next_attempt.max(Instant::now() + relay_hold(&mut flaps, since.elapsed()));
+            }
         }
     }
     Ok(())

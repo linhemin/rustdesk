@@ -6184,6 +6184,10 @@ fn native_stage(phase: &'static str, stage: &'static str) {
     crate::ios_p2p_diagnostics::record_milestone(phase, stage);
 }
 
+// The probes already crossed both NATs, so the punch-tuned timeout (as low as 1s) no longer
+// applies: a slow or lossy link needs a few SYN retransmissions before it falls back to relay.
+const PUNCHED_KCP_TIMEOUT: u64 = 5_000;
+
 async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: Arc<UdpSocket>,
     peer: SocketAddr, ms_timeout: u64, recording: Option<crate::p2p::probe_report::Recording>) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
     #[cfg(target_os = "ios")]
@@ -6203,7 +6207,7 @@ async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: A
     })?;
     #[cfg(target_os = "ios")]
     if let Some(o) = observation.as_mut() { o.set_stage("verified UDP pair; starting KCP"); }
-    let (kcp, stream) = KcpStream::connect(socket, Duration::from_millis(ms_timeout)).await
+    let (kcp, stream) = KcpStream::connect(socket, Duration::from_millis(ms_timeout.max(PUNCHED_KCP_TIMEOUT))).await
         .map_err(|err| {
             #[cfg(target_os = "ios")]
             if let Some(o) = observation.as_mut() { o.finish("candidate KCP handshake failed", Some(&err)); }
@@ -6238,7 +6242,7 @@ async fn udp_nat_connect(
         })?;
     #[cfg(target_os = "ios")]
     if let Some(o) = observation.as_mut() { o.set_stage("peer probe acknowledged; entering KCP handshake"); }
-    let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout))
+    let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout.max(PUNCHED_KCP_TIMEOUT)))
         .await
         .map_err(|err| {
             #[cfg(target_os = "ios")]
