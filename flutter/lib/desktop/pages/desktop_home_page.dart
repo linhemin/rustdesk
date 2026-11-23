@@ -65,17 +65,31 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (usesWorkspaceStyle && !isIncomingOnly) {
       final incoming = !bind.isOutgoingOnly();
       final destinations = [
-        WorkspaceDestination(translate('Connection'), Icons.north_east_rounded),
         WorkspaceDestination(
-            translate('Accessible devices'), Icons.devices_rounded),
+            translate('Home and devices'), Icons.home_outlined),
         if (incoming)
           WorkspaceDestination(
               translate('Your Desktop'), Icons.laptop_mac_rounded),
+        WorkspaceDestination(
+            translate('Remote sessions'), Icons.desktop_windows_outlined),
+        WorkspaceDestination(
+            translate('Transfer file'), Icons.folder_open_outlined),
+        WorkspaceDestination(translate('Terminal'), Icons.terminal_rounded),
       ];
       final current = _destination < destinations.length ? _destination : 0;
+      final incomingIndex = incoming ? 1 : -1;
+      final sessionsIndex = incoming ? 2 : 1;
+      final requestedMode = current == sessionsIndex
+          ? 0
+          : current == sessionsIndex + 1
+              ? 1
+              : current == sessionsIndex + 2
+                  ? 2
+                  : null;
       void select(int index) {
         FocusManager.instance.primaryFocus?.unfocus();
         setState(() => _destination = index);
+        if (index == sessionsIndex) _showExistingRemoteSession(index);
       }
 
       final content = Column(children: [
@@ -85,61 +99,65 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               children: [loadLogo(), loadPowered(context)]),
         if (incoming) buildPresetPasswordWarning(),
         Expanded(
-            child: IndexedStack(index: current == 2 ? 1 : 0, children: [
-          ConnectionPage(
-              devicesOnly: current == 1,
-              localIdentity: incoming ? _localIdentitySummary(context) : null,
-              notices: current == 0
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                          if (!incoming)
-                            Text(translate('outgoing_only_desk_tip'),
-                                style: Theme.of(context).textTheme.bodySmall),
-                          Obx(() =>
-                              buildHelpCards(stateGlobal.updateUrl.value)),
-                        ])
-                  : null),
-          if (incoming) _identityWorkspace(context, current == 2),
-        ])),
-        if (incoming) ...[const Divider(height: 1), OnlineStatusWidget()],
+            child: IndexedStack(
+                index: current == incomingIndex ? 1 : 0,
+                children: [
+              ConnectionPage(
+                  requestedMode: requestedMode,
+                  workspaceTitle: destinations[current].label,
+                  notices: current == 0
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                              if (!incoming)
+                                Text(translate('outgoing_only_desk_tip'),
+                                    style:
+                                        Theme.of(context).textTheme.bodySmall),
+                              Obx(() =>
+                                  buildHelpCards(stateGlobal.updateUrl.value)),
+                            ])
+                      : null),
+              if (incoming)
+                _identityWorkspace(context, current == incomingIndex),
+            ])),
       ]);
-      if (isMacOS) {
-        return _buildBlock(child: LayoutBuilder(builder: (context, bounds) {
-          final compact = bounds.maxWidth < 760;
-          return Row(children: [
-            SizedBox(
-              width: compact ? 164 : 216,
-              child: ColoredBox(
-                color: WorkspaceStyle.sidebarColor(context),
-                child: AppleWorkspaceNavigation(
-                  labels: [for (final item in destinations) item.label],
-                  symbols: [
-                    'arrow.left.arrow.right',
-                    'display.2',
-                    if (incoming) 'laptopcomputer',
-                  ],
-                  selected: current,
-                  compact: compact,
-                  onSelect: select,
-                  brand: bind.mainGetAppNameSync(),
-                  settingsLabel:
-                      bind.isDisableSettings() ? null : translate('Settings'),
-                  onSettings: DesktopTabPage.onAddSetting,
-                ),
-              ),
-            ),
-            Expanded(child: content),
-          ]);
-        }));
-      }
       return _buildBlock(
           child: WorkspaceNavigation(
         brand: bind.mainGetAppNameSync(),
-        mark: loadIcon(32),
+        mark: bind.mainGetAppNameSync() == 'RustDesk'
+            ? ExcludeSemantics(
+                child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary,
+                        borderRadius: BorderRadius.circular(6)),
+                    child: const Text('R',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14))))
+            : loadIcon(28),
         destinations: destinations,
         current: current,
         onSelect: select,
+        identity: incoming ? _localIdentitySummary(context) : null,
+        footer: incoming ? const OnlineStatusWidget(compact: true) : null,
+        nativeNavigation: isMacOS
+            ? AppleWorkspaceNavigation(
+                labels: [for (final item in destinations) item.label],
+                symbols: [
+                  'house',
+                  if (incoming) 'laptopcomputer',
+                  'display.2',
+                  'folder',
+                  'terminal',
+                ],
+                selected: current,
+                compact: false,
+                navigationOnly: true,
+                onSelect: select,
+              )
+            : null,
         settings: translate('Settings'),
         onSettings:
             bind.isDisableSettings() ? null : DesktopTabPage.onAddSetting,
@@ -156,6 +174,22 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     ));
   }
 
+  Future<void> _showExistingRemoteSession(int destination) async {
+    try {
+      final sessions = await rustDeskWinManager.call(
+          WindowType.RemoteDesktop, kWindowEventGetRemoteList, null);
+      final ids = sessions.result is String
+          ? (sessions.result as String).split(',').where((id) => id.isNotEmpty)
+          : const <String>[];
+      if (mounted && _destination == destination && ids.isNotEmpty) {
+        await rustDeskWinManager.call(
+            WindowType.RemoteDesktop, kWindowEventActiveSession, ids.first);
+      }
+    } on PlatformException catch (error) {
+      debugPrint('Unable to focus remote session: $error');
+    }
+  }
+
   Widget _buildBlock({required Widget child}) {
     return buildRemoteBlock(
         block: _block, mask: true, use: canBeBlocked, child: child);
@@ -164,16 +198,24 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget _localIdentitySummary(BuildContext context) {
     final theme = Theme.of(context);
     return WorkspacePanel(
-      padding: const EdgeInsets.fromLTRB(14, 14, 10, 10),
+      padding: const EdgeInsets.all(10),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Icon(Icons.laptop_mac_rounded, size: 18, color: theme.hintColor),
-          const SizedBox(width: 8),
           Expanded(
-              child: Text(translate('Your Desktop'),
+              child: Text(translate('ID'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium)),
+                  style: theme.textTheme.labelSmall)),
+          Obx(() {
+            final ready = !svcStopped.value &&
+                stateGlobal.svcStatus.value == SvcStatus.ready;
+            return Text(translate(ready ? 'Ready' : 'Status'),
+                style: TextStyle(
+                    fontSize: 10,
+                    color: ready
+                        ? WorkspaceStyle.success(context)
+                        : theme.hintColor));
+          }),
         ]),
         const SizedBox(height: 6),
         ValueListenableBuilder<TextEditingValue>(
@@ -182,9 +224,14 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             Expanded(
                 child: SelectableText(value.text,
                     maxLines: 1,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                        fontFeatures: const [FontFeature.tabularFigures()]))),
+                    style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'monospace',
+                        fontFeatures: [FontFeature.tabularFigures()]))),
             IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
               tooltip: MaterialLocalizations.of(context).copyButtonLabel,
               icon: const Icon(Icons.copy_rounded, size: 18),
               onPressed:

@@ -18,6 +18,9 @@ class WorkspaceNavigation extends StatelessWidget {
       required this.current,
       required this.onSelect,
       required this.child,
+      this.identity,
+      this.footer,
+      this.nativeNavigation,
       this.settings,
       this.onSettings});
   final String brand;
@@ -28,6 +31,9 @@ class WorkspaceNavigation extends StatelessWidget {
   final String? settings;
   final VoidCallback? onSettings;
   final Widget child;
+  final Widget? identity;
+  final Widget? footer;
+  final Widget? nativeNavigation;
 
   @override
   Widget build(BuildContext context) =>
@@ -37,7 +43,11 @@ class WorkspaceNavigation extends StatelessWidget {
         final inkDefault = theme.colorScheme.onSurface;
         final muted = theme.hintColor;
         final wide = bounds.maxWidth >= 740;
-        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 184.0 : 216.0;
+        final railWidth = !wide
+            ? 64.0
+            : bounds.maxWidth < 950
+                ? 184.0
+                : 216.0;
         Widget item(
             String label, IconData icon, bool selected, VoidCallback action) {
           final ink = selected ? primary : WorkspaceStyle.tertiaryInk(context);
@@ -116,19 +126,29 @@ class WorkspaceNavigation extends StatelessWidget {
                                         letterSpacing: -.4)))
                           ]
                         ])),
+                    if (wide && identity != null)
+                      Padding(
+                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
+                          child: identity!),
                     Expanded(
-                        child: ListView(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            children: [
-                          for (var i = 0; i < destinations.length; i++)
-                            Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
-                                child: item(
-                                    destinations[i].label,
-                                    destinations[i].icon,
-                                    i == current,
-                                    () => onSelect(i))),
-                        ])),
+                        child: wide && nativeNavigation != null
+                            ? nativeNavigation!
+                            : ListView(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 10),
+                                children: [
+                                    for (var i = 0;
+                                        i < destinations.length;
+                                        i++)
+                                      Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 4),
+                                          child: item(
+                                              destinations[i].label,
+                                              destinations[i].icon,
+                                              i == current,
+                                              () => onSelect(i))),
+                                  ])),
                     if (onSettings != null && settings != null) ...[
                       Divider(
                           color: theme.dividerColor,
@@ -137,9 +157,10 @@ class WorkspaceNavigation extends StatelessWidget {
                           endIndent: 12),
                       Padding(
                           padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
-                          child: item(settings!, Icons.tune_rounded,
+                          child: item(settings!, Icons.settings_outlined,
                               current == destinations.length, onSettings!)),
                     ],
+                    if (footer != null) footer!,
                   ])),
           Expanded(child: child),
         ]);

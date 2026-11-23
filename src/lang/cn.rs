@@ -856,5 +856,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Direct connection required by server", "服务器要求使用直连"),
         ("Direct connection unavailable in direct-only mode", "已启用仅直连模式，无法与对方设备建立直连"),
         ("Direct-only mode conflicts with forced relay", "仅直连模式与强制中继设置冲突"),
+        ("Home and devices", "首页与设备"),
+        ("Remote sessions", "远程会话"),
     ].iter().cloned().collect();
 }

@@ -56,6 +56,8 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
         let header = NSStackView(views: [mark, brand])
         header.spacing = 9
         header.alignment = .centerY
+        let navigationOnly = (arguments as? [String: Any])?["navigationOnly"] as? Bool == true
+        header.isHidden = navigationOnly
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("destination"))
         column.minWidth = 1
@@ -92,7 +94,8 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
             header.topAnchor.constraint(equalTo: content.topAnchor, constant: 22),
             mark.widthAnchor.constraint(equalToConstant: 25),
             mark.heightAnchor.constraint(equalToConstant: 25),
-            scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 22),
+            scroll.topAnchor.constraint(equalTo: navigationOnly ? content.topAnchor : header.bottomAnchor,
+                                        constant: navigationOnly ? 0 : 22),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 10),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -10),
             listHeight,
