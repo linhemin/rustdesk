@@ -63,7 +63,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
-    if (!isIOS) _allPeersLoader.init(setState);
+    _allPeersLoader.init(setState);
     _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -87,6 +87,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       return IPhoneDeviceWorkspace(
         devices: PeerTabPage(),
         onEnterId: _openConnectionSheet,
+        connection: _buildRemoteIDTextField(),
       );
     }
     return CustomScrollView(
@@ -124,6 +125,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   /// Connects to the selected peer.
   void onConnect() {
     var id = _idController.id;
+    if (id.isEmpty) return;
     connect(context, id);
   }
 
@@ -174,20 +176,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Widget _buildRemoteIDTextField() {
     final theme = Theme.of(context);
     final w = SizedBox(
-      height: 80,
+      height: isIOS ? 60 : 80,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+        padding: EdgeInsets.symmetric(vertical: isIOS ? 4 : 8, horizontal: 2),
         child: Ink(
           decoration: BoxDecoration(
             color: theme.cardColor,
-            borderRadius: const BorderRadius.all(Radius.circular(14)),
+            borderRadius: BorderRadius.circular(isIOS ? 16 : 14),
             border: Border.all(color: theme.dividerColor),
           ),
           child: Row(
             children: <Widget>[
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.only(left: 16, right: 16),
+                  padding: EdgeInsets.only(left: 16, right: isIOS ? 0 : 16),
                   child: RawAutocomplete<Peer>(
                     optionsBuilder: (TextEditingValue textEditingValue) {
                       if (textEditingValue.text == '') {
@@ -248,22 +250,30 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       return AutoSizeTextField(
                         controller: fieldTextEditingController,
                         focusNode: fieldFocusNode,
-                        minFontSize: 18,
+                        minFontSize: isIOS ? 13 : 18,
                         autocorrect: false,
                         enableSuggestions: false,
                         keyboardType: TextInputType.visiblePassword,
+                        textInputAction: isIOS ? TextInputAction.go : null,
                         // keyboardType: TextInputType.number,
                         onChanged: (String text) {
                           _idController.id = text;
                         },
-                        style: const TextStyle(
-                          fontFamily: 'WorkSans',
-                          fontWeight: FontWeight.bold,
-                          fontSize: 30,
-                          color: MyTheme.idColor,
+                        style: TextStyle(
+                          fontFamily: isIOS ? 'monospace' : 'WorkSans',
+                          fontWeight: isIOS ? FontWeight.w400 : FontWeight.bold,
+                          fontSize: isIOS ? 14 : 30,
+                          color: isIOS
+                              ? theme.colorScheme.onSurface
+                              : MyTheme.idColor,
                         ),
                         decoration: InputDecoration(
-                          labelText: translate('Remote ID'),
+                          labelText: isIOS ? null : translate('Remote ID'),
+                          hintText: isIOS ? translate('Enter Remote ID') : null,
+                          filled: isIOS ? false : null,
+                          enabledBorder: isIOS ? InputBorder.none : null,
+                          focusedBorder: isIOS ? InputBorder.none : null,
+                          contentPadding: isIOS ? EdgeInsets.zero : null,
                           // hintText: 'Enter your remote ID',
                           border: InputBorder.none,
                           helperStyle: const TextStyle(
@@ -358,17 +368,36 @@ class _ConnectionPageState extends State<ConnectionPage> {
                             _idController.clear();
                           });
                         },
-                        icon: Icon(Icons.clear, color: MyTheme.darkGray)),
+                        tooltip: translate('Clear'),
+                        icon: Icon(Icons.clear,
+                            size: isIOS ? 16 : 24,
+                            color: isIOS ? theme.hintColor : MyTheme.darkGray)),
                   )),
-              SizedBox(
-                width: 60,
-                height: 60,
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_forward,
-                      color: MyTheme.darkGray, size: 45),
-                  onPressed: onConnect,
+              if (isIOS)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 6),
+                  child: ElevatedButton(
+                    onPressed: onConnect,
+                    style: ElevatedButton.styleFrom(
+                        minimumSize: const Size(58, 38),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
+                    child: Text(translate('Connect'),
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600)),
+                  ),
+                )
+              else
+                SizedBox(
+                  width: 60,
+                  height: 60,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_forward,
+                        color: MyTheme.darkGray, size: 45),
+                    onPressed: onConnect,
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -390,7 +419,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _uniLinksSubscription?.cancel();
     _idController.dispose();
     _idFocusNode.removeListener(onFocusChanged);
-    if (!isIOS) _allPeersLoader.clear();
+    _allPeersLoader.clear();
     _idFocusNode.dispose();
     _idEditingController.dispose();
     if (Get.isRegistered<IDTextEditingController>()) {
@@ -406,10 +435,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
 /// The command opens the keyboard only when someone wants to enter a new ID.
 class IPhoneDeviceWorkspace extends StatelessWidget {
   const IPhoneDeviceWorkspace(
-      {super.key, required this.devices, required this.onEnterId});
+      {super.key,
+      required this.devices,
+      required this.onEnterId,
+      this.connection});
 
   final Widget devices;
   final VoidCallback onEnterId;
+  final Widget? connection;
 
   @override
   Widget build(BuildContext context) {
@@ -422,7 +455,11 @@ class IPhoneDeviceWorkspace extends StatelessWidget {
         bottom: false,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          if (!compactKeyboard)
+          if (connection != null)
+            Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: connection)
+          else if (!compactKeyboard)
             Padding(
                 padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 16, 14),
                 child: Material(

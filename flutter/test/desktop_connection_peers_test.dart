@@ -104,7 +104,7 @@ void main() {
     }
     await mount(devicesOnly: true);
     expect(peerCardUiType.value, PeerUiType.grid);
-    expect(find.byIcon(Icons.desktop_mac_outlined), findsNothing);
+    expect(find.byIcon(Icons.desktop_mac_outlined), findsOneWidget);
     if (isWindows || isMacOS) {
       await tester.tap(find.byTooltip('Search'));
       await settle();

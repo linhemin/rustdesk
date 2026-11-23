@@ -7,6 +7,7 @@ import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/my_group.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
 import 'package:flutter_hbb/desktop/widgets/material_mod_popup_menu.dart'
@@ -115,7 +116,11 @@ class _PeerTabPageState extends State<PeerTabPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Obx(() => SizedBox(
-              height: iPhone ? 48 : 32,
+              height: iPhone
+                  ? 48
+                  : usesWorkspaceStyle
+                      ? 40
+                      : 32,
               child: Container(
                 padding: stateGlobal.isPortrait.isTrue
                     ? EdgeInsets.symmetric(horizontal: 2)
@@ -161,7 +166,12 @@ class _PeerTabPageState extends State<PeerTabPage>
               color: Theme.of(context).colorScheme.background,
               borderRadius: BorderRadius.circular(6));
           final decoBorder = BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withOpacity(.12),
+            color: usesWorkspaceStyle
+                ? Theme.of(context).cardColor
+                : Theme.of(context).colorScheme.primary.withOpacity(.12),
+            border: usesWorkspaceStyle
+                ? Border.all(color: WorkspaceStyle.strongBorder(context))
+                : null,
             borderRadius: BorderRadius.circular(8),
           );
           counter += 1;
@@ -177,13 +187,18 @@ class _PeerTabPageState extends State<PeerTabPage>
                         decoration: (hover.value
                             ? (selected ? decoBorder : deco)
                             : (selected ? decoBorder : null)),
-                        child: labeled && selected
+                        child: labeled
                             ? Row(mainAxisSize: MainAxisSize.min, children: [
-                                Icon(model.tabIcon(t), size: 18, color: color),
-                                const SizedBox(width: 6),
                                 Text(model.tabTooltip(t),
-                                    style:
-                                        Theme.of(context).textTheme.labelLarge),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelLarge
+                                        ?.copyWith(
+                                            color: selected
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface
+                                                : Theme.of(context).hintColor)),
                               ]).paddingSymmetric(horizontal: 8)
                             : Icon(model.tabIcon(t), color: color)
                                 .paddingSymmetric(horizontal: 4),
@@ -202,9 +217,57 @@ class _PeerTabPageState extends State<PeerTabPage>
   }
 
   Widget _iPhoneCollection(BuildContext context, PeerTabModel model) {
+    final theme = Theme.of(context);
+    return Row(children: [
+      Expanded(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            for (final tab in model.visibleEnabledOrderedIndexs)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(end: 6),
+                child: Semantics(
+                  selected: tab == model.currentTab,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      visualDensity: VisualDensity.compact,
+                      backgroundColor: tab == model.currentTab
+                          ? theme.colorScheme.onSurface
+                          : theme.cardColor,
+                      foregroundColor: tab == model.currentTab
+                          ? theme.scaffoldBackgroundColor
+                          : theme.hintColor,
+                      side: BorderSide(color: theme.dividerColor),
+                      shape: const StadiumBorder(),
+                      textStyle: const TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w500),
+                    ),
+                    onPressed: isOptionFixed(kOptionPeerTabIndex)
+                        ? null
+                        : () async {
+                            await handleTabSelection(tab);
+                            await bind.setLocalFlutterOption(
+                                k: kOptionPeerTabIndex, v: tab.toString());
+                          },
+                    child: Text(model.tabTooltip(tab)),
+                  ),
+                ),
+              ),
+          ]),
+        ),
+      ),
+      _iPhoneCollectionMenu(context, model),
+    ]);
+  }
+
+  Widget _iPhoneCollectionMenu(BuildContext context, PeerTabModel model) {
     return Align(
       alignment: AlignmentDirectional.centerStart,
       child: TextButton(
+        style: TextButton.styleFrom(
+            minimumSize: const Size(32, 44), padding: EdgeInsets.zero),
         onPressed: () async {
           FocusManager.instance.primaryFocus?.unfocus();
           final selected = await showModalBottomSheet<int>(
@@ -268,17 +331,10 @@ class _PeerTabPageState extends State<PeerTabPage>
           await bind.setLocalFlutterOption(
               k: kOptionPeerTabIndex, v: selected.toString());
         },
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Flexible(
-              child: Text(
-                  model.visibleEnabledOrderedIndexs.isEmpty
-                      ? translate('Accessible devices')
-                      : model.tabTooltip(model.currentTab),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis)),
-          const SizedBox(width: 4),
-          const Icon(Icons.expand_more_rounded, size: 18),
-        ]),
+        child: Tooltip(
+            message: translate('Change view'),
+            child: Icon(Icons.tune_rounded,
+                size: 18, color: Theme.of(context).hintColor)),
       ),
     );
   }
@@ -682,7 +738,8 @@ class _PeerTabPageState extends State<PeerTabPage>
         offstage: model.currentTabCachedPeers.isEmpty,
         child: _createMultiSelection(),
       ),
-      if (ConnectionPeerList.of(context)?.onConnect == null)
+      if (usesWorkspaceStyle ||
+          ConnectionPeerList.of(context)?.onConnect == null)
         _createPeerViewTypeSwitch(context),
       Offstage(
         offstage: model.currentTab == PeerTabIndex.recent.index,
