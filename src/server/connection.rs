@@ -740,6 +740,8 @@ impl Connection {
         }
 
         let mut live_direct_started = false;
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        let mut video_diagnostic = crate::video_diagnostics::SendStats::default();
         loop {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
@@ -1116,7 +1118,22 @@ impl Connection {
                             video_service::notify_video_frame_fetched(vf.display as usize, id, Some(instant.into()));
                         }
                     }
-                    if let Err(err) = conn.stream.send(&value as &Message).await {
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    let (queue_age, queue_depth, write_started) =
+                        (instant.elapsed(), rx_video.len(), Instant::now());
+                    let sent = conn.stream.send(&value as &Message).await;
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    if sent.is_ok() {
+                        if let Some(message::Union::VideoFrame(frame)) = &value.union {
+                            video_diagnostic.record(
+                                crate::video_diagnostics::frame_count(frame),
+                                queue_depth,
+                                queue_age,
+                                write_started.elapsed(),
+                            );
+                        }
+                    }
+                    if let Err(err) = sent {
                         conn.on_close(&err.to_string(), false).await;
                         break;
                     }
@@ -1204,6 +1221,8 @@ impl Connection {
                     }
                 }
                 _ = second_timer.tick() => {
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    video_diagnostic.report(id, conn.video_ack_required);
                     #[cfg(windows)]
                     conn.portable_check();
                     raii::AuthedConnID::check_wake_lock_on_setting_changed();

@@ -95,6 +95,8 @@ pub struct Remote<T: InvokeUiSession> {
     client_conn_id: i32, // used for file clipboard
     data_count: Arc<AtomicUsize>,
     video_delivery: super::video_delivery::DeliveryWindow,
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    video_diagnostic: Arc<crate::video_diagnostics::ReceiveStats>,
     video_format: CodecFormat,
     elevation_requested: bool,
     peer_info: ParsedPeerInfo,
@@ -157,6 +159,8 @@ impl<T: InvokeUiSession> Remote<T> {
             client_conn_id: 0,
             data_count: Arc::new(AtomicUsize::new(0)),
             video_delivery: Default::default(),
+            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+            video_diagnostic: Default::default(),
             video_format: CodecFormat::Unknown,
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
@@ -310,6 +314,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut status_timer =
                     crate::rustdesk_interval(time::interval(Duration::new(1, 0)));
                 let mut fps_instant = Instant::now();
+                #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                let mut diagnostic_transport = stream_type;
 
                 // A fast relay can finish before the offer's authenticated key exchange.
                 // Query once, only after this peer advertises live upgrades, alongside
@@ -436,6 +442,10 @@ impl<T: InvokeUiSession> Remote<T> {
                         path = crate::live_direct::next_path(&mut live_path) => {
                             if let Some(transport) = path {
                                 direct = transport.is_some();
+                                #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                                {
+                                    diagnostic_transport = transport.unwrap_or(stream_type);
+                                }
                                 self.handler.update_direct(Some(direct));
                                 self.handler.set_connection_type(
                                     true, direct, transport.unwrap_or(stream_type),
@@ -513,6 +523,10 @@ impl<T: InvokeUiSession> Remote<T> {
                                 continue;
                             }
                             fps_instant = Instant::now();
+                            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                            if !self.video_threads.is_empty() {
+                                self.video_diagnostic.report(elapsed, diagnostic_transport);
+                            }
                             let mut speed = self.data_count.swap(0, Ordering::Relaxed);
                             speed = speed * 1000 / elapsed as usize;
                             let speed = format!("{:.2}kB/s", speed as f32 / 1024 as f32);
@@ -1854,6 +1868,11 @@ impl<T: InvokeUiSession> Remote<T> {
                         None => 0,
                     };
                     self.video_delivery.frame(data.len(), frames, depth);
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    {
+                        self.video_diagnostic.received.fetch_add(frames as u64, Ordering::Relaxed);
+                        self.video_diagnostic.decode_queue_max.fetch_max(depth as u64, Ordering::Relaxed);
+                    }
                     if Self::contains_key_frame(&vf) {
                         thread
                             .video_sender
@@ -1862,6 +1881,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     } else {
                         let video_queue = thread.video_queue.read().unwrap();
                         if video_queue.force_push(vf).is_some() {
+                            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                            self.video_diagnostic.overwritten.fetch_add(1, Ordering::Relaxed);
                             drop(video_queue);
                             self.handler.refresh_video(display as _);
                         } else {
@@ -3092,6 +3113,8 @@ impl<T: InvokeUiSession> Remote<T> {
             decode_fps,
             self.chroma.clone(),
             discard_queue,
+            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+            self.video_diagnostic.clone(),
             move |display: usize,
                   data: &mut scrap::ImageRgb,
                   _texture: *mut c_void,

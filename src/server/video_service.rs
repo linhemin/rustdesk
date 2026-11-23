@@ -19,6 +19,8 @@
 // https://slhck.info/video/2017/03/01/rate-control.html
 
 use super::{display_service::check_display_changed, service::ServiceTmpl, video_qos::VideoQoS, *};
+#[cfg(all(windows, feature = "windows-video-diagnostics"))]
+use crate::video_diagnostics;
 #[cfg(target_os = "linux")]
 use crate::common::SimpleCallOnReturn;
 #[cfg(target_os = "linux")]
@@ -182,6 +184,8 @@ struct VideoFrameController {
     display_idx: usize,
     cur: Instant,
     send_conn_ids: HashSet<i32>,
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    diagnostic_repeat_frames: usize,
 }
 
 impl VideoFrameController {
@@ -190,6 +194,8 @@ impl VideoFrameController {
             display_idx,
             cur: Instant::now(),
             send_conn_ids: HashSet::new(),
+            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+            diagnostic_repeat_frames: 0,
         }
     }
 
@@ -718,6 +724,8 @@ fn run(vs: VideoService) -> ResultType<()> {
         .build()?;
 
     let start = time::Instant::now();
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    let (mut diagnostic, mut diagnostic_since) = (video_diagnostics::CaptureStats::default(), start);
     let mut last_check_displays = time::Instant::now();
     #[cfg(windows)]
     let mut dxgi_first_frame_started = vs.source.is_monitor().then_some(dxgi_recovery_started.unwrap_or(start));
@@ -762,6 +770,12 @@ fn run(vs: VideoService) -> ResultType<()> {
             &mut second_instant,
             &sp.name(),
         )? && vs.source.is_monitor();
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        if vs.source.is_monitor() && diagnostic_since.elapsed() >= Duration::from_secs(1) {
+            diagnostic.repeat_encoded += std::mem::take(&mut frame_controller.diagnostic_repeat_frames);
+            diagnostic.report(display_idx, c.is_gdi(), spf, diagnostic_since.elapsed());
+            diagnostic_since = Instant::now();
+        }
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but
         // not yet produced its first packet, restarting the warm-up forever. Defer until it has;
         // one that never does is still switched away from by max_fail_times in handle_one_frame.
@@ -821,7 +835,16 @@ fn run(vs: VideoService) -> ResultType<()> {
         let time = now - start;
         let ms = (time.as_secs() * 1000 + time.subsec_millis() as u64) as i64;
         let capture_timeout = if fixed_pacing { Duration::ZERO } else { spf };
-        let res = match c.frame(capture_timeout) {
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        let (capturing_gdi, capture_started) = (c.is_gdi(), Instant::now());
+        let captured = c.frame(capture_timeout);
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        diagnostic.capture(
+            capturing_gdi,
+            captured.as_ref().map(|frame| frame.valid()).map_err(|e| e.kind()),
+            capture_started.elapsed(),
+        );
+        let res = match captured {
             Ok(frame) => {
                 repeat_encode_counter = 0;
                 let valid = frame.valid();
@@ -873,7 +896,13 @@ fn run(vs: VideoService) -> ResultType<()> {
                         }
                     }
 
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    let convert_started = Instant::now();
                     let frame = frame.to(encoder.yuvfmt(), &mut yuv, &mut mid_data)?;
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    {
+                        diagnostic.convert_max_us = diagnostic.convert_max_us.max(convert_started.elapsed().as_micros() as u64);
+                    }
                     static_refresh.on_frame(&frame);
                     let result = handle_one_frame(
                         display_idx,
@@ -888,6 +917,8 @@ fn run(vs: VideoService) -> ResultType<()> {
                         capture_width,
                         capture_height,
                     )?;
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    diagnostic.encoded(result.encoded_frames, result.encode_us);
                     static_refresh.on_frame_encoded(&result);
                     frame_controller.set_send(now, result.send_conn_ids);
                     send_counter += 1;
@@ -939,7 +970,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                     // yun.len() > 0 means the frame is not texture.
                     if repeat_encode_counter < repeat_encode_max {
                         repeat_encode_counter += 1;
-                        let send_conn_ids = handle_one_frame(
+                        let result = handle_one_frame(
                             display_idx,
                             &sp,
                             EncodeInput::YUV(&yuv),
@@ -951,8 +982,10 @@ fn run(vs: VideoService) -> ResultType<()> {
                             &mut encoder_warmed_up,
                             capture_width,
                             capture_height,
-                        )?
-                        .send_conn_ids;
+                        )?;
+                        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                        diagnostic.encoded(result.encoded_frames, result.encode_us);
+                        let send_conn_ids = result.send_conn_ids;
                         static_refresh.on_encoded(!send_conn_ids.is_empty());
                         frame_controller.set_send(now, send_conn_ids);
                         send_counter += 1;
@@ -1026,6 +1059,11 @@ fn run(vs: VideoService) -> ResultType<()> {
             if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
                 break;
             }
+        }
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        if !frame_controller.send_conn_ids.is_empty() {
+            diagnostic.ack_wait_max_us = diagnostic.ack_wait_max_us.max(wait_begin.elapsed().as_micros() as u64);
+            diagnostic.ack_missed += frame_controller.send_conn_ids.len().saturating_sub(fetched_conn_ids.len());
         }
         DISPLAY_CONN_IDS.lock().unwrap().remove(&display_idx);
 
@@ -1308,7 +1346,14 @@ fn handle_one_frame(
     let mut vpx_no_output = false;
     let first = *first_frame;
     *first_frame = false;
-    match encoder.encode_to_message(frame, ms) {
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    let encode_started = Instant::now();
+    let encoded = encoder.encode_to_message(frame, ms);
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    let encode_us = encode_started.elapsed().as_micros() as u64;
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    let encoded_frames = encoded.as_ref().map(video_diagnostics::frame_count).unwrap_or(0);
+    match encoded {
         Ok(mut vf) => {
             *encode_fail_counter = 0;
             *encoder_warmed_up = true;
@@ -1357,6 +1402,10 @@ fn handle_one_frame(
     Ok(static_refresh::FrameEncodeResult {
         send_conn_ids,
         vpx_no_output,
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        encoded_frames,
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        encode_us,
     })
 }
 

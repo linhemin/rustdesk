@@ -4672,6 +4672,8 @@ pub fn start_video_thread<F, T>(
     fps: Arc<RwLock<Option<usize>>>,
     chroma: Arc<RwLock<Option<Chroma>>>,
     discard_queue: Arc<RwLock<bool>>,
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    video_diagnostic: Arc<crate::video_diagnostics::ReceiveStats>,
     video_callback: F,
 ) where
     F: 'static + FnMut(usize, &mut scrap::ImageRgb, *mut c_void, bool) + Send,
@@ -4757,12 +4759,24 @@ pub fn start_video_thread<F, T>(
                             let mut pixelbuffer = true;
                             let mut tmp_chroma = None;
                             let format_changed = handler.decoder.format() != format;
-                            match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
+                            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                            let decode_started = std::time::Instant::now();
+                            let decoded = handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma);
+                            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                            video_diagnostic.decode_max_us.fetch_max(
+                                decode_started.elapsed().as_micros() as u64,
+                                std::sync::atomic::Ordering::Relaxed,
+                            );
+                            match decoded {
                                 Ok(true) => {
+                                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                                    video_diagnostic.decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     if freshness.show(
                                         &video_queue.read().unwrap(),
                                         std::time::Instant::now(),
                                     ) {
+                                        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                                        video_diagnostic.ui_submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         video_callback(
                                             display,
                                             &mut handler.rgb,
@@ -4788,6 +4802,8 @@ pub fn start_video_thread<F, T>(
                                     );
                                 }
                                 Err(e) => {
+                                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                                    video_diagnostic.decode_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     // This is a simple workaround.
                                     //
                                     // I only see the following error:

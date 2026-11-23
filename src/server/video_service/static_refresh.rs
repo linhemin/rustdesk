@@ -66,6 +66,10 @@ fn max_repeat_frames(codec: CodecFormat, quality: f32, backend: HardwareBackend)
 pub(super) struct FrameEncodeResult {
     pub(super) send_conn_ids: HashSet<i32>,
     pub(super) vpx_no_output: bool,
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    pub(super) encoded_frames: usize,
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    pub(super) encode_us: u64,
 }
 
 pub(super) struct StaticRefresh<'a> {
@@ -300,6 +304,10 @@ impl<'a> StaticRefresh<'a> {
             };
             self.repeat_output_counter = self.repeat_output_counter.saturating_add(1);
             self.repeat_failures = 0;
+            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+            {
+                frame_controller.diagnostic_repeat_frames += crate::video_diagnostics::frame_count(&vf);
+            }
             vf.display = self.display_idx as _;
             let mut msg = Message::new();
             msg.set_video_frame(vf);
