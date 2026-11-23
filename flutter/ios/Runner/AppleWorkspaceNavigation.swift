@@ -108,6 +108,7 @@ private struct WorkspaceDockContent: View {
         let textScale = options["textScale"] as? Double ?? 1
         let rtl = options["rtl"] as? Bool ?? false
         return HStack(spacing: 10) {
+            GeometryReader { geometry in
             HStack(spacing: 0) {
                 ForEach(settings.labels.indices, id: \.self) { index in
                     let selected = settings.selected == index
@@ -132,6 +133,16 @@ private struct WorkspaceDockContent: View {
             }
             .padding(4)
             .workspaceDockGlass(Capsule())
+            .contentShape(Capsule())
+            .simultaneousGesture(DragGesture(minimumDistance: 12).onEnded { drag in
+                guard !settings.labels.isEmpty, geometry.size.width > 8,
+                      geometry.frame(in: .local).contains(drag.location) else { return }
+                let width = (geometry.size.width - 8) / CGFloat(settings.labels.count)
+                let index = min(settings.labels.count - 1,
+                    max(0, Int((drag.location.x - 4) / width)))
+                onSelect(rtl ? settings.labels.count - 1 - index : index)
+            })
+            }
             Button(action: onQuickConnect) {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 21, weight: .medium))
