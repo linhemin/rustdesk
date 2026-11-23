@@ -53,6 +53,11 @@ private struct WorkspaceTabConfiguration {
     let symbols: [String]
     let selected: Int
     let appearance: UIUserInterfaceStyle
+    var accent: UIColor {
+        appearance == .dark
+            ? UIColor(red: 76 / 255, green: 139 / 255, blue: 245 / 255, alpha: 1)
+            : UIColor(red: 37 / 255, green: 99 / 255, blue: 235 / 255, alpha: 1)
+    }
 
     init?(_ arguments: Any?) {
         guard let settings = arguments as? [String: Any],
@@ -131,6 +136,7 @@ private final class AppleWorkspaceTabBar: NSObject, FlutterPlatformView, UITabBa
         let selected = settings.selected
 
         root.overrideUserInterfaceStyle = settings.appearance
+        tabBar.tintColor = settings.accent
         if self.labels != labels || self.symbols != symbols {
             self.labels = labels
             self.symbols = symbols
@@ -202,6 +208,7 @@ private final class SystemWorkspaceTabView: NSObject, FlutterPlatformView {
     private func update(_ arguments: Any?) {
         guard let settings = WorkspaceTabConfiguration(arguments) else { return }
         root.overrideUserInterfaceStyle = settings.appearance
+        root.controller.tabBar.tintColor = settings.accent
         if labels != settings.labels || symbols != settings.symbols {
             labels = settings.labels
             symbols = settings.symbols

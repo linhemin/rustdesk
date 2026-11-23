@@ -16,28 +16,62 @@ class WorkspaceStyle {
   WorkspaceStyle._();
   static const accent = blue;
   static const ink = navy;
-  static const muted = Color(0xff64748b);
+  static const muted = Color(0xff576071);
   static const background = Color(0xfff5f6f9);
-  static const border = Color(0xffe2e7f0);
+  static const border = Color(0x160f172a);
   static const nightSurface = slate;
   static const blue = Color(0xff2563eb);
-  static const navy = Color(0xff0f172a);
-  static const mist = Color(0xffeef1f6);
+  static const navy = Color(0xff11141a);
+  static const mist = Color(0xfff2f4f8);
   static const night = Color(0xff0b0d11);
   static const slate = Color(0xff151921);
-  static const ice = Color(0xff60a5fa);
+  static const ice = Color(0xff4c8bf5);
 
   static const sidebarDark = Color(0xff101319);
-  static const sidebarLight = Color(0xffffffff);
+  static const sidebarLight = Color(0xffeceff4);
   static const surfaceElevatedDark = Color(0xff1c212c);
-  static const surfaceElevatedLight = Color(0xffeef1f6);
-  static const borderDark = Color(0xff232936);
+  static const surfaceElevatedLight = Color(0xfff2f4f8);
+  static const borderDark = Color(0x16ffffff);
+  static const inkDark = Color(0xfff2f4f8);
+  static const mutedDark = Color(0xff9aa3b2);
+  static const tertiaryDark = Color(0xff667082);
+  static const tertiaryLight = Color(0xff8590a0);
+  static const wellDark = Color(0xff0e1015);
+  static const wellLight = Color(0xfff8f9fb);
+  static const borderStrongDark = Color(0x24ffffff);
+  static const borderStrongLight = Color(0x240f172a);
   static const green = Color(0xff30b158);
   static const amber = Color(0xffff9f0a);
   static const red = Color(0xffff453a);
   static const purple = Color(0xffaf52de);
   static const indigo = Color(0xff5e5ce6);
   static const neutralTile = Color(0xff636366);
+
+  // Semantic tokens from docs/rustdesk_redesign_prototype.html. Keep the
+  // platform-colored settings icon tiles above independent of status colors.
+  static bool _dark(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark;
+
+  static Color canvas(BuildContext context) => _dark(context) ? night : background;
+  static Color well(BuildContext context) => _dark(context) ? wellDark : wellLight;
+  static Color tertiaryInk(BuildContext context) =>
+      _dark(context) ? tertiaryDark : tertiaryLight;
+  static Color strongBorder(BuildContext context) =>
+      _dark(context) ? borderStrongDark : borderStrongLight;
+  static Color accentSoft(BuildContext context) =>
+      _dark(context) ? const Color(0x264c8bf5) : const Color(0x1a2563eb);
+  static Color accentBorder(BuildContext context) =>
+      _dark(context) ? const Color(0x5c4c8bf5) : const Color(0x472563eb);
+  static Color accentHover(BuildContext context) =>
+      _dark(context) ? const Color(0xff3b7be8) : const Color(0xff1d4ed8);
+  static Color success(BuildContext context) =>
+      _dark(context) ? const Color(0xff10b981) : const Color(0xff059669);
+  static Color warning(BuildContext context) =>
+      _dark(context) ? const Color(0xfff59e0b) : const Color(0xffd97706);
+  static Color information(BuildContext context) =>
+      _dark(context) ? const Color(0xffa78bfa) : const Color(0xff7c3aed);
+  static Color danger(BuildContext context) =>
+      _dark(context) ? const Color(0xffef4444) : const Color(0xffdc2626);
 
   static Color sidebarColor(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
@@ -53,9 +87,9 @@ class WorkspaceStyle {
     final dark = base.brightness == Brightness.dark;
     final ios = !kIsWeb && base.platform == TargetPlatform.iOS;
     final paper = dark ? slate : Colors.white;
-    final background = dark ? night : const Color(0xfff5f6f9);
-    final ink = dark ? const Color(0xffeef2f8) : navy;
-    final muted = dark ? const Color(0xff8b95a7) : const Color(0xff64748b);
+    final background = dark ? night : WorkspaceStyle.background;
+    final ink = dark ? inkDark : navy;
+    final muted = dark ? mutedDark : WorkspaceStyle.muted;
     final line = dark ? borderDark : border;
     final accent = dark ? ice : blue;
     final elevated = dark ? surfaceElevatedDark : surfaceElevatedLight;
@@ -79,9 +113,11 @@ class WorkspaceStyle {
       focusColor: accent.withOpacity(.14),
       colorScheme: base.colorScheme.copyWith(
         primary: accent,
-        onPrimary: dark ? const Color(0xff0b0d11) : Colors.white,
+        onPrimary: Colors.white,
         secondary: accent,
-        onSecondary: dark ? const Color(0xff0b0d11) : Colors.white,
+        onSecondary: Colors.white,
+        error: dark ? const Color(0xffef4444) : const Color(0xffdc2626),
+        onError: Colors.white,
         background: background,
         surface: paper,
         onSurface: ink,
@@ -133,7 +169,7 @@ class WorkspaceStyle {
           .copyWith(shape: shape, selectedColor: accent, iconColor: muted),
       dividerTheme: DividerThemeData(color: line, thickness: 1),
       inputDecorationTheme: fields.copyWith(
-        fillColor: dark ? night : elevated,
+        fillColor: dark ? wellDark : wellLight,
         hintStyle: TextStyle(color: muted),
         border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(10),
@@ -148,7 +184,7 @@ class WorkspaceStyle {
       elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
         elevation: 0,
-        backgroundColor: blue,
+        backgroundColor: accent,
         foregroundColor: Colors.white,
         shape: shape,
         textStyle: text.labelLarge?.copyWith(fontWeight: FontWeight.w600),

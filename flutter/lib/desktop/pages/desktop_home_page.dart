@@ -109,9 +109,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           final compact = bounds.maxWidth < 760;
           return Row(children: [
             SizedBox(
-              width: compact ? 164 : 204,
+              width: compact ? 164 : 216,
               child: ColoredBox(
-                color: Theme.of(context).cardColor,
+                color: WorkspaceStyle.sidebarColor(context),
                 child: AppleWorkspaceNavigation(
                   labels: [for (final item in destinations) item.label],
                   symbols: [

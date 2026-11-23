@@ -37,10 +37,10 @@ class WorkspaceNavigation extends StatelessWidget {
         final inkDefault = theme.colorScheme.onSurface;
         final muted = theme.hintColor;
         final wide = bounds.maxWidth >= 740;
-        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 184.0 : 212.0;
+        final railWidth = !wide ? 64.0 : bounds.maxWidth < 950 ? 184.0 : 216.0;
         Widget item(
             String label, IconData icon, bool selected, VoidCallback action) {
-          final ink = selected ? primary : muted;
+          final ink = selected ? primary : WorkspaceStyle.tertiaryInk(context);
           return Semantics(
               selected: selected,
               button: true,
@@ -48,13 +48,15 @@ class WorkspaceNavigation extends StatelessWidget {
               child: Tooltip(
                   message: wide ? '' : label,
                   child: Material(
-                      color: selected
-                          ? primary.withOpacity(0.13)
-                          : Colors.transparent,
+                      color: selected ? theme.cardColor : Colors.transparent,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                          side: BorderSide(
+                              color: selected
+                                  ? theme.dividerColor
+                                  : Colors.transparent),
+                          borderRadius: BorderRadius.circular(8)),
                       child: InkWell(
-                          borderRadius: BorderRadius.circular(10),
+                          borderRadius: BorderRadius.circular(8),
                           onTap: action,
                           child: ExcludeSemantics(
                               child: Padding(
@@ -65,7 +67,7 @@ class WorkspaceNavigation extends StatelessWidget {
                                           ? MainAxisAlignment.start
                                           : MainAxisAlignment.center,
                                       children: [
-                                        Icon(icon, size: 19, color: ink),
+                                        Icon(icon, size: 17, color: ink),
                                         if (wide) ...[
                                           const SizedBox(width: 11),
                                           Expanded(
@@ -75,9 +77,9 @@ class WorkspaceNavigation extends StatelessWidget {
                                                       TextOverflow.ellipsis,
                                                   style: TextStyle(
                                                       color: selected
-                                                          ? primary
-                                                          : inkDefault,
-                                                      fontSize: 13.5,
+                                                          ? inkDefault
+                                                          : muted,
+                                                      fontSize: 13,
                                                       fontWeight: selected
                                                           ? FontWeight.w600
                                                           : FontWeight.w500))),
@@ -110,7 +112,7 @@ class WorkspaceNavigation extends StatelessWidget {
                                     style: TextStyle(
                                         color: inkDefault,
                                         fontWeight: FontWeight.w700,
-                                        fontSize: 16,
+                                        fontSize: 14,
                                         letterSpacing: -.4)))
                           ]
                         ])),
