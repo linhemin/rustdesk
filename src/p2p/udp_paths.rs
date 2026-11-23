@@ -109,11 +109,55 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primar
     None
 }
 
+async fn observed_system_route(
+    source: SocketAddr,
+    nas: SocketAddr,
+    wide: bool,
+) -> Option<(Arc<UdpSocket>, Vec<u8>, bool, u32)> {
+    // A split TUN can route the rendezvous and the peer through different local interfaces.
+    let wildcard = SocketAddr::from(([0; 4], 0));
+    if let Some(candidate) = observed_socket(wildcard, nas, wide, None).await {
+        #[cfg(target_os = "ios")]
+        crate::ios_p2p_diagnostics::record_milestone(
+            "ordinary-udp", "observer verified IPv4 candidate using system routing",
+        );
+        return Some(candidate);
+    }
+    observed_socket(source, nas, wide, None).await
+}
+
 impl Candidates {
     pub fn lan_offer(&self, primary: &UdpSocket) -> String {
         if self.tickets.is_empty() { return String::new(); }
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let Ok(SocketAddr::V4(primary)) = primary.local_addr() {
+            if let Some(ip) = crate::platform::apple_network::lan_ipv4_for_tunnel(*primary.ip()) {
+                if let Some(port) = self.system_route_port() {
+                    return SocketAddr::from((ip, port)).to_string();
+                }
+            }
+        }
         primary.local_addr().ok().map(|a| a.to_string())
             .filter(|s| hbb_common::lan_udp::endpoint(s).is_some()).unwrap_or_default()
+    }
+
+    fn system_route_port(&self) -> Option<u16> {
+        self.sockets.iter().filter_map(|socket| socket.local_addr().ok())
+            .find(|addr| addr.ip().is_unspecified()).map(|addr| addr.port())
+    }
+
+    pub(crate) fn lan_offer_for_peer(&self, primary: &UdpSocket, peer: SocketAddr) -> String {
+        if let Ok(source) = super::ordinary_udp::routed_source(peer) {
+            if let Some(port) = self.system_route_port()
+                .filter(|_| primary.local_addr().is_ok_and(|addr| addr.ip() != source.ip()))
+            {
+                let endpoint = SocketAddr::new(source.ip(), port).to_string();
+                if hbb_common::lan_udp::endpoint(&endpoint).is_some() {
+                    return endpoint;
+                }
+            }
+        }
+        self.lan_offer(primary)
     }
 
     pub async fn gather(primary: &UdpSocket, nas: SocketAddr, wide: bool, observed: Option<u16>) -> Self {
@@ -122,9 +166,18 @@ impl Candidates {
         if source.ip().is_unspecified() {
             return result;
         }
-        let mut jobs: FuturesUnordered<_> = (0..EXTRA_SOCKETS)
-            .map(|_| observed_socket(source, nas, wide, None))
-            .collect();
+        let system_route = source.is_ipv4();
+        #[cfg(target_os = "windows")]
+        let system_route = system_route && !super::Interface::configured()
+            .is_some_and(|iface| source.ip() == std::net::IpAddr::V4(iface.address));
+        let observe = |slot| async move {
+            if slot == EXTRA_SOCKETS - 1 && system_route {
+                return observed_system_route(source, nas, wide).await;
+            }
+            let primary = (slot == EXTRA_SOCKETS).then_some((primary, observed));
+            observed_socket(source, nas, wide, primary).await
+        };
+        let mut jobs: FuturesUnordered<_> = (0..EXTRA_SOCKETS).map(observe).collect();
         let mut extended = false;
         while let Some(candidate) = jobs.next().await {
             if let Some((socket, ticket, supported, ip)) = candidate {
@@ -133,9 +186,7 @@ impl Candidates {
                 result.tickets.extend(ticket);
                 if supported && !extended {
                     extended = true;
-                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(|i| {
-                        observed_socket(source, nas, wide, (i == EXTRA_SOCKETS).then_some((primary, observed)))
-                    }));
+                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(observe));
                 }
             }
         }
@@ -237,7 +288,7 @@ impl Paths {
             .enumerate()
             .map(|(i, s)| {
                 let mut peers = destinations.clone();
-                if i == 0 {
+                if i == 0 || s.local_addr().is_ok_and(|addr| addr.ip().is_unspecified()) {
                     if let Some(lan) = self.local.lan_peer.filter(|a| !peers.contains(a)) {
                         peers.insert(1, lan);
                     }
@@ -515,6 +566,68 @@ mod tests {
         let (from, candidate) = tokio::join!(observer, candidate);
         assert!(candidate.is_some());
         assert_eq!(from, port);
+    }
+
+    #[tokio::test]
+    async fn system_route_candidate_receives_on_the_observed_port_at_another_local_ip() {
+        let nas = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let source = "127.0.0.1:0".parse().unwrap();
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let observer = async {
+            let mut request = [0; 96];
+            let (_, from) = nas.recv_from(&mut request).await.unwrap();
+            let mut reply = [0; 84];
+            reply[..4].copy_from_slice(&[1, 1, 0, 64]);
+            reply[4..20].copy_from_slice(&request[4..20]);
+            reply[20..24].copy_from_slice(&[0, 0x20, 0, 8]);
+            reply[32..36].copy_from_slice(&[0xc0, 0x51, 0, 38]);
+            reply[76..].copy_from_slice(&[0xc0, 0x52, 0, 4, 0, 0, 0, 11]);
+            nas.send_to(&reply, from).await.unwrap();
+            from.port()
+        };
+        let (candidate, advertised_port) = tokio::join!(
+            observed_system_route(source, nas.local_addr().unwrap(), true), observer,
+        );
+        let (socket, _, _, _) = candidate.unwrap();
+        let request = packet(2, &[7; 8], &auth::gen_key());
+        peer.send_to(&request, ("127.0.0.2", advertised_port)).await.unwrap();
+        let mut buffer = [0; 45];
+        let (size, from) = timeout(Duration::from_secs(1), socket.recv_from(&mut buffer))
+            .await.unwrap().unwrap();
+        assert_eq!((size, from, buffer), (45, peer.local_addr().unwrap(), request));
+    }
+
+    #[tokio::test]
+    async fn signed_lan_candidates_carry_kcp_with_split_routes_on_either_or_both_ends() {
+        async fn bind(split: bool) -> (Arc<UdpSocket>, Vec<Arc<UdpSocket>>, SocketAddr) {
+            let primary = Arc::new(UdpSocket::bind(if split { "127.0.0.2:0" } else { "127.0.0.1:0" }).await.unwrap());
+            let route_socket = if split { Some(Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap())) } else { None };
+            let port = route_socket.as_ref().unwrap_or(&primary).local_addr().unwrap().port();
+            (primary, route_socket.into_iter().collect(), SocketAddr::from(([127, 0, 0, 1], port)))
+        }
+        let unreachable = UdpSocket::bind("127.0.0.3:0").await.unwrap();
+        let unreachable = unreachable.local_addr().unwrap();
+        for (controller_split, controlled_split) in [(true, false), (false, true), (true, true)] {
+            let (a, a_sockets, a_lan) = bind(controller_split).await;
+            let (b, b_sockets, b_lan) = bind(controlled_split).await;
+            let key = auth::gen_key();
+            let paths = |sockets, lan_peer| Paths {
+                local: Candidates { sockets, lan_peer: Some(lan_peer), ..Default::default() },
+                ports: Vec::new(),
+                key: key.clone(),
+            };
+            let accept = async {
+                let (socket, syn) = paths(b_sockets, a_lan).select(b, unreachable, true).await.unwrap();
+                KcpStream::accept(socket, Duration::from_secs(2), syn).await.unwrap()
+            };
+            let dial = async {
+                let (socket, _) = paths(a_sockets, b_lan).select(a, unreachable, false).await.unwrap();
+                KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
+            };
+            let ((_client, mut client), (_host, mut host)) = tokio::join!(dial, accept);
+            client.send_raw(b"lan".to_vec()).await.unwrap();
+            assert_eq!(&host.next_timeout(2000).await.unwrap().unwrap()[..], b"lan");
+        }
     }
 
     #[tokio::test]

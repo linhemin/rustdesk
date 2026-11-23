@@ -1435,9 +1435,9 @@ impl RendezvousMediator {
             let mut local = crate::p2p::udp_paths::Candidates::gather(&socket, addr, candidate_ports.len() > 3, None).await;
             if !local.tickets.is_empty() {
                 let key = hbb_common::sodiumoxide::crypto::hash::sha256::hash(&msg_punch.udp_reply_token);
-                if lan_peer.is_some() {
-                    msg_punch.udp_lan_endpoint = local.lan_offer(&socket);
-                    local.lan_peer = lan_peer;
+                if let Some(lan_peer) = lan_peer {
+                    msg_punch.udp_lan_endpoint = local.lan_offer_for_peer(&socket, lan_peer);
+                    local.lan_peer = Some(lan_peer);
                 }
                 msg_punch.udp_mapping_tickets = std::mem::take(&mut local.tickets).into();
                 let candidates = crate::p2p::udp_paths::Paths {

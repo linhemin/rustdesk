@@ -5,7 +5,7 @@ use hbb_common::{
 };
 use std::{net::SocketAddr, sync::Arc};
 
-fn routed_source(peer: SocketAddr) -> std::io::Result<SocketAddr> {
+pub(super) fn routed_source(peer: SocketAddr) -> std::io::Result<SocketAddr> {
     let route = std::net::UdpSocket::bind(Config::get_any_listen_addr(peer.is_ipv4()))?;
     route.connect(peer)?;
     Ok(SocketAddr::new(route.local_addr()?.ip(), 0))

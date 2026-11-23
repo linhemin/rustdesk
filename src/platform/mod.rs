@@ -14,6 +14,9 @@ pub mod win_device;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod apple_network;
+
 #[cfg(target_os = "macos")]
 pub mod delegate;
 
