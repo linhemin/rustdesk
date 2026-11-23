@@ -88,6 +88,12 @@ private final class AppleWorkspaceSidebar: NSView, NSTableViewDataSource, NSTabl
             content.addSubview(item)
         }
         listHeight = scroll.heightAnchor.constraint(equalToConstant: 0)
+        if navigationOnly {
+            listHeight.priority = .defaultHigh
+            scroll.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor).isActive = true
+            scroll.hasVerticalScroller = true
+            scroll.autohidesScrollers = true
+        }
         NSLayoutConstraint.activate([
             surface.leadingAnchor.constraint(equalTo: leadingAnchor),
             surface.trailingAnchor.constraint(equalTo: trailingAnchor),

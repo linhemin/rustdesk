@@ -74,9 +74,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(selected, 4);
     expect(configuration!['selected'], 4);
-    tester.view.physicalSize = const Size(600, 600);
+    tester.view.physicalSize = const Size(600, 200);
     await tester.pumpAndSettle();
     expect(find.byType(AppKitView), findsOneWidget);
+    expect(tester.getSize(find.byType(AppKitView)).height, lessThan(190));
     expect(tester.takeException(), isNull);
   }, variant: const TargetPlatformVariant({TargetPlatform.macOS}));
 }
