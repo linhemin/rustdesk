@@ -150,7 +150,8 @@ class DraggableDesktopQualityMonitor extends StatefulWidget {
 class _DraggableDesktopQualityMonitorState
     extends State<DraggableDesktopQualityMonitor> {
   static const _panelWidth = 272.0;
-  static const _estimatedHeight = 200.0;
+  // Leave room for the metric cards, UDP report button and transport row.
+  static const _estimatedHeight = 280.0;
   static const _edgeMargin = 10.0;
 
   Offset? _offset;

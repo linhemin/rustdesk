@@ -112,6 +112,29 @@ void main() {
     expect(find.textContaining('51023 → 192.0.2.4:38000'), findsOneWidget);
   });
 
+  testWidgets('dragging the desktop monitor keeps transport details on screen',
+      (tester) async {
+    platformFFI.setBindingForTesting(_Options());
+    final ffi = _FakeFFI();
+    final model = ffi.qualityMonitorModel;
+    await model.checkShowQualityMonitor(_sessionId);
+    ffi.ffiModel.setConnectionType('sample', true, true, 'UDP');
+    model.addUdpReport('UDP #0123456789ab  RX 3  ACK TX 2');
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: DraggableDesktopQualityMonitor(model),
+      ),
+    ));
+    await tester.drag(find.text('Speed'), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    final viewport = tester.getRect(find.byType(Scaffold));
+    final panel = tester.getRect(find.byType(DesktopQualityMonitor));
+    final transport = tester.getRect(find.text('KCP / UDP'));
+    expect(panel.bottom, lessThanOrEqualTo(viewport.bottom));
+    expect(transport.bottom, lessThanOrEqualTo(viewport.bottom));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'desktop quality panel follows the session toggle and live samples',
       (tester) async {
