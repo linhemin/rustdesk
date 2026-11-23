@@ -1007,9 +1007,12 @@ class _RemotePageState extends State<RemotePage>
     }
     paints.add(
       Positioned.fill(
-        child: DraggableDesktopQualityMonitor(
-          _ffi.qualityMonitorModel,
-        ),
+        child: Obx(() => IgnorePointer(
+              ignoring: _ffi.inputModel.relativeMouseMode.value,
+              child: DraggableDesktopQualityMonitor(
+                _ffi.qualityMonitorModel,
+              ),
+            )),
       ),
     );
     return Stack(
