@@ -1197,6 +1197,8 @@ class _SettingsState extends State<_SettingsContent>
                   },
                 ),
             ]),
+          if (_searchQuery.trim().isNotEmpty && network.isNotEmpty)
+            SettingsSection(title: Text(translate('Network')), tiles: network),
           SettingsSection(title: Text(translate('General')), tiles: [
             ...appearance,
             ...shortcuts,
