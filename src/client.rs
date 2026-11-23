@@ -1349,11 +1349,11 @@ impl Client {
             .map(|(socket, addr)| (Some(socket), Some(addr)))
             .unwrap_or((None, None));
         let udp_nat_port = udp.1.map(|(port, _)| *port.lock().unwrap()).unwrap_or(0);
-        let mut udp_candidates = if let Some((nas, source)) = mapped.filter(|_| {
-            udp_nat_port > 0 && handshake_grant && socket.is_secured() && udp.0.is_some()
+        let mut udp_candidates = if let Some(((nas, _), primary)) = mapped.zip(udp.0.as_ref()).filter(|_| {
+            udp_nat_port > 0 && handshake_grant && socket.is_secured()
         }) {
-            crate::p2p::udp_paths::Candidates::gather(source, nas,
-                direct_permission.native_upgrade || direct_permission.direct_only).await
+            crate::p2p::udp_paths::Candidates::gather(primary, nas,
+                direct_permission.native_upgrade || direct_permission.direct_only, Some(udp_nat_port)).await
         } else {
             Default::default()
         };
@@ -2017,11 +2017,22 @@ impl Client {
             direct_futures.push(
                 async move {
                     if let Some(paths) = paths {
-                        if conn_type == ConnType::DEFAULT_CONN {
+                        let recording = if conn_type == ConnType::DEFAULT_CONN {
                             let round = crate::p2p::probe_report::id(&paths.key);
                             probe_interface.send(Data::UdpProbeRound(round));
-                        }
-                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout, direct_only || relay_server.is_empty()).await
+                            paths.local_ports(&udp_socket_nat).ok().map(|ports| {
+                                let (recording, done) = crate::p2p::probe_report::Recording::local(round, ports.into_iter());
+                                tokio::spawn(async move {
+                                    if let Ok(report) = done.await {
+                                        if let Some(text) = crate::p2p::probe_report::display(&round, &report) {
+                                            probe_interface.send(Data::UdpProbeLocal(text));
+                                        }
+                                    }
+                                });
+                                recording
+                            })
+                        } else { None };
+                        return native_candidate_connect(paths, udp_socket_nat, peer, connect_timeout, direct_only || relay_server.is_empty(), recording).await
                             .map(|(conn, kcp, typ)| (conn, kcp, typ, true));
                     }
                     let (conn, kcp, typ) =
@@ -5722,6 +5733,7 @@ pub trait Interface: Send + Clone + 'static + Sized {
 #[derive(Clone)]
 pub enum Data {
     UdpProbeRound([u8; 32]),
+    UdpProbeLocal(String),
     Close,
     RejectInsecureConnection,
     Login((String, String, String, bool)),
@@ -6165,7 +6177,7 @@ fn native_stage(phase: &'static str, stage: &'static str) {
 }
 
 async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: Arc<UdpSocket>,
-    peer: SocketAddr, ms_timeout: u64, no_relay: bool) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
+    peer: SocketAddr, ms_timeout: u64, no_relay: bool, recording: Option<crate::p2p::probe_report::Recording>) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
     #[cfg(target_os = "ios")]
     let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "ordinary-udp");
     #[cfg(target_os = "ios")]
@@ -6175,7 +6187,9 @@ async fn native_candidate_connect(paths: crate::p2p::udp_paths::Paths, socket: A
     }
     // With a relay to fall back on, wait no longer than the plain punch does.
     let window = Duration::from_secs(if no_relay { 6 } else { 3 });
-    let (socket, _) = paths.select_within(socket, peer, false, window).await.map_err(|err| {
+    let selection = paths.select_within(socket, peer, false, window, recording.as_ref()).await;
+    drop(recording);
+    let (socket, _) = selection.map_err(|err| {
         #[cfg(target_os = "ios")]
         if let Some(o) = observation.as_mut() { o.finish_candidates(&err); }
         log::debug!("{err:#}");

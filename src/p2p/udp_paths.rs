@@ -59,19 +59,22 @@ pub(crate) struct Candidates {
     pub tickets: Vec<u8>,
 }
 
-async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool) -> Option<(Arc<UdpSocket>, Vec<u8>, bool)> {
-    let local = SocketAddr::new(source.ip(), 0);
-    #[cfg(target_os = "windows")]
-    let pinned =
-        super::Interface::configured().filter(|i| source.ip() == std::net::IpAddr::V4(i.address));
-    #[cfg(target_os = "windows")]
-    let socket = if let Some(i) = pinned {
-        crate::platform::bind_p2p_stun_udp(i.address, i.index, 0, 0)?
-    } else {
-        UdpSocket::bind(local).await.ok()?
+async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool, primary: Option<(&UdpSocket, Option<u16>)>) -> Option<(Arc<UdpSocket>, Vec<u8>, bool)> {
+    // The primary port is advertised independently of the secondary receipts.
+    // Use one existing observation slot to preserve that source port toward the peer.
+    let preferred = if let Some((socket, observed)) = primary {
+        let port = match observed {
+            Some(port) => Some(port),
+            None => super::udp_mapping::observe_v4_port(socket, nas).await.ok(),
+        };
+        if let Some(port) = port.filter(|p| *p >= 32768 && *p != source.port()) {
+            bind_observed_port(source, port).await
+        } else { None }
+    } else { None };
+    let socket = match preferred {
+        Some(socket) => socket,
+        None => bind_observed_port(source, 0).await?,
     };
-    #[cfg(not(target_os = "windows"))]
-    let socket = UdpSocket::bind(local).await.ok()?;
     let mut request = [0; 96];
     request[..8].copy_from_slice(&[0, 1, 0, 76, 0x21, 0x12, 0xa4, 0x42]);
     randombytes::randombytes_into(&mut request[8..20]);
@@ -112,13 +115,14 @@ async fn observed_socket(source: SocketAddr, nas: SocketAddr, wide: bool) -> Opt
 }
 
 impl Candidates {
-    pub async fn gather(source: SocketAddr, nas: SocketAddr, wide: bool) -> Self {
+    pub async fn gather(primary: &UdpSocket, nas: SocketAddr, wide: bool, observed: Option<u16>) -> Self {
         let mut result = Self::default();
+        let Ok(source) = primary.local_addr() else { return result; };
         if source.ip().is_unspecified() {
             return result;
         }
         let mut jobs: FuturesUnordered<_> = (0..EXTRA_SOCKETS)
-            .map(|_| observed_socket(source, nas, wide))
+            .map(|_| observed_socket(source, nas, wide, None))
             .collect();
         let mut extended = false;
         while let Some(candidate) = jobs.next().await {
@@ -127,7 +131,9 @@ impl Candidates {
                 result.tickets.extend(ticket);
                 if supported && !extended {
                     extended = true;
-                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(|_| observed_socket(source, nas, wide)));
+                    jobs.extend((EXTRA_SOCKETS..WIDE_EXTRA_SOCKETS).map(|i| {
+                        observed_socket(source, nas, wide, (i == EXTRA_SOCKETS).then_some((primary, observed)))
+                    }));
                 }
             }
         }
@@ -282,10 +288,13 @@ fn packet(kind: u8, nonce: &[u8], key: &auth::Key) -> [u8; 45] {
 }
 
 impl Paths {
+    pub(crate) fn local_ports(&self, primary: &UdpSocket) -> std::io::Result<Vec<u16>> {
+        std::iter::once(primary).chain(self.local.sockets.iter().map(AsRef::as_ref))
+            .map(|s| s.local_addr().map(|a| a.port())).collect()
+    }
+
     pub(crate) fn record(&self, primary: &UdpSocket) -> ResultType<Recording> {
-        let ports = std::iter::once(primary).chain(self.local.sockets.iter().map(AsRef::as_ref))
-            .map(|s| s.local_addr().map(|a| a.port())).collect::<std::io::Result<Vec<_>>>()?;
-        Ok(Recording::start(probe_report::id(&self.key), ports.into_iter()))
+        Ok(Recording::start(probe_report::id(&self.key), self.local_ports(primary)?.into_iter()))
     }
 
     pub async fn select(self, primary: Arc<UdpSocket>, peer: SocketAddr, listen: bool)
@@ -310,8 +319,9 @@ impl Paths {
         peer: SocketAddr,
         listen: bool,
         window: Duration,
+        report: Option<&Recording>,
     ) -> ResultType<(Arc<UdpSocket>, Option<BytesMut>)> {
-        self.select_until(primary, peer, listen, window, None).await
+        self.select_until(primary, peer, listen, window, report).await
     }
 
     async fn select_until(
@@ -389,6 +399,7 @@ struct PendingAddress {
 async fn probe_send(socket: &UdpSocket, packet: &[u8; 45], to: SocketAddr, row: Option<&Port>) -> std::io::Result<usize> {
     let sent = socket.send_to(packet, to).await;
     if let Some(row) = row {
+        row.record_destination(to, sent.is_ok());
         if sent.is_ok() {
             row.tx.fetch_add(1, Relaxed);
             if matches!(packet[4], 1 | 3) { row.replies.fetch_add(1, Relaxed); }
@@ -525,17 +536,40 @@ mod tests {
     static PREDICTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
+    async fn nas_observes_a_secondary_socket_on_the_primary_mapped_port() {
+        let nas = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let primary = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+        let observer = async {
+            let mut request = [0; 96];
+            let (_, from) = nas.recv_from(&mut request).await.unwrap();
+            let mut reply = [0; 76];
+            reply[..4].copy_from_slice(&[1, 1, 0, 56]);
+            reply[4..20].copy_from_slice(&request[4..20]);
+            reply[20..24].copy_from_slice(&[0, 0x20, 0, 8]);
+            reply[32..36].copy_from_slice(&[0xc0, 0x51, 0, 38]);
+            nas.send_to(&reply, from).await.unwrap();
+            from.port()
+        };
+        let candidate = observed_socket(primary.local_addr().unwrap(), nas.local_addr().unwrap(), true, Some((&primary, Some(port))));
+        let (from, candidate) = tokio::join!(observer, candidate);
+        assert!(candidate.is_some());
+        assert_eq!(from, port);
+    }
+
+    #[tokio::test]
     async fn direct_path_works_when_the_peer_can_only_reach_the_nas_observed_port() {
         let peer = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
-        let primary = Arc::new(UdpSocket::bind("127.0.0.2:0").await.unwrap());
-        let port = UdpSocket::bind("127.0.0.2:0").await.unwrap().local_addr().unwrap().port();
+        let primary = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let port = UdpSocket::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
         let mut local = Candidates { sockets: Vec::new(), tickets: vec![0; RECEIPT_SIZE] };
         local.tickets[..2].copy_from_slice(&port.to_be_bytes());
         local.bind_observed_ports(primary.local_addr().unwrap()).await;
         let key = auth::gen_key();
         let destination = SocketAddr::new(primary.local_addr().unwrap().ip(), port);
         let peer_addr = peer.local_addr().unwrap();
-        let caller = Paths { local: Candidates::default(), ports: vec![], key: key.clone() };
+        let challenge = packet(0, &[7; 8], &key);
+        let ack = packet(1, &[7; 8], &key);
         let host = Paths { local, ports: vec![], key };
         let accept = async {
             let (sock, syn) = host.select(primary, peer_addr, true).await.unwrap();
@@ -543,10 +577,17 @@ mod tests {
             KcpStream::accept(sock, Duration::from_secs(2), syn).await.unwrap()
         };
         let dial = async {
-            // A connected UDP socket accepts application packets only from its nominated peer.
+            // Model a filter that only admits responses from the NAS-observed port.
+            peer.send_to(&challenge, destination).await.unwrap();
+            timeout(Duration::from_secs(2), async {
+                let mut buf = [0; 64];
+                loop {
+                    let (n, from) = peer.recv_from(&mut buf).await.unwrap();
+                    if from == destination && buf[..n] == ack[..] { break; }
+                }
+            }).await.unwrap();
             peer.connect(destination).await.unwrap();
-            let (sock, _) = caller.select(peer, destination, false).await.unwrap();
-            KcpStream::connect(sock, Duration::from_secs(2)).await.unwrap()
+            KcpStream::connect(peer, Duration::from_secs(2)).await.unwrap()
         };
         let ((_a, mut client), (_b, mut server)) = tokio::join!(dial, accept);
         client.send_raw(b"hello".to_vec()).await.unwrap();
@@ -578,7 +619,11 @@ mod tests {
             (u32::from(addr.port()), 2, 1, 1));
         assert!(first.sent > first.replies);
         assert_eq!((report.ports[1].received, report.ports[1].replies), (0, 0));
-        assert!(probe_report::display(&id, &report).is_some());
+        let destination = remote.local_addr().unwrap().to_string();
+        assert_eq!(first.destinations.len(), 1);
+        assert_eq!(first.destinations[0].endpoint, destination);
+        assert_eq!(first.destinations[0].sent, first.sent);
+        assert!(probe_report::display(&id, &report).unwrap().contains(&format!("{} → {destination}", addr.port())));
         assert!(probe_report::display(&[0; 32], &report).is_none());
     }
 
@@ -631,7 +676,7 @@ mod tests {
         };
         let client = async {
             let window = Duration::from_secs(3);
-            let (socket, _) = paths().select_within(left, stale_right.local_addr().unwrap(), false, window).await.unwrap();
+            let (socket, _) = paths().select_within(left, stale_right.local_addr().unwrap(), false, window, None).await.unwrap();
             KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
         };
         let ((_a, mut host), (_b, mut client)) = tokio::join!(host, client);
@@ -648,7 +693,7 @@ mod tests {
         let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let paths = Paths { local: Candidates::default(), ports: vec![], key: auth::gen_key() };
         let start = Instant::now();
-        let result = paths.select_within(socket, silent.local_addr().unwrap(), false, Duration::from_secs(1)).await;
+        let result = paths.select_within(socket, silent.local_addr().unwrap(), false, Duration::from_secs(1), None).await;
         assert!(result.unwrap_err().downcast_ref::<Counts>().is_some_and(|c| c.sent > 0));
         assert!(start.elapsed() < Duration::from_millis(1500));
     }

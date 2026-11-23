@@ -840,6 +840,12 @@ message MessageQuery {
   int32 switch_display = 1;
 }
 
+message UdpProbeDestination {
+  string endpoint = 1;
+  uint32 sent = 2;
+  uint32 send_errors = 3;
+}
+
 message UdpProbePort {
   uint32 local_port = 1;
   uint32 received = 2;
@@ -847,6 +853,8 @@ message UdpProbePort {
   uint32 replies = 4;
   uint32 send_errors = 5;
   uint32 verified = 6;
+  repeated UdpProbeDestination destinations = 7;
+  uint32 unlisted_attempts = 8;
 }
 
 message UdpProbeReport {

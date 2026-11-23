@@ -6,7 +6,7 @@ Future<void> showPeerUdpReport(BuildContext context, QualityMonitorModel model) 
     showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('UDP · ${translate("Remote device")}'),
+        title: const Text('UDP'),
         content: SizedBox(
           width: 420,
           child: ListenableBuilder(
@@ -17,6 +17,9 @@ Future<void> showPeerUdpReport(BuildContext context, QualityMonitorModel model) 
                 children: [
                   for (final report in model.udpReports.reversed) ...[
                     SelectableText(report.split('\n').first),
+                    if (model.localUdpReports[report.split(' ').take(2).join(' ')] case final local?)
+                      _destinations(context, 'Local', local),
+                    if (report.contains('\n\n')) _destinations(context, 'Remote', report),
                     if (!report.contains('\n')) Text(translate('Waiting')),
                     if (report.contains('\n'))
                       SingleChildScrollView(
@@ -31,7 +34,7 @@ Future<void> showPeerUdpReport(BuildContext context, QualityMonitorModel model) 
                               DataColumn(label: Text(title)),
                           ],
                           rows: [
-                            for (final line in report.split('\n').skip(2))
+                            for (final line in report.split('\n\n').first.split('\n').skip(2))
                               DataRow(cells: [for (final value in line.split(' | ')) DataCell(Text(value))]),
                           ],
                         ),
@@ -48,6 +51,21 @@ Future<void> showPeerUdpReport(BuildContext context, QualityMonitorModel model) 
         ],
       ),
     );
+
+Widget _destinations(BuildContext context, String device, String report) {
+  final sections = report.split('\n\n');
+  return ExpansionTile(
+    tilePadding: EdgeInsets.zero,
+    title: Text('${translate(device)} · IP:port'),
+    children: [
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: SelectableText(sections.length > 1 ? sections.last : report,
+            style: Theme.of(context).textTheme.bodySmall),
+      ),
+    ],
+  );
+}
 
 class PeerUdpButton extends StatelessWidget {
   const PeerUdpButton(this.model, {this.foreground, super.key});

@@ -258,6 +258,7 @@ class FfiModel with ChangeNotifier {
     _direct = null;
     if (hadConnection) {
       parent.target?.qualityMonitorModel.udpReports.clear();
+      parent.target?.qualityMonitorModel.localUdpReports.clear();
       parent.target?.qualityMonitorModel.connectionTypeChanged();
     }
     _inputBlocked = false;
@@ -4077,17 +4078,24 @@ class QualityMonitorModel with ChangeNotifier {
   bool get show => _show;
   QualityMonitorData get data => _data;
   final List<String> udpReports = [];
+  final Map<String, String> localUdpReports = {};
 
   void addUdpReport(dynamic report) {
-    if (report is! String || report.length > 2048 || !report.startsWith('UDP #')) return;
-    final id = report.split(' ').take(2).join(' ');
+    if (report is! String || report.length > 65536) return;
+    final local = report.startsWith('local UDP #');
+    final String text = local ? report.substring(6) : report;
+    if (!text.startsWith('UDP #')) return;
+    final id = text.split(' ').take(2).join(' ');
     final index = udpReports.indexWhere((entry) => entry.split(' ').take(2).join(' ') == id);
     if (index < 0) {
-      udpReports.add(report);
-    } else {
-      udpReports[index] = report;
+      udpReports.add(local ? id : text);
+    } else if (!local) {
+      udpReports[index] = text;
     }
-    if (udpReports.length > 8) udpReports.removeAt(0);
+    if (local) localUdpReports[id] = text;
+    if (udpReports.length > 8) {
+      localUdpReports.remove(udpReports.removeAt(0).split(' ').take(2).join(' '));
+    }
     notifyListeners();
   }
 

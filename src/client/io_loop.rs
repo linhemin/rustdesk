@@ -878,6 +878,7 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut Stream) -> bool {
         match data {
+            Data::UdpProbeLocal(text) => self.handler.update_udp_probe(&format!("local {text}")),
             Data::UdpProbeRound(id) => {
                 if self.udp_probe_rounds.len() >= 8 { self.udp_probe_rounds.pop_front(); }
                 self.udp_probe_rounds.push_back(id);
