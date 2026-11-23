@@ -61,7 +61,7 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
       if (config.idServer.isEmpty) throw const FormatException();
       final values = [
         config.idServer,
-        isIOS ? '' : config.relayServer,
+        config.relayServer,
         config.apiServer,
         config.key
       ];
