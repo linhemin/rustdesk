@@ -153,7 +153,9 @@ class HomePageState extends State<HomePage> {
                         }),
                       ),
                     ),
-          body: _pages.elementAt(_selectedIndex),
+          body: isIOS
+              ? IndexedStack(index: _selectedIndex, children: _pages)
+              : _pages.elementAt(_selectedIndex),
         ));
   }
 
