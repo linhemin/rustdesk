@@ -11,6 +11,7 @@ import '../../common.dart';
 import '../../common/widgets/dialog.dart';
 import '../../consts.dart';
 import '../../utils/android_documents.dart';
+import '../widgets/file_transfer_widgets.dart';
 
 class FileManagerPage extends StatefulWidget {
   FileManagerPage(
@@ -71,6 +72,7 @@ class _FileManagerPageState extends State<FileManagerPage> {
   final selectMode = SelectMode.none.obs;
 
   var showLocal = true;
+  bool _showTransferQueue = false;
 
   FileController get currentFileController =>
       showLocal ? model.localController : model.remoteController;
@@ -273,6 +275,105 @@ class _FileManagerPageState extends State<FileManagerPage> {
     }
   }
 
+  void _createFolder() {
+    final name = TextEditingController();
+    String? errorText;
+    gFFI.dialogManager.show((setState, close, context) {
+      name.addListener(() {
+        if (errorText != null) {
+          setState(() {
+            errorText = null;
+          });
+        }
+      });
+      return CustomAlertDialog(
+          title: Text(translate("Create Folder")),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                decoration: InputDecoration(
+                  labelText: translate("Please enter the folder name"),
+                  errorText: errorText,
+                ),
+                controller: name,
+              ).workaroundFreezeLinuxMint(),
+            ],
+          ),
+          actions: [
+            dialogButton("Cancel",
+                onPressed: () => close(false), isOutline: true),
+            dialogButton("OK", onPressed: () {
+              if (name.value.text.isNotEmpty) {
+                if (!PathUtil.validName(name.value.text,
+                    currentFileController.options.value.isWindows)) {
+                  setState(() {
+                    errorText = translate("Invalid folder name");
+                  });
+                  return;
+                }
+                currentFileController.createDir(PathUtil.join(currentDir.path,
+                    name.value.text, currentOptions.isWindows));
+                close();
+              }
+            })
+          ]);
+    });
+  }
+
+  Widget _headerTitle() => AnimatedBuilder(
+        animation: gFFI.ffiModel,
+        builder: (context, _) => Obx(() {
+          final active = model.jobController.jobTable
+              .firstWhereOrNull((job) => job.state == JobState.inProgress);
+          final direct = gFFI.ffiModel.direct;
+          final link = direct == null
+              ? translate('Connecting...')
+              : direct
+                  ? 'P2P'
+                  : translate('Relay Connection');
+          final peer = gFFI.ffiModel.pi.hostname;
+          return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Flexible(
+                      child: Text(translate('Transfer file'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 16, fontWeight: FontWeight.w700))),
+                  const SizedBox(width: 6),
+                  Flexible(
+                      child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: WorkspaceStyle.success(context)
+                                  .withOpacity(.12),
+                              borderRadius: BorderRadius.circular(20)),
+                          child: Text(
+                              '$link${active != null && active.speed > 0 ? " · ${readableFileSize(active.speed)}/s" : ""}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 9,
+                                  color: WorkspaceStyle.success(context),
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures()
+                                  ])))),
+                ]),
+                const SizedBox(height: 3),
+                Text(
+                    '${translate(direct == null ? "Connecting..." : "Connected")}: ${peer.isEmpty ? widget.id : peer}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 11, color: Theme.of(context).hintColor)),
+              ]);
+        }),
+      );
+
   @override
   void initState() {
     super.initState();
@@ -313,26 +414,32 @@ class _FileManagerPageState extends State<FileManagerPage> {
         return false;
       },
       child: Scaffold(
-        // backgroundColor: MyTheme.grayBg,
+        backgroundColor: WorkspaceStyle.canvas(context),
         appBar: AppBar(
-          leading: Row(children: [
-            IconButton(
-                icon: Icon(Icons.close),
-                onPressed: () => clientClose(gFFI.sessionId, gFFI)),
-          ]),
-          centerTitle: true,
-          title: _LocalRemoteSegment(
-            showLocal: showLocal,
-            onChanged: (local) {
-              if (local != showLocal) setState(() => showLocal = local);
-            },
-          ),
+          backgroundColor: WorkspaceStyle.canvas(context),
+          elevation: 0,
+          automaticallyImplyLeading: false,
+          titleSpacing: 16,
+          centerTitle: false,
+          title: _headerTitle(),
           actions: [
+            Obx(() => IconButton(
+                  tooltip: translate('Create Folder'),
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.create_new_folder_outlined, size: 18),
+                  onPressed:
+                      currentDir.path.isNotEmpty && currentDir.path != '/'
+                          ? _createFolder
+                          : null,
+                )),
+            fileManagerSortButton(currentFileController),
             PopupMenuButton<String>(
                 tooltip: "",
-                icon: Icon(Icons.more_vert),
+                icon: const Icon(Icons.more_horiz_rounded),
                 itemBuilder: (context) {
                   return [
+                    PopupMenuItem(
+                        value: 'close', child: Text(translate('Close'))),
                     if (isAndroid && showLocal) ...[
                       PopupMenuItem(
                         value: 'workspace',
@@ -450,7 +557,9 @@ class _FileManagerPageState extends State<FileManagerPage> {
                   ];
                 },
                 onSelected: (v) {
-                  if (v == 'workspace' || v == 'choose_folder') {
+                  if (v == 'close') {
+                    clientClose(gFFI.sessionId, gFFI);
+                  } else if (v == 'workspace' || v == 'choose_folder') {
                     _changeLocalStorage(workspace: v == 'workspace');
                   } else if (v == "refresh") {
                     currentFileController.refresh();
@@ -466,210 +575,271 @@ class _FileManagerPageState extends State<FileManagerPage> {
                     selectMode.toggle(showLocal);
                     setState(() {});
                   } else if (v == "folder") {
-                    final name = TextEditingController();
-                    String? errorText;
-                    gFFI.dialogManager.show((setState, close, context) {
-                      name.addListener(() {
-                        if (errorText != null) {
-                          setState(() {
-                            errorText = null;
-                          });
-                        }
-                      });
-                      return CustomAlertDialog(
-                          title: Text(translate("Create Folder")),
-                          content: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              TextFormField(
-                                decoration: InputDecoration(
-                                  labelText:
-                                      translate("Please enter the folder name"),
-                                  errorText: errorText,
-                                ),
-                                controller: name,
-                              ).workaroundFreezeLinuxMint(),
-                            ],
-                          ),
-                          actions: [
-                            dialogButton("Cancel",
-                                onPressed: () => close(false), isOutline: true),
-                            dialogButton("OK", onPressed: () {
-                              if (name.value.text.isNotEmpty) {
-                                if (!PathUtil.validName(
-                                    name.value.text,
-                                    currentFileController
-                                        .options.value.isWindows)) {
-                                  setState(() {
-                                    errorText =
-                                        translate("Invalid folder name");
-                                  });
-                                  return;
-                                }
-                                currentFileController.createDir(PathUtil.join(
-                                    currentDir.path,
-                                    name.value.text,
-                                    currentOptions.isWindows));
-                                close();
-                              }
-                            })
-                          ]);
-                    });
+                    _createFolder();
                   } else if (v == "hidden") {
                     currentFileController.toggleShowHidden();
                   }
                 }),
           ],
         ),
-        body: showLocal
-            ? FileManagerView(
-                controller: model.localController,
-                selectMode: selectMode,
-              )
-            : FileManagerView(
-                controller: model.remoteController,
-                selectMode: selectMode,
+        body: Column(children: [
+          Expanded(child: Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+              child: FileManagerSideSwitcher(
+                remoteName: gFFI.ffiModel.pi.platform,
+                showLocal: showLocal,
+                onChanged: (local) {
+                  if (local != showLocal) setState(() => showLocal = local);
+                },
               ),
-        bottomSheet: bottomSheet(),
+            ),
+            Expanded(
+                child: showLocal
+                    ? FileManagerView(
+                        controller: model.localController,
+                        selectMode: selectMode,
+                      )
+                    : FileManagerView(
+                        controller: model.remoteController,
+                        selectMode: selectMode,
+                      )),
+          ])),
+          bottomSheet(),
+        ]),
       ));
 
-  Widget? bottomSheet() {
-    return Obx(() {
-      final selectedItems = getActiveSelectedItems();
-      final jobTable = model.jobController.jobTable;
-
-      final localLabel = selectedItems?.isLocal == null
-          ? ""
-          : " [${selectedItems!.isLocal ? translate("Local") : translate("Remote")}]";
-      if (!(selectMode.value == SelectMode.none)) {
-        final selectedItemsLen =
-            "${selectedItems?.items.length ?? 0} ${translate("items")}";
-        if (selectedItems == null ||
-            selectedItems.items.isEmpty ||
-            selectMode.value.eq(showLocal)) {
-          return BottomSheetBody(
-              leading: Icon(Icons.check),
-              title: translate("Selected"),
-              text: selectedItemsLen + localLabel,
-              onCanceled: () {
-                selectedItems?.items.clear();
-                selectMode.value = SelectMode.none;
-                setState(() {});
-              },
-              actions: [
-                if (isAndroid &&
-                    !AndroidDocuments.isPath(currentDir.path) &&
-                    selectedItems?.isLocal == true &&
-                    selectedItems?.items.isNotEmpty == true) ...[
-                  if (selectedItems!.items.length == 1 &&
-                      selectedItems!.items.single.isFile)
-                    IconButton(
-                      tooltip: translate("Save as"),
-                      icon: Icon(Icons.save_alt),
-                      onPressed: () =>
-                          _exportFile(selectedItems!.items.single),
-                    )
-                  else
-                    IconButton(
-                      tooltip: translate("Export"),
-                      icon: Icon(Icons.drive_folder_upload),
-                      onPressed: () => _exportItems(selectedItems!),
-                    ),
-                ],
-                IconButton(
-                  icon: Icon(Icons.compare_arrows),
-                  onPressed: () => setState(() => showLocal = !showLocal),
+  Widget bottomSheet() => Obx(() {
+        final jobs = model.jobController.jobTable;
+        final selected = getActiveSelectedItems();
+        final active = jobs
+                .firstWhereOrNull((job) => job.state == JobState.inProgress) ??
+            jobs.firstWhereOrNull((job) =>
+                job.state == JobState.none || job.state == JobState.paused) ??
+            jobs.lastOrNull;
+        final theme = Theme.of(context);
+        final progressing = active?.state == JobState.inProgress;
+        final detail = active == null
+            ? ''
+            : progressing
+                ? '${active.percentText} · ${readableFileSize(active.speed)}/s'
+                : active.getStatus();
+        return SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                if (selectMode.value != SelectMode.none)
+                  _selectionBar(selected),
+                if (_showTransferQueue)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: theme.cardColor,
+                        border: Border.all(color: theme.dividerColor),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Row(children: [
+                        Expanded(
+                            child: Text(
+                                '${translate("Transfer file")} · ${jobs.length}',
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600))),
+                        if (active != null)
+                          IconButton(
+                              tooltip:
+                                  translate(progressing ? 'Cancel' : 'Close'),
+                              visualDensity: VisualDensity.compact,
+                              icon: const Icon(Icons.close_rounded, size: 16),
+                              onPressed: () {
+                                if (progressing) {
+                                  model.jobController.cancelJob(active.id);
+                                }
+                                jobs.clear();
+                              }),
+                      ]),
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                            maxHeight: MediaQuery.sizeOf(context).height * .25),
+                        child: jobs.isEmpty
+                            ? Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: Text(translate('Empty'),
+                                    style: TextStyle(color: theme.hintColor)))
+                            : ListView.separated(
+                                shrinkWrap: true,
+                                itemCount: jobs.length,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox(height: 8),
+                                itemBuilder: (context, index) {
+                                  final job = jobs[index];
+                                  return Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                        color: WorkspaceStyle.elevatedSurface(
+                                            context),
+                                        borderRadius:
+                                            BorderRadius.circular(12)),
+                                    child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                              job.fileName.isEmpty
+                                                  ? job.jobName
+                                                  : job.fileName,
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w600)),
+                                          const SizedBox(height: 8),
+                                          ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(4),
+                                              child: LinearProgressIndicator(
+                                                  value: job.percent
+                                                      .clamp(0.0, 1.0),
+                                                  minHeight: 5,
+                                                  backgroundColor:
+                                                      theme.dividerColor)),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                              '${job.getStatus()} · ${job.percentText}'
+                                              '${job.state == JobState.inProgress ? " · ${readableFileSize(job.speed)}/s" : ""}',
+                                              style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: theme.hintColor,
+                                                  fontFeatures: const [
+                                                    FontFeature.tabularFigures()
+                                                  ])),
+                                        ]),
+                                  );
+                                }),
+                      ),
+                    ]),
+                  ),
+                MobileTransferPill(
+                  label: '${translate("Transfer file")} · ${jobs.length}',
+                  detail: detail,
+                  active: progressing,
+                  expanded: _showTransferQueue,
+                  onToggle: () =>
+                      setState(() => _showTransferQueue = !_showTransferQueue),
                 ),
-                IconButton(
-                  icon: Icon(Icons.delete_forever),
-                  onPressed: selectedItems != null
-                      ? () async {
-                          if (selectedItems.items.isNotEmpty) {
-                            await currentFileController
-                                .removeAction(selectedItems);
-                            selectedItems.items.clear();
-                            selectMode.value = SelectMode.none;
-                          }
-                        }
-                      : null,
-                )
-              ]);
-        } else {
-          return BottomSheetBody(
-              leading: Icon(Icons.input),
-              title: translate("Paste here?"),
-              text: selectedItemsLen + localLabel,
-              onCanceled: () {
-                selectedItems.items.clear();
-                selectMode.value = SelectMode.none;
-                setState(() {});
-              },
-              actions: [
-                IconButton(
-                  icon: Icon(Icons.compare_arrows),
-                  onPressed: () => setState(() => showLocal = !showLocal),
-                ),
-                IconButton(
-                  icon: Icon(Icons.paste),
-                  onPressed: () {
-                    selectMode.value = SelectMode.none;
-                    final otherSide = showLocal
-                        ? model.remoteController
-                        : model.localController;
-                    final thisSideData =
-                        DirectoryData(currentDir, currentOptions);
-                    otherSide.sendFiles(selectedItems, thisSideData);
-                    selectedItems.items.clear();
-                    selectMode.value = SelectMode.none;
-                  },
-                )
-              ]);
-        }
-      }
+              ]),
+            ));
+      });
 
-      if (jobTable.isEmpty) {
-        return Offstage();
-      }
+  Widget _selectionBar(SelectedItems? selected) {
+    final theme = Theme.of(context);
+    final source = selected?.isLocal == false
+        ? model.remoteController
+        : model.localController;
+    final target = selected?.isLocal == false
+        ? model.localController
+        : model.remoteController;
+    final count = selected?.items.length ?? 0;
+    final size =
+        selected?.items.fold<int>(0, (sum, entry) => sum + entry.size) ?? 0;
+    void clear() {
+      selected?.clear();
+      selectMode.value = SelectMode.none;
+    }
 
-      // Find the first job that is in progress (the one actually transferring data)
-      // Rust backend processes jobs sequentially, so the first inProgress job is the active one
-      final activeJob = jobTable
-              .firstWhereOrNull((job) => job.state == JobState.inProgress) ??
-          jobTable.last;
-
-      switch (activeJob.state) {
-        case JobState.inProgress:
-          return BottomSheetBody(
-            leading: CircularProgressIndicator(),
-            title: translate("Waiting"),
-            text: "${readableFileSize(activeJob.speed)}/s",
-            onCanceled: () {
-              model.jobController.cancelJob(activeJob.id);
-              jobTable.clear();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 4, 8, 10),
+      decoration: BoxDecoration(
+          color: theme.cardColor,
+          border: Border.all(color: theme.dividerColor),
+          borderRadius: BorderRadius.circular(18)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          Expanded(
+              child: Text(
+                  '${translate("Selected")} $count · ${readableFileSize(size.toDouble())}',
+                  style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600))),
+          PopupMenuButton<String>(
+            tooltip: translate('More'),
+            icon: const Icon(Icons.more_horiz_rounded, size: 18),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                  value: 'switch',
+                  child: Text(translate(showLocal ? 'Remote' : 'Local'))),
+              PopupMenuItem(
+                  value: 'delete',
+                  enabled: count > 0,
+                  child: Text(translate('Delete'))),
+              if (count == 1 &&
+                  versionCmp(gFFI.ffiModel.pi.version, '1.3.0') >= 0)
+                PopupMenuItem(
+                    value: 'rename', child: Text(translate('Rename'))),
+              if (isAndroid &&
+                  selectMode.value.eq(showLocal) &&
+                  !AndroidDocuments.isPath(currentDir.path) &&
+                  selected?.isLocal == true &&
+                  count > 0)
+                PopupMenuItem(
+                    value: 'export',
+                    child: Text(translate(
+                        count == 1 && selected!.items.single.isFile
+                            ? 'Save as'
+                            : 'Export'))),
+            ],
+            onSelected: (action) async {
+              if (action == 'switch') {
+                setState(() => showLocal = !showLocal);
+              } else if (action == 'delete' && selected != null) {
+                await source.removeAction(selected);
+                clear();
+              } else if (action == 'rename' && selected != null) {
+                await source.renameAction(
+                    selected.items.single, selected.isLocal);
+                clear();
+              } else if (action == 'export' && selected != null) {
+                if (count == 1 && selected.items.single.isFile) {
+                  await _exportFile(selected.items.single);
+                } else {
+                  await _exportItems(selected);
+                }
+              }
             },
-          );
-        case JobState.done:
-          return BottomSheetBody(
-            leading: Icon(Icons.check),
-            title: "${translate("Successful")}!",
-            text: activeJob.display(),
-            onCanceled: () => jobTable.clear(),
-          );
-        case JobState.error:
-          return BottomSheetBody(
-            leading: Icon(Icons.error),
-            title: "${translate("Error")}!",
-            text: "",
-            onCanceled: () => jobTable.clear(),
-          );
-        case JobState.none:
-          break;
-        case JobState.paused:
-          // TODO: Handle this case.
-          break;
-      }
-      return Offstage();
-    });
+          ),
+        ]),
+        Row(children: [
+          Expanded(
+              child: OutlinedButton(
+                  onPressed: clear,
+                  child: Text(translate('Cancel'),
+                      maxLines: 1, overflow: TextOverflow.ellipsis))),
+          const SizedBox(width: 8),
+          Expanded(
+              child: FilledButton(
+            onPressed: selected == null ||
+                    count == 0 ||
+                    target.directory.value.path.isEmpty
+                ? null
+                : () {
+                    final destination = selectMode.value.eq(showLocal)
+                        ? target.directoryData()
+                        : DirectoryData(currentDir, currentOptions);
+                    source.sendFiles(selected, destination);
+                    clear();
+                  },
+            child: Text(
+                selectMode.value.eq(showLocal)
+                    ? '${translate(selected?.isLocal == false ? "Receive" : "Send")} → ${translate(selected?.isLocal == false ? "Local" : "Remote")}'
+                    : translate('Paste here?'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis),
+          )),
+        ]),
+      ]),
+    );
   }
 
   SelectedItems? getActiveSelectedItems() {
@@ -700,7 +870,11 @@ class FileManagerView extends StatefulWidget {
   final FileController controller;
   final Rx<SelectMode> selectMode;
 
-  FileManagerView({required this.controller, required this.selectMode});
+  FileManagerView(
+      {required this.controller,
+      required this.selectMode,
+      this.sessionActions = true});
+  final bool sessionActions;
 
   @override
   State<StatefulWidget> createState() => _FileManagerViewState();
@@ -709,7 +883,6 @@ class FileManagerView extends StatefulWidget {
 class _FileManagerViewState extends State<FileManagerView> {
   final _listScrollController = ScrollController();
   final _breadCrumbScroller = ScrollController();
-  late final ascending = Rx<bool>(controller.sortAscending);
 
   bool get isLocal => widget.controller.isLocal;
   FileController get controller => widget.controller;
@@ -727,6 +900,20 @@ class _FileManagerViewState extends State<FileManagerView> {
       headTools(),
       Expanded(child: Obx(() {
         final entries = controller.directory.value.entries;
+        final mode = widget.selectMode.value;
+        final selectedEntries = _selectedItems.items.toSet();
+        if (entries.isEmpty) {
+          return ListView(children: [
+            const SizedBox(height: 72),
+            Icon(Icons.folder_open_outlined,
+                size: 32, color: Theme.of(context).hintColor),
+            const SizedBox(height: 8),
+            Center(
+                child: Text(translate('Empty'),
+                    style: TextStyle(color: Theme.of(context).hintColor))),
+            listTail(),
+          ]);
+        }
         return ListView.builder(
           controller: _listScrollController,
           itemCount: entries.length + 1,
@@ -734,25 +921,19 @@ class _FileManagerViewState extends State<FileManagerView> {
             if (index >= entries.length) {
               return listTail();
             }
-            var selected = false;
-            if (widget.selectMode.value != SelectMode.none) {
-              selected = _selectedItems.items.contains(entries[index]);
-            }
+            final selected = mode != SelectMode.none &&
+                selectedEntries.contains(entries[index]);
 
             final sizeStr = entries[index].isFile
                 ? readableFileSize(entries[index].size.toDouble())
                 : "";
 
-            final showCheckBox = () {
-              return widget.selectMode.value != SelectMode.none &&
-                  widget.selectMode.value.eq(controller.selectedItems.isLocal);
-            }();
+            final showCheckBox = mode.eq(isLocal);
             final theme = Theme.of(context);
             final primary = theme.colorScheme.primary;
             final entry = entries[index];
-            final (badgeIcon, badgeColor) = _fileEntryVisual(entry);
             return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3.5),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 3),
               child: Material(
                 color: selected ? primary.withOpacity(0.11) : theme.cardColor,
                 shape: RoundedRectangleBorder(
@@ -765,36 +946,20 @@ class _FileManagerViewState extends State<FileManagerView> {
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: ListTile(
+                  dense: true,
                   contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  leading: entry.isDrive
-                      ? Container(
-                          width: 40,
-                          height: 40,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: primary.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                          child: Icon(Icons.storage_rounded,
-                              size: 20, color: primary),
-                        )
-                      : Container(
-                          width: 40,
-                          height: 40,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: badgeColor.withOpacity(0.14),
-                            borderRadius: BorderRadius.circular(11),
-                          ),
-                          child: Icon(badgeIcon, size: 20, color: badgeColor),
-                        ),
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
+                  horizontalTitleGap: 12,
+                  leading: MobileFileIcon(
+                      name: entry.name,
+                      directory: entry.isDirectory,
+                      drive: entry.isDrive),
                   title: Text(
                     entry.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium?.copyWith(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -802,74 +967,40 @@ class _FileManagerViewState extends State<FileManagerView> {
                   subtitle: entry.isDrive
                       ? null
                       : Text(
-                          "${entry.lastModified().toString().replaceAll(".000", "")}${sizeStr.isEmpty ? '' : '  ·  $sizeStr'}",
+                          "${sizeStr.isEmpty ? '' : '$sizeStr · '}${entry.lastModified().toString().substring(0, 16)}",
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 11.5,
+                            fontSize: 11,
                             color: theme.hintColor,
                             fontFeatures: const [FontFeature.tabularFigures()],
                           ),
                         ),
-                  trailing: entry.isDrive
-                      ? Icon(Icons.chevron_right_rounded,
-                          size: 18, color: theme.hintColor)
-                      : showCheckBox
-                          ? Checkbox(
-                              shape: const CircleBorder(),
-                              value: selected,
-                              onChanged: (v) {
-                                if (v == null) return;
-                                if (v && !selected) {
-                                  _selectedItems.add(entry);
-                                } else if (!v && selected) {
-                                  _selectedItems.remove(entry);
-                                }
-                                setState(() {});
-                              })
-                          : PopupMenuButton<String>(
-                              tooltip: "",
-                              icon: Icon(Icons.more_horiz_rounded,
-                                  color: theme.hintColor),
-                              itemBuilder: (context) {
-                                return [
-                                  PopupMenuItem(
-                                    child: Text(translate("Delete")),
-                                    value: "delete",
-                                  ),
-                                  PopupMenuItem(
-                                    child: Text(translate("Multi Select")),
-                                    value: "multi_select",
-                                  ),
-                                  PopupMenuItem(
-                                    child: Text(translate("Properties")),
-                                    value: "properties",
-                                    enabled: false,
-                                  ),
-                                  if (!entry.isDrive &&
-                                      versionCmp(gFFI.ffiModel.pi.version,
-                                              "1.3.0") >=
-                                          0)
-                                    PopupMenuItem(
-                                      child: Text(translate("Rename")),
-                                      value: "rename",
-                                    )
-                                ];
-                              },
-                              onSelected: (v) {
-                                if (v == "delete") {
-                                  final items = SelectedItems(isLocal: isLocal);
-                                  items.add(entry);
-                                  controller.removeAction(items);
-                                } else if (v == "multi_select") {
-                                  _selectedItems.clear();
-                                  widget.selectMode.toggle(isLocal);
-                                  setState(() {});
-                                } else if (v == "rename") {
-                                  controller.renameAction(entry, isLocal);
-                                }
-                              }),
-                  onTap: () {
+                  trailing:
+                      entry.isDrive || (entry.isDirectory && !showCheckBox)
+                          ? Icon(Icons.chevron_right_rounded,
+                              size: 18, color: theme.hintColor)
+                          : widget.sessionActions
+                              ? Checkbox(
+                                  shape: const CircleBorder(),
+                                  value: selected,
+                                  onChanged: (v) {
+                                    if (v == null) return;
+                                    if (!showCheckBox) {
+                                      if (widget.selectMode.value !=
+                                          SelectMode.none) return;
+                                      _selectedItems.clear();
+                                      widget.selectMode.toggle(isLocal);
+                                    }
+                                    if (v && !selected) {
+                                      _selectedItems.add(entry);
+                                    } else if (!v && selected) {
+                                      _selectedItems.remove(entry);
+                                    }
+                                    setState(() {});
+                                  })
+                              : null,
+                  onTap: !widget.sessionActions && entry.isFile ? null : () {
                     if (showCheckBox) {
                       if (selected) {
                         _selectedItems.remove(entry);
@@ -881,9 +1012,14 @@ class _FileManagerViewState extends State<FileManagerView> {
                     }
                     if (entry.isDirectory || entry.isDrive) {
                       controller.openDirectory(entry.path);
+                    } else if (widget.selectMode.value == SelectMode.none) {
+                      _selectedItems.clear();
+                      widget.selectMode.toggle(isLocal);
+                      _selectedItems.add(entry);
+                      setState(() {});
                     }
                   },
-                  onLongPress: entry.isDrive
+                  onLongPress: entry.isDrive || !widget.sessionActions
                       ? null
                       : () {
                           _selectedItems.clear();
@@ -902,44 +1038,6 @@ class _FileManagerViewState extends State<FileManagerView> {
     ]);
   }
 
-  (IconData, Color) _fileEntryVisual(Entry entry) {
-    if (entry.isDirectory) return (Icons.folder_rounded, WorkspaceStyle.amber);
-    final lower = entry.name.toLowerCase();
-    if (lower.endsWith('.mp4') ||
-        lower.endsWith('.mov') ||
-        lower.endsWith('.mkv') ||
-        lower.endsWith('.avi')) {
-      return (Icons.movie_outlined, WorkspaceStyle.purple);
-    }
-    if (lower.endsWith('.zip') ||
-        lower.endsWith('.tar') ||
-        lower.endsWith('.gz') ||
-        lower.endsWith('.7z') ||
-        lower.endsWith('.rar')) {
-      return (Icons.inventory_2_outlined, WorkspaceStyle.green);
-    }
-    if (lower.endsWith('.json') ||
-        lower.endsWith('.yaml') ||
-        lower.endsWith('.yml') ||
-        lower.endsWith('.dart') ||
-        lower.endsWith('.rs') ||
-        lower.endsWith('.ts') ||
-        lower.endsWith('.js') ||
-        lower.endsWith('.py')) {
-      return (Icons.code_rounded, WorkspaceStyle.blue);
-    }
-    if (lower.endsWith('.png') ||
-        lower.endsWith('.jpg') ||
-        lower.endsWith('.jpeg') ||
-        lower.endsWith('.webp')) {
-      return (Icons.image_outlined, WorkspaceStyle.indigo);
-    }
-    if (lower.endsWith('.pdf')) {
-      return (Icons.description_outlined, WorkspaceStyle.red);
-    }
-    return (Icons.insert_drive_file_outlined, WorkspaceStyle.neutralTile);
-  }
-
   void breadCrumbScrollToEnd() {
     Future.delayed(Duration(milliseconds: 200), () {
       if (_breadCrumbScroller.hasClients) {
@@ -953,100 +1051,85 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   Widget headTools() {
     final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: WorkspaceStyle.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: theme.dividerColor),
-      ),
-      child: Row(
-        children: [
-          Expanded(child: Obx(() {
-            final home = controller.options.value.home;
-            final isWindows = controller.options.value.isWindows;
-            return BreadCrumb(
-              items: getPathBreadCrumbItems(controller.shortPath, isWindows,
-                  () => controller.goToHomeDirectory(), (list) {
-                var path = "";
-                if (home.startsWith(list[0])) {
-                  // absolute path
-                  for (var item in list) {
-                    path = PathUtil.join(path, item, isWindows);
-                  }
-                } else {
-                  path += home;
-                  for (var item in list) {
-                    path = PathUtil.join(path, item, isWindows);
-                  }
+    return Obx(() => Column(children: [
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: WorkspaceStyle.elevatedSurface(context),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: BreadCrumb(
+              items: getPathBreadCrumbItems(
+                  controller.shortPath,
+                  controller.options.value.isWindows,
+                  controller.goToHomeDirectory, (list) {
+                final home = controller.homePath;
+                var path = home.startsWith(list.first) ? '' : home;
+                for (final item in list) {
+                  path = PathUtil.join(
+                      path, item, controller.options.value.isWindows);
                 }
                 controller.openDirectory(path);
               }),
               divider: Icon(Icons.chevron_right_rounded,
-                  size: 16, color: theme.hintColor),
+                  size: 14, color: theme.hintColor),
               overflow: ScrollableOverflow(controller: _breadCrumbScroller),
-            );
-          })),
-          Row(
-            children: [
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.arrow_back_rounded, size: 18),
-                onPressed: controller.goBack,
-              ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-                onPressed: controller.goToParentDirectory,
-              ),
-              PopupMenuButton<SortBy>(
-                  tooltip: "",
-                  icon: const Icon(Icons.sort_rounded, size: 18),
-                  itemBuilder: (context) {
-                    return SortBy.values
-                        .map((e) => PopupMenuItem(
-                              child: Text(translate(e.toString())),
-                              value: e,
-                            ))
-                        .toList();
-                  },
-                  onSelected: (sortBy) {
-                    if (controller.sortBy.value == sortBy) {
-                      ascending.value = !controller.sortAscending;
-                    } else {
-                      ascending.value = true;
-                    }
-                    controller.changeSortStyle(sortBy,
-                        ascending: ascending.value);
-                  }),
-            ],
-          )
-        ],
-      ),
-    );
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 5),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [
+                ActionChip(
+                  visualDensity: VisualDensity.compact,
+                  label: Text(translate('Home')),
+                  onPressed: controller.goToHomeDirectory,
+                ),
+                for (final entry in controller.directory.value.entries
+                    .where((entry) => entry.isDirectory)
+                    .take(3))
+                  Padding(
+                      padding: const EdgeInsetsDirectional.only(start: 6),
+                      child: ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(entry.name,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        onPressed: () => controller.openDirectory(entry.path),
+                      )),
+                if (!(isIOS && isLocal) && !(isAndroid && isLocal))
+                  Padding(
+                      padding: const EdgeInsetsDirectional.only(start: 6),
+                      child: ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        label: const Text('/'),
+                        onPressed: () => controller.openDirectory(
+                            controller.options.value.isWindows
+                                ? PathUtil.windowsContext
+                                    .rootPrefix(controller.directory.value.path)
+                                : '/'),
+                      )),
+                IconButton(
+                    tooltip: translate('Back'),
+                    icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: controller.goBack),
+                IconButton(
+                    tooltip: translate('Parent directory'),
+                    icon: const Icon(Icons.arrow_upward_rounded, size: 16),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: controller.goToParentDirectory),
+              ]),
+            ),
+          ),
+        ]));
   }
 
-  Widget listTail() => Obx(() => Container(
-        height: 100,
-        child: Column(
-          children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(30, 5, 30, 0),
-              child: Text(
-                AndroidDocuments.displayPath(controller.directory.value.path),
-                style: TextStyle(color: MyTheme.darkGray),
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.all(2),
-              child: Text(
-                "${translate("Total")}: ${controller.directory.value.entries.length} ${translate("items")}",
-                style: TextStyle(color: MyTheme.darkGray),
-              ),
-            )
-          ],
-        ),
+  Widget listTail() => Obx(() => MobileFileLocationFooter(
+        path: AndroidDocuments.displayPath(controller.directory.value.path),
+        summary:
+            '${translate("Total")}: ${controller.directory.value.entries.length} ${translate("items")}',
       ));
 
   List<BreadCrumbItem> getPathBreadCrumbItems(String shortPath, bool isWindows,
@@ -1055,19 +1138,40 @@ class _FileManagerViewState extends State<FileManagerView> {
     final breadCrumbList = [
       BreadCrumbItem(
           content: IconButton(
-        icon: Icon(Icons.home_filled),
+        icon: const Icon(Icons.home_outlined, size: 16),
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.all(6),
+        constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
         onPressed: onHome,
       ))
     ];
     breadCrumbList.addAll(list.asMap().entries.map((e) => BreadCrumbItem(
         content: TextButton(
             child: Text(e.value),
-            style:
-                ButtonStyle(minimumSize: MaterialStateProperty.all(Size(0, 0))),
+            style: TextButton.styleFrom(
+              minimumSize: Size.zero,
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+              textStyle: const TextStyle(fontSize: 11),
+              foregroundColor: Theme.of(context).hintColor,
+            ),
             onPressed: () => onPressed(list.sublist(0, e.key + 1))))));
     return breadCrumbList;
   }
 }
+
+Widget fileManagerSortButton(FileController controller) =>
+    PopupMenuButton<SortBy>(
+      tooltip: translate('Sort by'),
+      icon: const Icon(Icons.swap_vert_rounded, size: 18),
+      itemBuilder: (context) => SortBy.values
+          .map((sort) => PopupMenuItem(
+              value: sort, child: Text(translate(sort.toString()))))
+          .toList(),
+      onSelected: (sort) => controller.changeSortStyle(sort,
+          ascending: controller.sortBy.value == sort
+              ? !controller.sortAscending
+              : true),
+    );
 
 class BottomSheetBody extends StatelessWidget {
   BottomSheetBody(
@@ -1084,16 +1188,20 @@ class BottomSheetBody extends StatelessWidget {
   final List<IconButton>? actions;
 
   @override
-  BottomSheet build(BuildContext context) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return BottomSheet(
-      backgroundColor: theme.cardColor,
-      shape: RoundedRectangleBorder(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-        side: BorderSide(color: theme.dividerColor),
-      ),
-      builder: (context) => SafeArea(
-          top: false,
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+        child: Material(
+          color: theme.cardColor,
+          elevation: 4,
+          shadowColor: Colors.black.withOpacity(.15),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: WorkspaceStyle.strongBorder(context)),
+          ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 10, 10),
             child: LayoutBuilder(builder: (context, bounds) {
@@ -1107,8 +1215,12 @@ class BottomSheetBody extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                      Text(title, style: theme.textTheme.titleMedium),
+                      Text(title,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
                       Text(text,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.hintColor,
                             fontFeatures: const [FontFeature.tabularFigures()],
@@ -1133,20 +1245,22 @@ class BottomSheetBody extends StatelessWidget {
                 Flexible(fit: FlexFit.loose, child: controls)
               ]);
             }),
-          )),
-      onClosing: () {},
-      enableDrag: false,
+          ),
+        ),
+      ),
     );
   }
 }
 
-class _LocalRemoteSegment extends StatelessWidget {
-  const _LocalRemoteSegment({
+class FileManagerSideSwitcher extends StatelessWidget {
+  const FileManagerSideSwitcher({
+    this.remoteName = '',
     required this.showLocal,
     required this.onChanged,
   });
 
   final bool showLocal;
+  final String remoteName;
   final ValueChanged<bool> onChanged;
 
   @override
@@ -1155,44 +1269,45 @@ class _LocalRemoteSegment extends StatelessWidget {
     final accent = theme.colorScheme.primary;
     Widget item(bool local, String label, IconData icon) {
       final active = showLocal == local;
-      return InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => onChanged(local),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: active ? accent : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon,
-                  size: 15,
-                  color: active ? Colors.white : theme.hintColor),
-              const SizedBox(width: 5),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: active ? Colors.white : theme.hintColor,
+      return Expanded(
+          child: Semantics(
+              selected: active,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: () => onChanged(local),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 140),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: active ? accent : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                          child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: active ? Colors.white : theme.hintColor,
+                        ),
+                      )),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-      );
+              )));
     }
 
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
-        color: WorkspaceStyle.elevatedSurface(context),
-        borderRadius: BorderRadius.circular(13),
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: theme.dividerColor),
       ),
       child: Row(
@@ -1201,7 +1316,10 @@ class _LocalRemoteSegment extends StatelessWidget {
           item(true, translate('Local'),
               isIOS ? Icons.phone_iphone_rounded : Icons.phone_android_rounded),
           const SizedBox(width: 2),
-          item(false, translate('Remote'), Icons.desktop_windows_rounded),
+          item(
+              false,
+              '${translate('Remote')}${remoteName.isEmpty ? '' : ' · $remoteName'}',
+              Icons.desktop_windows_rounded),
         ],
       ),
     );
