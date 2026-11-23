@@ -1,5 +1,6 @@
 import Flutter
 import UIKit
+import SwiftUI
 
 final class AppleWorkspaceNavigationFactory: NSObject, FlutterPlatformViewFactory {
     private static let viewType = "rustdesk/apple_workspace_navigation"
@@ -39,12 +40,138 @@ final class AppleWorkspaceNavigationFactory: NSObject, FlutterPlatformViewFactor
         withFrame frame: CGRect, viewIdentifier viewId: Int64, arguments args: Any?
     ) -> FlutterPlatformView {
         let channel = FlutterMethodChannel(name: "\(Self.viewType)/\(viewId)", binaryMessenger: messenger)
+        if (args as? [String: Any])?["quickConnect"] is String {
+            return WorkspaceQuickConnectDock(arguments: args, channel: channel)
+        }
         #if compiler(>=6.2)
         if #available(iOS 26.0, *), (args as? [String: Any])?["compact"] as? Bool == true {
             return SystemWorkspaceTabView(frame: frame, arguments: args, channel: channel)
         }
         #endif
         return AppleWorkspaceTabBar(frame: frame, arguments: args, channel: channel)
+    }
+}
+
+private final class WorkspaceQuickConnectDock: NSObject, FlutterPlatformView {
+    private let channel: FlutterMethodChannel
+    private let controller: UIHostingController<WorkspaceDockContent>
+
+    init(arguments: Any?, channel: FlutterMethodChannel) {
+        self.channel = channel
+        controller = UIHostingController(rootView: WorkspaceDockContent(
+            arguments: arguments, onSelect: { channel.invokeMethod("select", arguments: $0) },
+            onQuickConnect: { channel.invokeMethod("quickConnect", arguments: nil) }
+        ))
+        super.init()
+        controller.view.backgroundColor = .clear
+        update(arguments)
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard call.method == "update" else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            self?.update(call.arguments)
+            result(nil)
+        }
+    }
+
+    deinit { channel.setMethodCallHandler(nil) }
+
+    func view() -> UIView { controller.view }
+
+    private func update(_ arguments: Any?) {
+        guard let config = WorkspaceTabConfiguration(arguments) else { return }
+        controller.overrideUserInterfaceStyle = config.appearance
+        controller.rootView = WorkspaceDockContent(
+            arguments: arguments, onSelect: { [channel] in
+                channel.invokeMethod("select", arguments: $0)
+            }, onQuickConnect: { [channel] in
+                channel.invokeMethod("quickConnect", arguments: nil)
+            }
+        )
+    }
+}
+
+private struct WorkspaceDockContent: View {
+    let arguments: Any?
+    let onSelect: (Int) -> Void
+    let onQuickConnect: () -> Void
+
+    var body: some View {
+        if let settings = WorkspaceTabConfiguration(arguments) {
+            content(settings)
+        }
+    }
+
+    private func content(_ settings: WorkspaceTabConfiguration) -> some View {
+        let options = arguments as? [String: Any] ?? [:]
+        let textScale = options["textScale"] as? Double ?? 1
+        let rtl = options["rtl"] as? Bool ?? false
+        return HStack(spacing: 10) {
+            GeometryReader { geometry in
+            HStack(spacing: 0) {
+                ForEach(settings.labels.indices, id: \.self) { index in
+                    let selected = settings.selected == index
+                    Button { onSelect(index) } label: {
+                        VStack(spacing: 2) {
+                            Image(systemName: settings.symbols[index])
+                                .font(.system(size: 18, weight: .medium))
+                            Text(settings.labels[index])
+                                .font(.system(size: 10 * textScale, weight: .semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                        }
+                        .foregroundColor(selected ? Color(settings.accent) : .secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(selected ? Color.primary.opacity(0.08) : .clear, in: Capsule())
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(settings.labels[index])
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(4)
+            .workspaceDockGlass(Capsule())
+            .contentShape(Capsule())
+            .simultaneousGesture(DragGesture(minimumDistance: 12).onEnded { drag in
+                guard !settings.labels.isEmpty, geometry.size.width > 8,
+                      geometry.frame(in: .local).contains(drag.location) else { return }
+                let width = (geometry.size.width - 8) / CGFloat(settings.labels.count)
+                let index = min(settings.labels.count - 1,
+                    max(0, Int((drag.location.x - 4) / width)))
+                onSelect(rtl ? settings.labels.count - 1 - index : index)
+            })
+            }
+            Button(action: onQuickConnect) {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 21, weight: .medium))
+                    .foregroundColor(Color(settings.accent))
+                    .frame(width: 50, height: 50)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .workspaceDockGlass(Circle())
+            .accessibilityLabel(options["quickConnect"] as? String ?? "Connect")
+        }
+        .environment(\.layoutDirection, rtl ? .rightToLeft : .leftToRight)
+        .environment(\.colorScheme, settings.appearance == .dark ? .dark : .light)
+        .ignoresSafeArea()
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func workspaceDockGlass<S: Shape>(_ shape: S) -> some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular.interactive(), in: shape)
+        } else {
+            self.background(.ultraThinMaterial, in: shape)
+        }
+        #else
+        self.background(.ultraThinMaterial, in: shape)
+        #endif
     }
 }
 
