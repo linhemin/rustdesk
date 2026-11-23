@@ -60,7 +60,11 @@ struct AwesunSessionView: View {
 
     private var floatingControls: some View {
         ZStack {
-            AwesunDockButton(placement: $model.lockPlacement, size: size,
+            // Keep either lock dock above the gamepad without changing its saved placement.
+            AwesunDockButton(placement: $model.lockPlacement,
+                             size: model.sheet == .gamepad
+                                ? CGSize(width: size.width, height: max(68, size.height - 220))
+                                : size,
                              label: model.displayLocked ? "解除锁定" : "锁定显示",
                              tap: {
                 if model.displayLocked {
