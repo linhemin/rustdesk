@@ -2,6 +2,22 @@ import 'package:flutter_hbb/desktop/incoming_connection_link.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Windows executable server and key override saved invitation options',
+      () {
+    for (final server in ['', 'saved.example']) {
+      final uri = Uri.parse(incomingConnectionLink(
+        uriPrefix: 'rustdesk://',
+        id: 'MyDesk_1',
+        server: server,
+        key: 'saved-key',
+        windowsLicense:
+            'Key: embedded+key=\nHost: private.example:21116\nAPI: https://api.example',
+      ));
+      expect(uri.authority, 'MyDesk_1@private.example:21116');
+      expect(uri.queryParameters, {'key': 'embedded+key='});
+    }
+  });
+
   test(
       'public invitation explicitly routes to the public server without a password',
       () {

@@ -367,9 +367,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                                                         translate(
                                                                             'Generating ...')
                                                                 ? null
-                                                                : () =>
+                                                                : () async =>
                                                                     _copyLocalId(
                                                                         incomingConnectionLink(
+                                                                      windowsLicense: isWindows
+                                                                          ? await bind.mainGetLicense()
+                                                                          : '',
                                                                       uriPrefix:
                                                                           bind.mainUriPrefixSync(),
                                                                       id: value
