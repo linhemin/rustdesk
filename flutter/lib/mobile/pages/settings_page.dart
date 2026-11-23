@@ -1193,7 +1193,22 @@ class _SettingsState extends State<_SettingsContent>
                                 body: const _SettingsContent(networkOnly: true),
                               )),
                     );
-                    if (mounted) setState(() {});
+                    if (mounted) {
+                      setState(() {
+                        _allowWebSocket =
+                            mainGetBoolOptionSync(kOptionAllowWebSocket);
+                        _allowInsecureTlsFallback = mainGetBoolOptionSync(
+                            kOptionAllowInsecureTLSFallback);
+                        _enableTcpPunch =
+                            mainGetLocalBoolOptionSync(kOptionEnableTcpPunch);
+                        _enableUdpPunch =
+                            mainGetLocalBoolOptionSync(kOptionEnableUdpPunch);
+                        _enableIpv6Punch =
+                            mainGetLocalBoolOptionSync(kOptionEnableIpv6Punch);
+                        _enableWebrtc =
+                            mainGetLocalBoolOptionSync(kOptionEnableWebrtc);
+                      });
+                    }
                   },
                 ),
             ]),
