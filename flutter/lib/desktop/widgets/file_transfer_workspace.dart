@@ -14,6 +14,8 @@ class FileTransferBreadcrumbs extends StatelessWidget {
     if (parts.isEmpty) return const SizedBox.shrink();
     const buttonInset = 4.0;
     const chevronSize = 16.0;
+    const menuWidth = 28.0;
+    const minLeafWidth = 48.0;
     final style = Theme.of(context)
         .textTheme
         .labelLarge!
@@ -35,51 +37,64 @@ class FileTransferBreadcrumbs extends StatelessWidget {
                     maxLines: 1, overflow: TextOverflow.ellipsis))));
     return LayoutBuilder(builder: (context, bounds) {
       final painter = TextPainter(
+          text: TextSpan(text: parts.first, style: style),
           textDirection: Directionality.of(context),
-          textScaler: MediaQuery.textScalerOf(context));
-      double width = parts.length * buttonInset * 4 +
-          (parts.length - 1) * chevronSize +
+          textScaler: MediaQuery.textScalerOf(context))
+        ..layout();
+      final rootWidth = painter.width + buttonInset * 4;
+      double width = rootWidth +
+          (parts.length - 1) * (chevronSize + buttonInset * 4) +
           buttonInset * 2;
-      for (final part in parts) {
+      for (final part in parts.skip(1)) {
         painter.text = TextSpan(text: part, style: style);
         painter.layout();
         width += painter.width;
       }
       painter.dispose();
-      final shortRoot = parts.first == '/' ||
-          (parts.first.length <= 3 && parts.first.contains(':'));
+      final compact = bounds.maxWidth < menuWidth + minLeafWidth;
+      final shortRoot = (parts.first == '/' ||
+              (parts.first.length <= 3 && parts.first.contains(':'))) &&
+          bounds.maxWidth >=
+              rootWidth + menuWidth + chevronSize * 2 + minLeafWidth;
       final hiddenStart = shortRoot ? 1 : 0;
       final collapse =
           width > bounds.maxWidth && parts.length - hiddenStart > 1;
       final visible = collapse
           ? [if (shortRoot) 0, -1, parts.length - 1]
           : List.generate(parts.length, (index) => index);
+      Widget menu() => PopupMenuButton<int>(
+          tooltip: parts.take(parts.length - 1).join(' › '),
+          padding: EdgeInsets.zero,
+          icon: compact ? null : const Icon(Icons.more_horiz, size: 18),
+          child: compact
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: buttonInset),
+                  child: Text(parts.last,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: style.copyWith(
+                          color: Theme.of(context).colorScheme.primary)))
+              : null,
+          onSelected: (index) => onSelected(parts.sublist(0, index + 1)),
+          itemBuilder: (_) => [
+                for (var index = hiddenStart; index < parts.length - 1; index++)
+                  PopupMenuItem(
+                      value: index,
+                      child: Tooltip(
+                          message: parts[index],
+                          child: Text(parts[index],
+                              maxLines: 1, overflow: TextOverflow.ellipsis))),
+              ]);
+      if (compact && parts.length > 1) {
+        return Align(
+            alignment: AlignmentDirectional.centerStart, child: menu());
+      }
       return Row(children: [
         for (var position = 0; position < visible.length; position++) ...[
           if (position > 0)
             const Icon(Icons.keyboard_arrow_right_rounded, size: chevronSize),
           if (visible[position] < 0)
-            SizedBox(
-                width: 28,
-                height: 28,
-                child: PopupMenuButton<int>(
-                    tooltip: parts.take(parts.length - 1).join(' › '),
-                    padding: EdgeInsets.zero,
-                    icon: const Icon(Icons.more_horiz, size: 18),
-                    onSelected: (index) =>
-                        onSelected(parts.sublist(0, index + 1)),
-                    itemBuilder: (_) => [
-                          for (var index = hiddenStart;
-                              index < parts.length - 1;
-                              index++)
-                            PopupMenuItem(
-                                value: index,
-                                child: Tooltip(
-                                    message: parts[index],
-                                    child: Text(parts[index],
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis))),
-                        ]))
+            SizedBox(width: menuWidth, height: 28, child: menu())
           else if (visible[position] == parts.length - 1)
             Expanded(
                 child: Align(

@@ -47,6 +47,15 @@ void main() {
             const Offset(-20, 16));
     expect(editing, isTrue);
     expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(workspace(64));
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.text('q4')).width, greaterThan(10));
+    await tester.tap(find.text('q4'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Users'));
+    await tester.pumpAndSettle();
+    expect(opened, ['/', 'Users']);
   });
 
   testWidgets('long UNC roots and leaf names leave adjacent controls reachable',
