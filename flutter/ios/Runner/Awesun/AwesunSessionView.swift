@@ -112,6 +112,7 @@ struct AwesunSessionView: View {
                     Color.clear.allowsHitTesting(false)
                 } else {
                     Color.black.opacity(model.sheet == .gamepad ? 0 : 0.45)
+                        .contentShape(Rectangle())
                         .onTapGesture { model.closePanel() }
                 }
                 Group {

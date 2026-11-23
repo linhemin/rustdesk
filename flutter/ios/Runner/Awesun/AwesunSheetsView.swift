@@ -694,8 +694,8 @@ struct AwesunActionPanel: View {
                         }
                     }
                     if let entry = model.functions.first(where: { $0.id == "lock" }) {
-                        Button { model.perform(entry) } label: {
-                            AwesunActionRow(icon: "lock.display", title: entry.title)
+                        Button { model.setDisplayLocked(!model.displayLocked) } label: {
+                            AwesunActionRow(icon: "lock.display", title: model.displayLocked ? "解除锁定" : entry.title)
                         }
                     }
                     ForEach(Array(model.actions.enumerated()), id: \.offset) { index, title in
