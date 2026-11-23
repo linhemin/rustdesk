@@ -94,6 +94,31 @@ class _PeerCardState extends State<_PeerCard>
     final grid = Theme.of(context).platform != TargetPlatform.iOS &&
         !stateGlobal.isPortrait.value &&
         peerCardUiType.value == PeerUiType.grid;
+    Widget desktopAction(String label, IconData icon, VoidCallback onPressed,
+            {bool primary = false}) =>
+        grid
+            ? TextButton(
+                style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: primary
+                        ? Theme.of(context).colorScheme.primary
+                        : WorkspaceStyle.elevatedSurface(context),
+                    foregroundColor: primary
+                        ? Theme.of(context).colorScheme.onPrimary
+                        : Theme.of(context).colorScheme.onSurface,
+                    textStyle: const TextStyle(fontSize: 11),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6))),
+                onPressed: onPressed,
+                child: Text(translate(label)))
+            : IconButton(
+                tooltip: translate(label),
+                visualDensity: VisualDensity.compact,
+                icon: Icon(icon, size: 18),
+                onPressed: onPressed);
     final card = DeviceCard(
       name: peer.alias.isNotEmpty
           ? peer.alias
@@ -118,7 +143,22 @@ class _PeerCardState extends State<_PeerCard>
       selected: model.isPeerSelected(peer.id),
       passwordSaved: _shouldBuildPasswordIcon(peer),
       actions: [
-        if (!model.multiSelectionMode)
+        if (!model.multiSelectionMode &&
+            Theme.of(context).platform != TargetPlatform.iOS) ...[
+          desktopAction(
+              'Transfer file',
+              Icons.folder_outlined,
+              () => connectInPeerTab(context, peer, widget.tab,
+                  isFileTransfer: true)),
+          desktopAction(
+              'Terminal',
+              Icons.terminal_rounded,
+              () => connectInPeerTab(context, peer, widget.tab,
+                  isTerminal: true)),
+          desktopAction('Connect', Icons.arrow_forward_rounded,
+              () => connectInPeerTab(context, peer, widget.tab),
+              primary: true),
+        ] else if (!model.multiSelectionMode)
           IconButton(
             tooltip: translate('Transfer file'),
             visualDensity: VisualDensity.compact,
@@ -140,6 +180,10 @@ class _PeerCardState extends State<_PeerCard>
           Builder(builder: (menuContext) => IconButton(
             tooltip: translate('More'),
             visualDensity: VisualDensity.compact,
+            constraints: grid
+                ? const BoxConstraints.tightFor(width: 28, height: 28)
+                : null,
+            padding: grid ? EdgeInsets.zero : null,
             icon: Icon(Icons.more_horiz, size: 20,
                 color: Theme.of(context).hintColor),
             onPressed: () {

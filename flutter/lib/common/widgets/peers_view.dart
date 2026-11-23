@@ -269,8 +269,10 @@ class _PeersViewState extends State<_PeersView>
                           child: visibilityChild)
                       : peerCardUiType.value == PeerUiType.grid
                           ? SizedBox(
-                              width: workspaceCards ? 300 : 220,
-                              height: workspaceCards ? 156 + cardTextGrowth : 140,
+                              width: workspaceCards ? 340 : 220,
+                              height: workspaceCards
+                                  ? 156 + cardTextGrowth * 2.5
+                                  : 140,
                               child: visibilityChild)
                           : SizedBox(
                               width: workspaceCards ? 300 : 220,
