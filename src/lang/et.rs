@@ -872,5 +872,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Permission granted", ""),
         ("Home and devices", ""),
         ("Remote sessions", ""),
+        ("Invalid QR code", ""),
     ].iter().cloned().collect();
 }

@@ -875,5 +875,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Permission granted", "已授权"),
         ("Home and devices", "首页与设备"),
         ("Remote sessions", "远程会话"),
+        ("Invalid QR code", "无效的二维码"),
     ].iter().cloned().collect();
 }
