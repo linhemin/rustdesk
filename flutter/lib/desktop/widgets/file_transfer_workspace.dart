@@ -136,7 +136,7 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
               ),
               if (_showQueue && bottomQueue)
                 SizedBox(
-                  height: (bounds.maxHeight * .38).clamp(100.0, 260.0),
+                  height: (bounds.maxHeight * .24).clamp(100.0, 200.0),
                   child: widget.queue,
                 ),
             ]),

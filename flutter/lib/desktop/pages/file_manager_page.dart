@@ -269,8 +269,8 @@ class _FileManagerPageState extends State<FileManagerPage>
             if (isWindows || isMacOS) {
               final theme = Theme.of(context);
               return Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+                margin: const EdgeInsets.only(top: 6),
+                padding: const EdgeInsets.fromLTRB(12, 4, 6, 4),
                 decoration: BoxDecoration(
                     color: WorkspaceStyle.elevatedSurface(context),
                     borderRadius: BorderRadius.circular(10)),
@@ -287,35 +287,41 @@ class _FileManagerPageState extends State<FileManagerPage>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                        Tooltip(
-                            message: item.jobName,
-                            child: Text(
-                                item.fileName.isEmpty
-                                    ? item.jobName
-                                    : item.fileName,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w500))),
-                        const SizedBox(height: 4),
-                        Tooltip(
-                            message: status,
-                            child: Text(
-                                '$status${item.state == JobState.inProgress ? " · ${item.percentText}${item.recvJobRes ? " · ${readableFileSize(item.speed)}/s" : ""}" : ""}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    color: item.state == JobState.error
-                                        ? WorkspaceStyle.danger(context)
-                                        : theme.hintColor,
-                                    fontFeatures: const [
-                                      FontFeature.tabularFigures()
-                                    ]))),
+                        Row(children: [
+                          Expanded(
+                              flex: 3,
+                              child: Tooltip(
+                                  message: item.jobName,
+                                  child: Text(
+                                      item.fileName.isEmpty
+                                          ? item.jobName
+                                          : item.fileName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500)))),
+                          const SizedBox(width: 12),
+                          Flexible(
+                              flex: 2,
+                              child: Tooltip(
+                                  message: status,
+                                  child: Text(
+                                      '$status${item.state == JobState.inProgress ? " · ${item.percentText}${item.recvJobRes ? " · ${readableFileSize(item.speed)}/s" : ""}" : ""}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          color: item.state == JobState.error
+                                              ? WorkspaceStyle.danger(context)
+                                              : theme.hintColor,
+                                          fontFeatures: const [
+                                            FontFeature.tabularFigures()
+                                          ])))),
+                        ]),
                         if (item.type == JobType.transfer &&
                             item.state == JobState.inProgress) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           ClipRRect(
                               borderRadius: BorderRadius.circular(4),
                               child: LinearProgressIndicator(
@@ -328,6 +334,9 @@ class _FileManagerPageState extends State<FileManagerPage>
                     IconButton(
                         tooltip: translate('Resume'),
                         visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints.tightFor(
+                            width: 32, height: 32),
                         onPressed: () => jobController.resumeJob(item.id),
                         icon: const Icon(Icons.play_arrow_rounded, size: 18)),
                   IconButton(
@@ -336,6 +345,9 @@ class _FileManagerPageState extends State<FileManagerPage>
                           ? 'Close'
                           : 'Cancel'),
                       visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.all(4),
+                      constraints:
+                          const BoxConstraints.tightFor(width: 32, height: 32),
                       onPressed: () {
                         jobController.jobTable.remove(item);
                         jobController.cancelJob(item.id);
@@ -688,6 +700,53 @@ class _FileManagerViewState extends State<FileManagerView> {
         _locationStatus.value = LocationStatus.bread;
       }
     }
+  }
+
+  Widget _nativeFileIcon(Entry entry) {
+    final (icon, color) = entry.isDirectory
+        ? (Icons.folder_rounded, WorkspaceStyle.warning(context))
+        : entry.isDrive
+            ? (Icons.storage_rounded, Theme.of(context).colorScheme.primary)
+            : switch (entry.name.toLowerCase().split('.').last) {
+                'mp4' || 'mov' || 'mkv' || 'avi' => (
+                    Icons.videocam_outlined,
+                    WorkspaceStyle.information(context)
+                  ),
+                'zip' || 'tar' || 'gz' || '7z' || 'rar' => (
+                    Icons.inventory_2_outlined,
+                    WorkspaceStyle.success(context)
+                  ),
+                'json' ||
+                'yaml' ||
+                'yml' ||
+                'toml' ||
+                'rs' ||
+                'dart' ||
+                'js' ||
+                'ts' ||
+                'sh' =>
+                  (Icons.code_rounded, Theme.of(context).colorScheme.primary),
+                'png' || 'jpg' || 'jpeg' || 'gif' || 'webp' => (
+                    Icons.image_outlined,
+                    WorkspaceStyle.indigo
+                  ),
+                'pdf' || 'doc' || 'docx' => (
+                    Icons.description_outlined,
+                    WorkspaceStyle.danger(context)
+                  ),
+                'txt' || 'md' => (Icons.article_outlined, Theme.of(context).hintColor),
+                _ => (
+                    Icons.insert_drive_file_outlined,
+                    Theme.of(context).hintColor
+                  ),
+              };
+    return Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+            color: color.withOpacity(.12),
+            borderRadius: BorderRadius.circular(6)),
+        child: Icon(icon, size: 17, color: color));
   }
 
   Widget _nativeHeadTools() {
@@ -1527,7 +1586,9 @@ class _FileManagerViewState extends State<FileManagerView> {
                                       waitDuration: Duration(milliseconds: 500),
                                       message: entry.name,
                                       child: Row(children: [
-                                        entry.isDrive
+                                        (isWindows || isMacOS)
+                                            ? _nativeFileIcon(entry)
+                                            : entry.isDrive
                                             ? Image(
                                                     image: iconHardDrive,
                                                     fit: BoxFit.scaleDown,
@@ -1930,12 +1991,17 @@ class _FileManagerViewState extends State<FileManagerView> {
       controller.openDirectory(path);
     });
 
+    final pinRoot = (isWindows || isMacOS) && items.length > 1;
     return items.isEmpty
         ? Offstage()
         : Row(
             key: _locationBarKey,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+                if (pinRoot) ...[
+                  items.first.content,
+                  const Icon(Icons.keyboard_arrow_right_rounded, size: 16),
+                ],
                 Expanded(
                   child: Listener(
                     // handle mouse wheel
@@ -1947,7 +2013,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                       }
                     },
                     child: BreadCrumb(
-                      items: items,
+                      items: pinRoot ? items.sublist(1) : items,
                       divider: const Icon(Icons.keyboard_arrow_right_rounded),
                       overflow: ScrollableOverflow(
                         controller: _breadCrumbScroller,
@@ -2067,6 +2133,14 @@ class _FileManagerViewState extends State<FileManagerView> {
                 content: TextButton(
                   child: Text(e.value),
                   style: ButtonStyle(
+                    padding: (isWindows || isMacOS)
+                        ? WidgetStateProperty.all(
+                            const EdgeInsets.symmetric(horizontal: 4))
+                        : null,
+                    textStyle: (isWindows || isMacOS)
+                        ? WidgetStateProperty.all(const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w500))
+                        : null,
                     minimumSize: MaterialStateProperty.all(
                       Size(0, 0),
                     ),

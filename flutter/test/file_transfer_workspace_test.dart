@@ -30,6 +30,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getSize(local).width, browserWidth);
     expect(tester.getSize(remote).width, browserWidth);
+    expect(tester.getSize(local).height, greaterThan(700 * 2 / 3));
     expect(tester.getTopLeft(find.text('Active job')).dy,
         greaterThanOrEqualTo(tester.getBottomLeft(local).dy));
 
