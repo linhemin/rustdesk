@@ -183,8 +183,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           ? (sessions.result as String).split(',').where((id) => id.isNotEmpty)
           : const <String>[];
       if (mounted && _destination == destination && ids.isNotEmpty) {
-        await rustDeskWinManager.call(
-            WindowType.RemoteDesktop, kWindowEventActiveSession, ids.first);
+        await windowOnTop(sessions.windowId);
       }
     } on PlatformException catch (error) {
       debugPrint('Unable to focus remote session: $error');
