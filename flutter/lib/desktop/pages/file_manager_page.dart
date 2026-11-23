@@ -179,8 +179,12 @@ class _FileManagerPageState extends State<FileManagerPage>
                   queue: statusList(),
                   localLabel: translate('Local'),
                   remoteLabel: translate('Remote'),
-                  queueLabel: translate('Status'),
-                  queueCount: Obx(() => Text('${jobController.jobTable.length}')),
+                  queueLabel: translate('Transfer file'),
+                  queueCount: Obx(() {
+                    final jobs = jobController.jobTable;
+                    final active = jobs.firstWhereOrNull((job) => job.state == JobState.inProgress);
+                    return Text('${jobs.length}${active != null && active.speed > 0 ? " · ${readableFileSize(active.speed)}/s" : ""}');
+                  }),
                 )
               : Row(
             children: [
@@ -262,6 +266,84 @@ class _FileManagerPageState extends State<FileManagerPage>
           itemBuilder: (BuildContext context, int index) {
             final item = jobs[index];
             final status = item.getStatus();
+            if (isWindows || isMacOS) {
+              final theme = Theme.of(context);
+              return Container(
+                margin: const EdgeInsets.only(top: 8),
+                padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+                decoration: BoxDecoration(
+                    color: WorkspaceStyle.elevatedSurface(context),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Row(children: [
+                  Icon(
+                      item.isRemoteToLocal
+                          ? Icons.south_west_rounded
+                          : Icons.north_east_rounded,
+                      size: 17,
+                      color: theme.colorScheme.primary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                        Tooltip(
+                            message: item.jobName,
+                            child: Text(
+                                item.fileName.isEmpty
+                                    ? item.jobName
+                                    : item.fileName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500))),
+                        const SizedBox(height: 4),
+                        Tooltip(
+                            message: status,
+                            child: Text(
+                                '$status${item.state == JobState.inProgress ? " · ${item.percentText}${item.recvJobRes ? " · ${readableFileSize(item.speed)}/s" : ""}" : ""}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    color: item.state == JobState.error
+                                        ? WorkspaceStyle.danger(context)
+                                        : theme.hintColor,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures()
+                                    ]))),
+                        if (item.type == JobType.transfer &&
+                            item.state == JobState.inProgress) ...[
+                          const SizedBox(height: 8),
+                          ClipRRect(
+                              borderRadius: BorderRadius.circular(4),
+                              child: LinearProgressIndicator(
+                                  value: item.percent.clamp(0.0, 1.0),
+                                  minHeight: 4,
+                                  backgroundColor: theme.dividerColor)),
+                        ],
+                      ])),
+                  if (item.state == JobState.paused)
+                    IconButton(
+                        tooltip: translate('Resume'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => jobController.resumeJob(item.id),
+                        icon: const Icon(Icons.play_arrow_rounded, size: 18)),
+                  IconButton(
+                      tooltip: translate(item.state == JobState.done ||
+                              item.state == JobState.error
+                          ? 'Close'
+                          : 'Cancel'),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () {
+                        jobController.jobTable.remove(item);
+                        jobController.cancelJob(item.id);
+                      },
+                      icon: const Icon(Icons.close_rounded, size: 17)),
+                ]),
+              );
+            }
             return Padding(
               padding: const EdgeInsets.only(bottom: 5),
               child: generateCard(
@@ -498,6 +580,7 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   FileController get controller => widget.controller;
   bool get isLocal => widget.controller.isLocal;
+  double get _rowHeight => isWindows || isMacOS ? 36 : kDesktopFileTransferRowHeight;
   FFI get _ffi => widget._ffi;
   SelectedItems get selectedItems => controller.selectedItems;
 
@@ -560,7 +643,6 @@ class _FileManagerViewState extends State<FileManagerView> {
       if (nativeWorkspace) {
         return Container(
           color: WorkspaceStyle.canvas(context),
-          padding: const EdgeInsets.all(12),
           child: content,
         );
       }
@@ -608,7 +690,161 @@ class _FileManagerViewState extends State<FileManagerView> {
     }
   }
 
+  Widget _nativeHeadTools() {
+    final theme = Theme.of(context);
+    Widget tool(IconData icon, String label, VoidCallback action) => IconButton(
+        tooltip: translate(label),
+        onPressed: action,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints(minWidth: 30, minHeight: 32),
+        padding: const EdgeInsets.all(6),
+        icon: Icon(icon, size: 17));
+    return Container(
+      decoration: BoxDecoration(
+          color: theme.cardColor,
+          border: Border(bottom: BorderSide(color: theme.dividerColor))),
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      child: Column(children: [
+        Row(children: [
+          Icon(
+              isLocal
+                  ? Icons.laptop_mac_rounded
+                  : Icons.desktop_windows_rounded,
+              size: 16,
+              color: theme.hintColor),
+          const SizedBox(width: 7),
+          Text(
+              '${translate(isLocal ? "Local" : "Remote")}'
+              '${isLocal ? (isMacOS ? " · Mac" : " · Windows") : (_ffi.ffiModel.pi.platform.isEmpty ? "" : " · ${_ffi.ffiModel.pi.platform}")}',
+              style:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          const Spacer(),
+          Obx(() => FilledButton(
+              style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(0, 30),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(7)),
+                  textStyle: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w600)),
+              onPressed: SelectedItems.valid(selectedItems.items)
+                  ? () {
+                      controller.sendFiles(selectedItems,
+                          controller.getOtherSideDirectoryData());
+                      selectedItems.clear();
+                    }
+                  : null,
+              child: Text(isLocal
+                  ? '${translate("Send")} → ${translate("Remote")}'
+                  : '← ${translate("Receive")} · ${translate("Local")}'))),
+        ]),
+        const SizedBox(height: 6),
+        Row(children: [
+          tool(Icons.arrow_back_rounded, 'Back', () {
+            selectedItems.clear();
+            controller.goBack();
+          }),
+          tool(Icons.arrow_upward_rounded, 'Parent directory', () {
+            selectedItems.clear();
+            controller.goToParentDirectory();
+          }),
+          tool(Icons.home_outlined, 'Home', controller.goToHomeDirectory),
+          Expanded(
+              child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            height: 32,
+            decoration: BoxDecoration(
+                color: WorkspaceStyle.elevatedSurface(context),
+                borderRadius: BorderRadius.circular(7)),
+            child: GestureDetector(
+              onTap: () {
+                if (_locationStatus.value != LocationStatus.fileSearchBar) {
+                  _locationStatus.value = LocationStatus.pathLocation;
+                  _locationNode.requestFocus();
+                }
+              },
+              child: Obx(() => _locationStatus.value == LocationStatus.bread
+                  ? buildBread()
+                  : buildPathLocation()),
+            ),
+          )),
+          Obx(() => tool(
+                  _locationStatus.value == LocationStatus.bread
+                      ? Icons.search_rounded
+                      : Icons.close_rounded,
+                  _locationStatus.value == LocationStatus.bread
+                      ? 'Search'
+                      : 'Clear', () {
+                if (_locationStatus.value == LocationStatus.bread) {
+                  _locationStatus.value = LocationStatus.fileSearchBar;
+                  _locationNode.requestFocus();
+                } else {
+                  onSearchText('', isLocal);
+                  _locationStatus.value = LocationStatus.bread;
+                }
+              })),
+          tool(Icons.create_new_folder_outlined, 'Create Folder',
+              _nativeCreateFolder),
+          tool(Icons.refresh_rounded, 'Refresh File',
+              () => controller.refresh()),
+          Obx(() => IconButton(
+              tooltip: translate('Delete'),
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.delete_outline_rounded, size: 17),
+              onPressed: SelectedItems.valid(selectedItems.items)
+                  ? () async {
+                      await controller.removeAction(selectedItems);
+                      selectedItems.clear();
+                    }
+                  : null)),
+          menu(isLocal: isLocal),
+        ]),
+      ]),
+    );
+  }
+
+  void _nativeCreateFolder() {
+    final name = TextEditingController();
+    String? error;
+    _ffi.dialogManager.show((update, close, context) {
+      void submit() {
+        if (name.text.isEmpty) return;
+        if (!PathUtil.validName(
+            name.text, controller.options.value.isWindows)) {
+          update(() => error = translate('Invalid folder name'));
+          return;
+        }
+        controller.createDir(PathUtil.join(controller.directory.value.path,
+            name.text, controller.options.value.isWindows));
+        close();
+      }
+
+      return CustomAlertDialog(
+        title: Text(translate('Create Folder')),
+        content: TextFormField(
+            controller: name,
+            autofocus: true,
+            decoration: InputDecoration(
+                labelText: translate('Please enter the folder name'),
+                errorText: error),
+            onChanged: (_) {
+              if (error != null) update(() => error = null);
+            },
+            onFieldSubmitted: (_) => submit()),
+        actions: [
+          dialogButton('Cancel',
+              onPressed: () => close(false), isOutline: true),
+          dialogButton('OK', onPressed: submit),
+        ],
+        onSubmit: submit,
+        onCancel: () => close(false),
+      );
+    });
+  }
+
   Widget headTools() {
+    if (isWindows || isMacOS) return _nativeHeadTools();
     var uploadButtonTapPosition = RelativeRect.fill;
     RxBool isUploadFolder =
         (bind.mainGetLocalOption(key: 'upload-folder-button') == 'Y').obs;
@@ -1178,7 +1414,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           return;
         }
         _jumpToEntry(isLocal, searchResult.first, scrollController,
-            kDesktopFileTransferRowHeight);
+            _rowHeight);
       },
       onSearch: (buffer) {
         debugPrint("searching for $buffer");
@@ -1191,7 +1427,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           return;
         }
         _jumpToEntry(isLocal, searchResult.first, scrollController,
-            kDesktopFileTransferRowHeight);
+            _rowHeight);
       },
       child: Obx(() {
         final entries = controller.directory.value.entries;
@@ -1257,7 +1493,7 @@ class _FileManagerViewState extends State<FileManagerView> {
           }
 
           return Padding(
-            padding: EdgeInsets.symmetric(vertical: 1),
+            padding: EdgeInsets.symmetric(vertical: 1, horizontal: (isWindows || isMacOS) ? 8 : 0),
             child: Obx(() => Container(
                 decoration: BoxDecoration(
                   color: selectedItems.items.contains(entry)
@@ -1275,7 +1511,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                       : null,
                 ),
                 key: ValueKey(entry.name),
-                height: kDesktopFileTransferRowHeight,
+                height: _rowHeight,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
@@ -1304,6 +1540,8 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                 entry.isFile
                                                     ? "assets/file.svg"
                                                     : "assets/folder.svg",
+                                                width: 16,
+                                                height: 16,
                                                 colorFilter: svgColor(entry
                                                         .isDirectory
                                                     ? WorkspaceStyle.warning(
@@ -1311,6 +1549,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                                                     : Theme.of(context)
                                                         .hintColor),
                                               ),
+                                        const SizedBox(width: 8),
                                         Expanded(
                                             child: Text(entry.name.nonBreaking,
                                                 style: const TextStyle(
@@ -1400,7 +1639,7 @@ class _FileManagerViewState extends State<FileManagerView> {
             Expanded(
               child: ListView.builder(
                 controller: scrollController,
-                itemExtent: kDesktopFileTransferRowHeight,
+                itemExtent: _rowHeight,
                 itemBuilder: (context, index) {
                   return rows.elementAt(index);
                 },
@@ -1510,9 +1749,9 @@ class _FileManagerViewState extends State<FileManagerView> {
     final items = selectedItems.items;
     final index = items.isEmpty ? -1 : entries.indexOf(items.last);
     final position = _fileListScrollController.position;
-    final first = (position.pixels / kDesktopFileTransferRowHeight).ceil();
+    final first = (position.pixels / _rowHeight).ceil();
     final last = ((position.pixels + position.viewportDimension) /
-                kDesktopFileTransferRowHeight)
+                _rowHeight)
             .floor() -
         1;
     return pageDelta(
@@ -1527,8 +1766,8 @@ class _FileManagerViewState extends State<FileManagerView> {
     selectedItems.items.assignAll(selection.where((e) => !e.isDrive));
     final position = _fileListScrollController.position;
     final top =
-        filteredEntries.indexOf(selection.last) * kDesktopFileTransferRowHeight;
-    final bottom = top + kDesktopFileTransferRowHeight;
+        filteredEntries.indexOf(selection.last) * _rowHeight;
+    final bottom = top + _rowHeight;
     if (top < position.pixels) {
       _fileListScrollController.jumpTo(top);
     } else if (bottom > position.pixels + position.viewportDimension) {
@@ -1602,8 +1841,7 @@ class _FileManagerViewState extends State<FileManagerView> {
     return Container(
       decoration: isWindows || isMacOS
           ? BoxDecoration(
-              color: WorkspaceStyle.elevatedSurface(context),
-              borderRadius: BorderRadius.circular(8))
+              border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor)))
           : null,
       key: _globalHeaderKey,
       height: kDesktopFileTransferHeaderHeight,
@@ -1637,8 +1875,10 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   Widget headerItemFunc(double? width, SortBy sortBy, String name) {
-    final headerTextStyle =
-        Theme.of(context).dataTableTheme.headingTextStyle ?? TextStyle();
+    final headerTextStyle = isWindows || isMacOS
+        ? TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
+            color: Theme.of(context).hintColor)
+        : Theme.of(context).dataTableTheme.headingTextStyle ?? TextStyle();
     return ObxValue<Rx<bool?>>(
         (ascending) => InkWell(
               onTap: () {

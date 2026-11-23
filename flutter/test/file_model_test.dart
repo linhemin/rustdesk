@@ -1,11 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
+import 'package:flutter_hbb/mobile/pages/file_manager_page.dart' as mobile;
 import 'package:flutter_hbb/models/file_model.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:get/get.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:uuid/uuid.dart';
 
 final _sessionId = UuidValue('00000000-0000-0000-0000-000000000000');
@@ -108,6 +112,59 @@ class _DeletingController extends FileController {
 }
 
 void main() {
+  testWidgets('mobile empty browser bounds long paths in both themes',
+      (tester) async {
+    platformFFI.setBindingForTesting(_FileBinding());
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 480);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = _createController(FileFetcher(() => _sessionId));
+    final path =
+        '/private/var/mobile/${List.filled(45, 'long-directory').join('/')}';
+    controller.homePath = '/private/var/mobile';
+    controller.directory.value = _directory(path);
+    for (final brightness in Brightness.values) {
+      await tester.pumpWidget(MaterialApp(
+        theme: WorkspaceStyle.apply(ThemeData(brightness: brightness)),
+        home: Scaffold(
+            body: mobile.FileManagerView(
+                controller: controller,
+                selectMode: mobile.SelectMode.none.obs)),
+      ));
+      await tester.pumpAndSettle();
+      expect(find.text('Empty'), findsOneWidget);
+      expect(find.byTooltip(path), findsOneWidget);
+      expect(tester.widget<Text>(find.text(path)).maxLines, 2);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('mobile file selection uses the existing controller selection',
+      (tester) async {
+    platformFFI.setBindingForTesting(_FileBinding());
+    final controller = _createController(FileFetcher(() => _sessionId));
+    final entry = Entry()
+      ..name = 'report.pdf'
+      ..path = '/home/report.pdf'
+      ..size = 42;
+    controller.homePath = '/home';
+    controller.directory.value = _directory('/home')..entries = [entry];
+    final selection = mobile.SelectMode.none.obs;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: mobile.FileManagerView(
+                controller: controller, selectMode: selection))));
+    await tester.tap(find.byType(Checkbox));
+    await tester.pump();
+    expect(selection.value, mobile.SelectMode.remote);
+    expect(controller.selectedItems.items, [entry]);
+    await tester.tap(find.byType(Checkbox));
+    await tester.pump();
+    expect(controller.selectedItems.items, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
   for (final scenario in ['completion', 'reconnect', 'dispatch reconnect']) {
     testWidgets('SAF retry after $scenario', (tester) async {
       const path = '/@rustdesk/tree/grant/root';

@@ -71,6 +71,11 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
           final bottomQueue = dualPane && bounds.maxHeight >= 480;
           final showBrowsers = !_showQueue || bottomQueue;
           final queueButton = TextButton.icon(
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).textTheme.bodyMedium?.color,
+              textStyle:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
             onPressed: () => setState(() => _showQueue = !_showQueue),
             icon: const Icon(Icons.swap_vert_rounded, size: 18),
             label: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -83,9 +88,13 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                 decoration: BoxDecoration(
                   color: WorkspaceStyle.accentSoft(context),
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(20),
                 ),
-                child: widget.queueCount,
+                child: DefaultTextStyle.merge(
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: Theme.of(context).colorScheme.primary),
+                    child: widget.queueCount),
               ),
               const SizedBox(width: 8),
               Icon(_showQueue ? Icons.expand_more : Icons.expand_less,
@@ -115,7 +124,7 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
                 color: Theme.of(context).cardColor,
                 child: Padding(
                   padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   child: Row(children: [
                     if (!dualPane) ...[
                       _sideButton(widget.localLabel, true),
