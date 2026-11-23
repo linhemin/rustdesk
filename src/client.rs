@@ -108,6 +108,7 @@ pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
 mod video_delivery;
+mod video_freshness;
 pub mod screenshot;
 
 #[cfg(all(target_os = "ios", feature = "flutter"))]
@@ -4688,6 +4689,7 @@ pub fn start_video_thread<F, T>(
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
+        let mut freshness = video_freshness::Freshness::default();
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
@@ -4757,12 +4759,17 @@ pub fn start_video_thread<F, T>(
                             let format_changed = handler.decoder.format() != format;
                             match handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma) {
                                 Ok(true) => {
-                                    video_callback(
-                                        display,
-                                        &mut handler.rgb,
-                                        handler.texture.texture,
-                                        pixelbuffer,
-                                    );
+                                    if freshness.show(
+                                        &video_queue.read().unwrap(),
+                                        std::time::Instant::now(),
+                                    ) {
+                                        video_callback(
+                                            display,
+                                            &mut handler.rgb,
+                                            handler.texture.texture,
+                                            pixelbuffer,
+                                        );
+                                    }
 
                                     // chroma
                                     if tmp_chroma.is_some() && last_chroma != tmp_chroma {
