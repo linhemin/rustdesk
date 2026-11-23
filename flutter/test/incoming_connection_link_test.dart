@@ -12,8 +12,9 @@ void main() {
   test('self-hosted invitation retains its server and public key', () {
     for (final server in {
       'hbbs.example.invalid:21116': 'hbbs.example.invalid:21116',
+      'v1.hbbs.example.com': 'v1.hbbs.example.com',
       '[2001:db8::1]:21116': '[2001:db8::1]:21116',
-      '2001:db8::1': '[2001:db8::1]',
+      '2001:db8::1': '[2001:db8::1]:21116',
     }.entries) {
       final uri = Uri.parse(incomingConnectionLink(
         uriPrefix: 'customdesk://',
