@@ -902,6 +902,8 @@ class _FileManagerViewState extends State<FileManagerView> {
       headTools(),
       Expanded(child: Obx(() {
         final entries = controller.directory.value.entries;
+        final mode = widget.selectMode.value;
+        final selectedEntries = _selectedItems.items.toSet();
         if (entries.isEmpty) {
           return ListView(children: [
             const SizedBox(height: 72),
@@ -921,19 +923,14 @@ class _FileManagerViewState extends State<FileManagerView> {
             if (index >= entries.length) {
               return listTail();
             }
-            var selected = false;
-            if (widget.selectMode.value != SelectMode.none) {
-              selected = _selectedItems.items.contains(entries[index]);
-            }
+            final selected = mode != SelectMode.none &&
+                selectedEntries.contains(entries[index]);
 
             final sizeStr = entries[index].isFile
                 ? readableFileSize(entries[index].size.toDouble())
                 : "";
 
-            final showCheckBox = () {
-              return widget.selectMode.value != SelectMode.none &&
-                  widget.selectMode.value.eq(controller.selectedItems.isLocal);
-            }();
+            final showCheckBox = mode.eq(isLocal);
             final theme = Theme.of(context);
             final primary = theme.colorScheme.primary;
             final entry = entries[index];

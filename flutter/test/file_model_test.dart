@@ -143,14 +143,20 @@ void main() {
   testWidgets('mobile file selection uses the existing controller selection',
       (tester) async {
     platformFFI.setBindingForTesting(_FileBinding());
-    final controller = _createController(FileFetcher(() => _sessionId));
+    late FileFetcher fetcher;
+    fetcher = FileFetcher(() => _sessionId,
+      readRemoteDirectory: (_, path, __) async {
+        fetcher.tryCompleteTask(_directoryJson(path), 'false');
+      });
+    final controller = _createController(fetcher);
     final entry = Entry()
       ..name = 'report.pdf'
       ..path = '/home/report.pdf'
       ..size = 42;
     controller.homePath = '/home';
     final other = Entry()..name = 'notes.txt'..path = '/home/notes.txt';
-    controller.directory.value = _directory('/home')..entries = [entry, other];
+    final folder = Entry()..entryType = 1..name = 'folder'..path = '/home/folder';
+    controller.directory.value = _directory('/home')..entries = [entry, other, folder];
     final selection = mobile.SelectMode.none.obs;
     Widget page() => MaterialApp(
         home: Scaffold(
@@ -172,6 +178,15 @@ void main() {
     await tester.tap(find.text('notes.txt'));
     await tester.pump();
     expect(controller.selectedItems.items, [other]);
+    // Cancel clears the selection without rebuilding the parent page.
+    controller.selectedItems.clear();
+    selection.value = mobile.SelectMode.none;
+    await tester.pump();
+    await tester.tap(find.widgetWithText(ListTile, 'folder'));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    expect(controller.directory.value.path, '/home/folder');
+    expect(controller.selectedItems.items, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
