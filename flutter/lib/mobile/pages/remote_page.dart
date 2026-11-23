@@ -1705,8 +1705,7 @@ class _RemotePageState extends State<RemotePage>
                   ? () {
                       final next =
                           (peer.currentDisplay + 1) % peer.displays.length;
-                      bind.sessionSwitchDisplay(
-                          sessionId: sessionId, value: next);
+                      openMonitorInTheSameTab(next, gFFI, peer);
                     }
                   : null,
               onOpenChat: () => _sessionAction(SessionAction.chat),
