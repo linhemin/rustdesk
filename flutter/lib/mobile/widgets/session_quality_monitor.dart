@@ -138,15 +138,21 @@ class _MobileSessionQualityMonitorState
 class _QualityPosition extends SingleChildLayoutDelegate {
   _QualityPosition(this.offset);
   final Offset offset;
+  // Leave the native right-edge controls clear at every drop position.
+  static const _rightInset = 68.0;
 
   @override
   BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
-      constraints.loosen().deflate(const EdgeInsets.all(12));
+      constraints
+          .loosen()
+          .deflate(const EdgeInsets.fromLTRB(12, 12, _rightInset, 12));
 
   @override
   Offset getPositionForChild(Size size, Size childSize) => Offset(
-        offset.dx.clamp(12.0,
-            (size.width - childSize.width - 12).clamp(12.0, double.infinity)),
+        offset.dx.clamp(
+            12.0,
+            (size.width - childSize.width - _rightInset)
+                .clamp(12.0, double.infinity)),
         offset.dy.clamp(12.0,
             (size.height - childSize.height - 12).clamp(12.0, double.infinity)),
       );

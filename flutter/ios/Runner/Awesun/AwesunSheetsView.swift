@@ -859,46 +859,46 @@ struct AwesunGamePanel: View {
     @ObservedObject var model: AwesunSessionModel
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            ZStack {
-                Circle().fill(AwesunPalette.sheetFill)
-                    .overlay(Circle().strokeBorder(AwesunPalette.hairline))
-                gameKey("W").offset(y: -36)
-                gameKey("A").offset(x: -36)
-                gameKey("S").offset(y: 36)
-                gameKey("D").offset(x: 36)
-            }
-            .frame(width: 116, height: 116)
-            VStack(spacing: 6) {
-                // Keep the original arrow keys available alongside WASD.
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 4)], spacing: 4) {
-                    gameKey("Up", label: "↑", width: 24, height: 28)
-                    gameKey("Left", label: "←", width: 24, height: 28)
-                    gameKey("Down", label: "↓", width: 24, height: 28)
-                    gameKey("Right", label: "→", width: 24, height: 28)
+        VStack(spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
+                ZStack {
+                    Circle().fill(AwesunPalette.sheetFill)
+                        .overlay(Circle().strokeBorder(AwesunPalette.hairline))
+                    gameKey("W").offset(y: -36)
+                    gameKey("A").offset(x: -36)
+                    gameKey("S").offset(y: 36)
+                    gameKey("D").offset(x: 36)
                 }
+                .frame(width: 116, height: 116)
+                Spacer(minLength: 8)
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                    gameKey("Shift", width: 44, height: 40, accent: true)
+                    gameKey("Space", width: 44, height: 40, accent: true)
+                    gameKey("E", width: 44, height: 40, accent: true)
+                    gameKey("F", width: 44, height: 40, accent: true)
+                }
+                .padding(10).frame(width: 116)
+                .background(RoundedRectangle(cornerRadius: 16).fill(AwesunPalette.sheetFill))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
+            }
+            // Retain the original arrow keys without covering the right-edge rail.
+            HStack(spacing: 4) {
+                gameKey("Up", label: "↑", width: 24, height: 28)
+                gameKey("Left", label: "←", width: 24, height: 28)
+                gameKey("Down", label: "↓", width: 24, height: 28)
+                gameKey("Right", label: "→", width: 24, height: 28)
                 Button(action: model.closeSheet) {
                     Text("退出游戏键盘")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(AwesunPalette.textPrimary)
-                        .padding(.horizontal, 5).frame(minWidth: 44, minHeight: 44)
+                        .padding(.horizontal, 5).frame(minWidth: 44, maxWidth: .infinity, minHeight: 44)
                         .background(Capsule().fill(AwesunPalette.sheetFill))
                         .overlay(Capsule().strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
                         .contentShape(Capsule())
                 }
             }
-            .frame(maxWidth: .infinity)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                gameKey("Shift", width: 44, height: 40, accent: true)
-                gameKey("Space", width: 44, height: 40, accent: true)
-                gameKey("E", width: 44, height: 40, accent: true)
-                gameKey("F", width: 44, height: 40, accent: true)
-            }
-            .padding(10).frame(width: 116)
-            .background(RoundedRectangle(cornerRadius: 16).fill(AwesunPalette.sheetFill))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(AwesunPalette.hairline).allowsHitTesting(false))
         }
-        .padding(12).padding(.bottom, 12)
+        .padding(.leading, 12).padding(.trailing, 68).padding(.bottom, 24)
         .buttonStyle(.plain)
     }
 

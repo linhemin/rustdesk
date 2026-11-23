@@ -80,8 +80,8 @@ final class AwesunSessionModel: ObservableObject {
     private var menuRevision = 0
 
     @Published private var functionOrder = [
-        "mouse", "kbd", "mode", "lock", "guide", "shot", "sound", "screen",
-        "display", "quality", "chat", "fullKeyboard", "layout", "keys", "game", "actions", "quit"
+        "quit", "mouse", "kbd", "mode", "lock", "guide", "shot", "sound", "screen",
+        "display", "quality", "chat", "fullKeyboard", "layout", "keys", "game", "actions"
     ]
 
     var functions: [AwesunFunctionItem] {

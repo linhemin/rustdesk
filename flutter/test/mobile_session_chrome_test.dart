@@ -77,12 +77,12 @@ void main() {
     await tester.drag(find.text('直接连接 · TCP'), const Offset(1000, 1000));
     await tester.pump();
     final viewport = tester.getRect(find.byType(Scaffold));
-    expect(tester.getRect(card).right, lessThanOrEqualTo(viewport.right - 12));
+    expect(tester.getRect(card).right, lessThanOrEqualTo(viewport.right - 68));
     expect(
         tester.getRect(card).bottom, lessThanOrEqualTo(viewport.bottom - 12));
     await tester.drag(find.text('直接连接 · TCP'), const Offset(-40, -40));
     await tester.pump();
-    expect(tester.getRect(card).right, lessThan(viewport.right - 12));
+    expect(tester.getRect(card).right, lessThan(viewport.right - 68));
     expect(tester.getRect(card).bottom, lessThan(viewport.bottom - 12));
     expect(tester.takeException(), isNull);
   });

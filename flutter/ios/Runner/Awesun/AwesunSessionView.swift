@@ -15,6 +15,7 @@ struct AwesunSessionView: View {
                 AwesunVirtualMouseView(model: model, screenSize: size)
             }
             sessionControls
+                .zIndex(model.sheet == .gamepad && !model.functionsOpen ? 1 : 0)
                 .animation(panelAnimation, value: model.keyboardInset > 0)
                 .animation(panelAnimation, value: model.isKeyboardPanel)
 
@@ -39,7 +40,7 @@ struct AwesunSessionView: View {
 
     @ViewBuilder
     private var sessionControls: some View {
-        if model.keyboardInset == 0 && !model.isKeyboardPanel && model.sheet != .gamepad {
+        if model.keyboardInset == 0 && !model.isKeyboardPanel {
             controls.transition(.opacity)
         }
     }
@@ -623,7 +624,7 @@ struct AwesunFloatingChrome: ViewModifier {
                     Circle().fill(.ultraThinMaterial)
                         .environment(\.colorScheme, .dark)
                         .overlay(Circle().fill(LinearGradient(
-                            colors: [Color.white.opacity(0.22), Color(awesun: 0xAD182030)],
+                            colors: [Color(awesun: 0xCD26344A), Color(awesun: 0xE6182030)],
                             startPoint: .topLeading, endPoint: .bottomTrailing)))
                 }
             }
