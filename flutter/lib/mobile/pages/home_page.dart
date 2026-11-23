@@ -146,12 +146,20 @@ class HomePageState extends State<HomePage> {
                           .toList(growable: false),
                       symbols: [
                         for (final page in _pages)
-                          page is SettingsPage ? 'gearshape' : 'display.2'
+                          page is SettingsPage
+                              ? 'gearshape'
+                              : page is ConnectionPage
+                                  ? 'display.2'
+                                  : 'folder'
                       ],
                       selected: _selectedIndex,
                       compact: MediaQuery.sizeOf(context).shortestSide < 600,
                       onSelect: (index) =>
                           setState(() => _selectedIndex = index),
+                      onQuickConnect: bind.isIncomingOnly()
+                          ? null
+                          : () => showIPhoneQuickConnect(context),
+                      quickConnectLabel: translate('New Connection'),
                     )
                   : DecoratedBox(
                       decoration: BoxDecoration(
