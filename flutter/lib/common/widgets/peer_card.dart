@@ -70,9 +70,157 @@ class _PeerCardState extends State<_PeerCard>
   Widget build(BuildContext context) {
     super.build(context);
     final onConnect = ConnectionPeerList.of(context)?.onConnect;
+    if (!isWeb &&
+        const {TargetPlatform.iOS, TargetPlatform.macOS, TargetPlatform.windows}
+            .contains(Theme.of(context).platform)) {
+      return Theme.of(context).platform == TargetPlatform.iOS
+          ? _workspaceCard(onConnect)
+          : Obx(() => _workspaceCard(onConnect));
+    }
     if (onConnect != null) return _connectionRow(onConnect);
     return Obx(() =>
         stateGlobal.isPortrait.isTrue ? _buildPortrait() : _buildLandscape());
+  }
+
+  Widget _workspaceCard(void Function(Peer, PeerTabIndex)? onConnect) {
+    final peer = widget.peer;
+    final model = Provider.of<PeerTabModel>(context);
+    hideUsernameOnCard ??=
+        bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
+    final host = [
+      if (hideUsernameOnCard != true && peer.username.isNotEmpty) peer.username,
+      if (peer.hostname.isNotEmpty) peer.hostname,
+    ].join('@');
+    final grid = Theme.of(context).platform != TargetPlatform.iOS &&
+        !stateGlobal.isPortrait.value &&
+        peerCardUiType.value == PeerUiType.grid;
+    Widget desktopAction(String label, IconData icon, VoidCallback onPressed,
+            {bool primary = false}) =>
+        grid
+            ? TextButton(
+                style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 28),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    backgroundColor: primary
+                        ? Theme.of(context).colorScheme.primary
+                        : WorkspaceStyle.elevatedSurface(context),
+                    foregroundColor: primary
+                        ? Theme.of(context).colorScheme.onPrimary
+                        : Theme.of(context).colorScheme.onSurface,
+                    textStyle: const TextStyle(fontSize: 11),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6))),
+                onPressed: onPressed,
+                child: Text(translate(label)))
+            : IconButton(
+                tooltip: translate(label),
+                visualDensity: VisualDensity.compact,
+                icon: Icon(icon, size: 18),
+                onPressed: onPressed);
+    final card = DeviceCard(
+      name: peer.alias.isNotEmpty
+          ? peer.alias
+          : host.isNotEmpty
+              ? host
+              : formatID(peer.id),
+      remoteId: formatID(peer.id),
+      platform: peer.platform,
+      platformIcon: switch (peer.platform.toLowerCase()) {
+        'mac os' || 'macos' || 'darwin' => Icons.grid_view_outlined,
+        'windows' => Icons.window_outlined,
+        'linux' => Icons.terminal_rounded,
+        'android' || 'ios' => Icons.smartphone_outlined,
+        _ => _deviceIcon(peer),
+      },
+      online: peer.online,
+      status: translate(peer.online ? 'Online' : 'Offline'),
+      details: host,
+      note: _showNote(peer) ? peer.note : '',
+      tags: peer.tags.map((tag) => tag.toString()).toList(),
+      grid: grid,
+      selected: model.isPeerSelected(peer.id),
+      passwordSaved: _shouldBuildPasswordIcon(peer),
+      actions: [
+        if (!model.multiSelectionMode &&
+            Theme.of(context).platform != TargetPlatform.iOS) ...[
+          desktopAction(
+              'Transfer file',
+              Icons.folder_outlined,
+              () => connectInPeerTab(context, peer, widget.tab,
+                  isFileTransfer: true)),
+          desktopAction(
+              'Terminal',
+              Icons.terminal_rounded,
+              () => connectInPeerTab(context, peer, widget.tab,
+                  isTerminal: true)),
+          desktopAction('Connect', Icons.arrow_forward_rounded,
+              () => connectInPeerTab(context, peer, widget.tab),
+              primary: true),
+        ] else if (!model.multiSelectionMode)
+          IconButton(
+            tooltip: translate('Transfer file'),
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(6),
+            icon: Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                  color: WorkspaceStyle.elevatedSurface(context),
+                  borderRadius: BorderRadius.circular(8)),
+              child: Icon(Icons.folder_outlined,
+                  size: 14, color: Theme.of(context).hintColor),
+            ),
+            onPressed: () => connectInPeerTab(context, peer, widget.tab,
+                isFileTransfer: true),
+          ),
+        if (!model.multiSelectionMode)
+          Builder(builder: (menuContext) => IconButton(
+            tooltip: translate('More'),
+            visualDensity: VisualDensity.compact,
+            constraints: grid
+                ? const BoxConstraints.tightFor(width: 28, height: 28)
+                : null,
+            padding: grid ? EdgeInsets.zero : null,
+            icon: Icon(Icons.more_horiz, size: 20,
+                color: Theme.of(context).hintColor),
+            onPressed: () {
+              final box = menuContext.findRenderObject() as RenderBox;
+              final position = box.localToGlobal(box.size.bottomLeft(Offset.zero));
+              _menuPos = RelativeRect.fromLTRB(
+                  position.dx, position.dy, position.dx, position.dy);
+              _showPeerMenu(peer.id);
+            },
+          ))
+        else if (stateGlobal.isPortrait.value)
+          checkBoxOrActionMorePortrait(peer)
+        else
+          checkBoxOrActionMoreLandscape(peer, isTile: !grid),
+      ],
+    );
+    void openMenu(Offset position) {
+      _menuPos = RelativeRect.fromLTRB(
+          position.dx, position.dy, position.dx, position.dy);
+      _showPeerMenu(peer.id);
+    }
+
+    final child = onConnect == null
+        ? gestureDetector(child: card)
+        : GestureDetector(
+            onTap: () => model.multiSelectionMode
+                ? model.select(peer)
+                : onConnect(peer, widget.tab),
+            onDoubleTap: model.multiSelectionMode
+                ? null
+                : () => onConnect(peer, widget.tab),
+            onLongPress: () => model.select(peer),
+            child: card,
+          );
+    return GestureDetector(
+        onSecondaryTapDown: (event) => openMenu(event.globalPosition),
+        child: MouseRegion(cursor: SystemMouseCursors.click, child: child));
   }
 
   Widget _connectionRow(void Function(Peer, PeerTabIndex) onConnect) {

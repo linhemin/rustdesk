@@ -234,11 +234,18 @@ class _PeersViewState extends State<_PeersView>
 
   Widget _buildPeersView(Peers peers) {
     final updateEvent = peers.event;
+    final iPhone = !isWeb && Theme.of(context).platform == TargetPlatform.iOS;
+    final workspaceCards = !isWeb &&
+        const {TargetPlatform.iOS, TargetPlatform.macOS, TargetPlatform.windows}
+            .contains(Theme.of(context).platform);
+    final cardTextGrowth =
+        (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 28).toDouble() * 4;
     final body = ObxValue<RxList>((filters) {
       return FutureBuilder<List<Peer>>(
         builder: (context, snapshot) {
           if (snapshot.hasData) {
-            final compact = ConnectionPeerList.of(context)?.onConnect != null;
+            final compact = !workspaceCards &&
+                ConnectionPeerList.of(context)?.onConnect != null;
             var peers = snapshot.data!;
             if (peers.length > 1000) peers = peers.sublist(0, 1000);
             gFFI.peerTabModel.setCurrentTabCachedPeers(peers);
@@ -257,20 +264,30 @@ class _PeersViewState extends State<_PeersView>
               // and the peers change event will trigger _buildPeersView().
               return !isPortrait
                   ? Obx(() => peerCardUiType.value == PeerUiType.list
-                      ? Container(height: 45, child: visibilityChild)
+                      ? Container(
+                          height: workspaceCards ? 70 + cardTextGrowth : 45,
+                          child: visibilityChild)
                       : peerCardUiType.value == PeerUiType.grid
                           ? SizedBox(
-                              width: 220, height: 140, child: visibilityChild)
+                              width: workspaceCards ? 340 : 220,
+                              height: workspaceCards
+                                  ? 156 + cardTextGrowth * 2.5
+                                  : 140,
+                              child: visibilityChild)
                           : SizedBox(
-                              width: 220, height: 42, child: visibilityChild))
+                              width: workspaceCards ? 300 : 220,
+                              height: workspaceCards ? 70 + cardTextGrowth : 42,
+                              child: visibilityChild))
                   : Container(child: visibilityChild);
             }
 
             // We should avoid too many rebuilds. Win10(Some machines) on Flutter 3.19.6.
             // Continious rebuilds of `ListView.builder` will cause memory leak.
             // Simple demo can reproduce this issue.
-            final Widget child = Obx(() => stateGlobal.isPortrait.isTrue
+            final Widget child = Obx(() => (stateGlobal.isPortrait.isTrue || iPhone)
                 ? ListView.builder(
+                    padding: iPhone ? EdgeInsets.only(
+                        bottom: MediaQuery.paddingOf(context).bottom + 16) : null,
                     itemCount: peers.length,
                     itemBuilder: (BuildContext context, int index) {
                       return buildOnePeer(peers[index], true).marginOnly(

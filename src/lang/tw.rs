@@ -853,7 +853,12 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Direct connection required by server", "伺服器要求使用直接連線"),
         ("Direct connection unavailable in direct-only mode", "已啟用僅直連模式，無法與對方裝置建立直接連線"),
         ("Direct-only mode conflicts with forced relay", "僅直連模式與強制中繼設定衝突"),
+        ("Recent", "最近"),
+        ("LAN", "區域網路"),
+        ("Enter remote ID or device name…", "輸入遠端 ID 或裝置名稱…"),
+        ("Scan QR code", "掃描 QR 碼"),
         ("Home and devices", "首頁與裝置"),
         ("Remote sessions", "遠端工作階段"),
+        ("Invalid QR code", "無效的 QR 碼"),
     ].iter().cloned().collect();
 }

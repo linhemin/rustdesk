@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import '../../../models/platform_model.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -110,7 +111,7 @@ class AllPeersLoader {
   void Function(VoidCallback)? _setState;
   bool _isCleared = false;
 
-  final String _listenerKey = 'AllPeersLoader';
+  final String _listenerKey = const Uuid().v4();
   static const String _cbQueryOnlines = 'callback_query_onlines';
   static const Duration _queryOnlineInterval = Duration(seconds: 5);
   static const Duration _defaultQueryOnlineDebounce =

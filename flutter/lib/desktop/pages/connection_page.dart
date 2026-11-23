@@ -425,16 +425,6 @@ class _ConnectionPageState extends State<ConnectionPage>
                             child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  SessionModePicker(
-                                      choices: [
-                                        for (final mode in _modes)
-                                          WorkspaceDestination(
-                                              translate(mode.$1), mode.$2)
-                                      ],
-                                      selected: _mode,
-                                      onSelect: (value) =>
-                                          setState(() => _mode = value)),
-                                  const SizedBox(height: 10),
                                   LayoutBuilder(builder: (context, bounds) {
                                     final form =
                                         _buildRemoteIDTextField(context);
@@ -603,19 +593,30 @@ class _ConnectionPageState extends State<ConnectionPage>
                   enableSuggestions: false,
                   keyboardType: TextInputType.visiblePassword,
                   focusNode: fieldFocusNode,
-                  style: const TextStyle(
-                    fontFamily: 'WorkSans',
-                    fontSize: 22,
+                  style: TextStyle(
+                    fontFamily: usesWorkspaceStyle ? 'monospace' : 'WorkSans',
+                    fontSize: usesWorkspaceStyle ? 15 : 22,
                     height: 1.4,
                   ),
                   maxLines: 1,
                   cursorColor: Theme.of(context).textTheme.titleLarge?.color,
                   decoration: InputDecoration(
-                      filled: false,
+                      filled: usesWorkspaceStyle,
+                      fillColor: usesWorkspaceStyle
+                          ? WorkspaceStyle.well(context)
+                          : null,
+                      prefixIcon: usesWorkspaceStyle
+                          ? Icon(Icons.arrow_forward_rounded,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.primary)
+                          : null,
                       counterText: '',
                       hintText: _idInputFocused.value
                           ? null
-                          : translate('Enter Remote ID'),
+                          : translate(
+                              usesWorkspaceStyle && (isMacOS || isWindows)
+                                  ? 'Enter remote ID or device name…'
+                                  : 'Enter Remote ID'),
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 15, vertical: 13)),
                   controller: fieldTextEditingController,
@@ -699,7 +700,7 @@ class _ConnectionPageState extends State<ConnectionPage>
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           SizedBox(
-            height: usesWorkspaceStyle ? 38 : 28,
+            height: usesWorkspaceStyle ? 44 : 28,
             child: ElevatedButton(
               onPressed: () {
                 _startSelectedMode();
@@ -709,8 +710,8 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
           const SizedBox(width: 8),
           Container(
-            height: usesWorkspaceStyle ? 38 : 28,
-            width: usesWorkspaceStyle ? 38 : 28,
+            height: usesWorkspaceStyle ? 44 : 28,
+            width: usesWorkspaceStyle ? 36 : 28,
             decoration: BoxDecoration(
               border: Border.all(color: Theme.of(context).dividerColor),
               borderRadius: BorderRadius.circular(8),
@@ -797,22 +798,41 @@ class _ConnectionPageState extends State<ConnectionPage>
           ),
         ]);
     if (usesWorkspaceStyle) {
-      return ConnectionPanel(
-        title: translate('Remote ID'),
-        help: Tooltip(
-            message: translate('id_input_tip'),
-            child: Icon(Icons.info_outline,
-                size: 16, color: Theme.of(context).hintColor)),
-        controls: LayoutBuilder(builder: (context, bounds) {
-          if (bounds.maxWidth >= 395) {
-            return Row(children: [
-              Expanded(child: field),
-              const SizedBox(width: 12),
-              actions
-            ]);
-          }
-          return Column(children: [field, const SizedBox(height: 8), actions]);
-        }),
+      return WorkspacePanel(
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            alignment: WrapAlignment.spaceBetween,
+            children: [
+              Tooltip(
+                  message: translate('id_input_tip'),
+                  child: Text(translate('New Connection'),
+                      style: Theme.of(context).textTheme.titleSmall)),
+              SessionModePicker(
+                  choices: [
+                    for (final mode in _modes)
+                      WorkspaceDestination(translate(mode.$1), mode.$2)
+                  ],
+                  selected: _mode,
+                  onSelect: (value) => setState(() => _mode = value)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          LayoutBuilder(builder: (context, bounds) {
+            if (bounds.maxWidth >= 395) {
+              return Row(children: [
+                Expanded(child: field),
+                const SizedBox(width: 12),
+                actions
+              ]);
+            }
+            return Column(
+                children: [field, const SizedBox(height: 8), actions]);
+          }),
+        ]),
       );
     }
     final w = Container(

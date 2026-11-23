@@ -7,6 +7,7 @@ import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/my_group.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
+import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
 import 'package:flutter_hbb/desktop/widgets/material_mod_popup_menu.dart'
@@ -115,7 +116,11 @@ class _PeerTabPageState extends State<PeerTabPage>
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Obx(() => SizedBox(
-              height: iPhone ? 48 : 32,
+              height: iPhone
+                  ? 44
+                  : usesWorkspaceStyle
+                      ? 40
+                      : 32,
               child: Container(
                 padding: stateGlobal.isPortrait.isTrue
                     ? EdgeInsets.symmetric(horizontal: 2)
@@ -128,14 +133,29 @@ class _PeerTabPageState extends State<PeerTabPage>
                             ? _iPhoneCollection(context, model)
                             : visibleContextMenuListener(
                                 _createSwitchBar(context))),
-                    if (stateGlobal.isPortrait.isTrue)
+                    if (!iPhone && stateGlobal.isPortrait.isTrue)
                       ..._portraitRightActions(context)
-                    else
+                    else if (!iPhone)
                       ..._landscapeRightActions(context)
                   ],
                 )),
               ),
             ).paddingOnly(right: stateGlobal.isPortrait.isTrue ? 0 : 12)),
+        if (iPhone)
+          Obx(() => peerSearchText.value.isEmpty
+              ? const SizedBox.shrink()
+              : Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: InputChip(
+                    label: Text('${translate('Search')}: ${peerSearchText.value}',
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    deleteButtonTooltipMessage: translate('Clear'),
+                    onDeleted: () {
+                      peerSearchTextController.clear();
+                      peerSearchText.value = '';
+                    },
+                  ),
+                )),
         _createPeersView(),
       ],
     );
@@ -161,7 +181,12 @@ class _PeerTabPageState extends State<PeerTabPage>
               color: Theme.of(context).colorScheme.background,
               borderRadius: BorderRadius.circular(6));
           final decoBorder = BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withOpacity(.12),
+            color: usesWorkspaceStyle
+                ? Theme.of(context).cardColor
+                : Theme.of(context).colorScheme.primary.withOpacity(.12),
+            border: usesWorkspaceStyle
+                ? Border.all(color: WorkspaceStyle.strongBorder(context))
+                : null,
             borderRadius: BorderRadius.circular(8),
           );
           counter += 1;
@@ -177,13 +202,18 @@ class _PeerTabPageState extends State<PeerTabPage>
                         decoration: (hover.value
                             ? (selected ? decoBorder : deco)
                             : (selected ? decoBorder : null)),
-                        child: labeled && selected
+                        child: labeled
                             ? Row(mainAxisSize: MainAxisSize.min, children: [
-                                Icon(model.tabIcon(t), size: 18, color: color),
-                                const SizedBox(width: 6),
                                 Text(model.tabTooltip(t),
-                                    style:
-                                        Theme.of(context).textTheme.labelLarge),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelLarge
+                                        ?.copyWith(
+                                            color: selected
+                                                ? Theme.of(context)
+                                                    .colorScheme
+                                                    .onSurface
+                                                : Theme.of(context).hintColor)),
                               ]).paddingSymmetric(horizontal: 8)
                             : Icon(model.tabIcon(t), color: color)
                                 .paddingSymmetric(horizontal: 4),
@@ -202,85 +232,186 @@ class _PeerTabPageState extends State<PeerTabPage>
   }
 
   Widget _iPhoneCollection(BuildContext context, PeerTabModel model) {
-    return Align(
-      alignment: AlignmentDirectional.centerStart,
-      child: TextButton(
-        onPressed: () async {
-          FocusManager.instance.primaryFocus?.unfocus();
-          final selected = await showModalBottomSheet<int>(
-            context: context,
-            useSafeArea: true,
-            isScrollControlled: true,
-            builder: (sheetContext) => SafeArea(
-              top: false,
-              child: ListenableBuilder(
-                listenable: model,
-                builder: (context, _) {
-                  final tabs = model.visibleEnabledOrderedIndexs;
-                  return ReorderableListView(
-                    shrinkWrap: true,
-                    buildDefaultDragHandles: false,
-                    onReorder: model.reorder,
-                    header: ListTile(
-                      title: Text(translate('Accessible devices'),
-                          style: Theme.of(context).textTheme.titleLarge),
-                      trailing: PopupMenuButton<int>(
-                        enabled: !isOptVisiableFixed,
-                        tooltip: translate('Change view'),
-                        icon: const Icon(Icons.tune_rounded),
-                        onSelected: (tab) => model.setTabVisible(
-                            tab, !model.isVisibleEnabled[tab]),
-                        itemBuilder: (_) => [
-                          for (final tab in model.orders)
-                            if (model.isEnabled[tab])
-                              CheckedPopupMenuItem(
-                                  value: tab,
-                                  checked: model.isVisibleEnabled[tab],
-                                  child: Text(model.tabTooltip(tab))),
-                        ],
+    final theme = Theme.of(context);
+    String label(int tab) => switch (PeerTabIndex.values[tab]) {
+          PeerTabIndex.recent => translate('Recent'),
+          PeerTabIndex.lan => translate('LAN'),
+          _ => model.tabTooltip(tab),
+        };
+    return Row(children: [
+      Expanded(
+          child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final tab in model.visibleEnabledOrderedIndexs)
+            if (tab != PeerTabIndex.group.index ||
+                tab == model.currentTab ||
+                model.visibleEnabledOrderedIndexs.length == 1)
+              Padding(
+                padding: const EdgeInsetsDirectional.only(end: 6),
+                child: Semantics(
+                  selected: tab == model.currentTab,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      backgroundColor: tab == model.currentTab
+                          ? theme.colorScheme.onSurface
+                          : theme.cardColor,
+                      foregroundColor: tab == model.currentTab
+                          ? theme.scaffoldBackgroundColor
+                          : theme.hintColor,
+                      side: BorderSide(color: theme.dividerColor),
+                      shape: const StadiumBorder(),
+                      textStyle: const TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w500),
+                    ),
+                    onPressed: isOptionFixed(kOptionPeerTabIndex)
+                        ? null
+                        : () async {
+                            await handleTabSelection(tab);
+                            await bind.setLocalFlutterOption(
+                                k: kOptionPeerTabIndex, v: tab.toString());
+                          },
+                    child: Text(label(tab)),
+                  ),
+                ),
+              ),
+        ]),
+      )),
+      IconButton(
+        tooltip: translate('More'),
+        onPressed: () => _showIPhoneCollectionMenu(context, model),
+        icon: const Icon(Icons.more_horiz_rounded, size: 18),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 40, minHeight: 44),
+      ),
+    ]);
+  }
+
+  Future<void> _showIPhoneCollectionMenu(
+      BuildContext context, PeerTabModel model) async {
+    FocusManager.instance.primaryFocus?.unfocus();
+    final selected = await showModalBottomSheet<int>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        minimum: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(sheetContext).bottom),
+        child: ListenableBuilder(
+          listenable: model,
+          builder: (context, _) {
+            final tabs = model.visibleEnabledOrderedIndexs;
+            return ReorderableListView(
+              shrinkWrap: true,
+              buildDefaultDragHandles: false,
+              onReorder: model.reorder,
+              header: Column(children: [
+                ListTile(
+                  title: Text(translate('More'),
+                      style: Theme.of(context).textTheme.titleLarge),
+                  trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconButton(
+                      tooltip: translate('Close'),
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                    PopupMenuButton<int>(
+                      enabled: !isOptVisiableFixed,
+                      tooltip: translate('Change view'),
+                      icon: const Icon(Icons.tune_rounded),
+                      onSelected: (tab) => model.setTabVisible(
+                          tab, !model.isVisibleEnabled[tab]),
+                      itemBuilder: (_) => [
+                        for (final tab in model.orders)
+                          if (model.isEnabled[tab])
+                            CheckedPopupMenuItem(
+                                value: tab,
+                                checked: model.isVisibleEnabled[tab],
+                                child: Text(model.tabTooltip(tab))),
+                      ],
+                    ),
+                  ]),
+                ),
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Column(children: [
+                    TextField(
+                      controller: peerSearchTextController,
+                      onChanged: (value) => peerSearchText.value = value,
+                      decoration: InputDecoration(
+                        hintText: translate('Search'),
+                        prefixIcon: const Icon(Icons.search_rounded),
+                        suffixIcon: IconButton(
+                          tooltip: translate('Clear'),
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            peerSearchTextController.clear();
+                            peerSearchText.value = '';
+                          },
+                        ),
                       ),
                     ),
-                    children: [
-                      for (var i = 0; i < tabs.length; i++)
-                        ListTile(
-                          key: ValueKey(tabs[i]),
-                          leading: Icon(model.tabIcon(tabs[i])),
-                          title: Text(model.tabTooltip(tabs[i])),
-                          selected: tabs[i] == model.currentTab,
-                          enabled: !isOptionFixed(kOptionPeerTabIndex),
-                          trailing: ReorderableDragStartListener(
-                            index: i,
-                            child: const Padding(
-                              padding: EdgeInsets.all(12),
-                              child: Icon(Icons.drag_handle_rounded),
+                    Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          if (model.currentTab != PeerTabIndex.recent.index)
+                            PeerSortDropdown(),
+                          if (model.currentTab == PeerTabIndex.ab.index ||
+                              model.currentTab == PeerTabIndex.group.index)
+                            TextButton.icon(
+                              label: Text(translate('Refresh')),
+                              icon: const Icon(Icons.refresh, size: 18),
+                              onPressed: () =>
+                                  entries[model.currentTab].load?.call(),
                             ),
-                          ),
-                          onTap: () => Navigator.pop(sheetContext, tabs[i]),
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ),
-          );
-          if (!mounted || selected == null) return;
-          await handleTabSelection(selected);
-          await bind.setLocalFlutterOption(
-              k: kOptionPeerTabIndex, v: selected.toString());
-        },
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Flexible(
-              child: Text(
-                  model.visibleEnabledOrderedIndexs.isEmpty
-                      ? translate('Accessible devices')
-                      : model.tabTooltip(model.currentTab),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis)),
-          const SizedBox(width: 4),
-          const Icon(Icons.expand_more_rounded, size: 18),
-        ]),
+                          if (_showWebConsole(model)) _openWebConsole(),
+                          if (model.currentTab == PeerTabIndex.ab.index)
+                            _toggleTags(),
+                          if (model.currentTabCachedPeers.isNotEmpty)
+                            TextButton.icon(
+                              label: Text(translate('Select')),
+                              icon: const Icon(Icons.check_box_outlined),
+                              onPressed: () {
+                                Navigator.pop(sheetContext);
+                                model.setMultiSelectionMode(true);
+                              },
+                            ),
+                        ]),
+                  ]),
+                ),
+              ]),
+              children: [
+                for (var i = 0; i < tabs.length; i++)
+                  ListTile(
+                    key: ValueKey(tabs[i]),
+                    leading: Icon(model.tabIcon(tabs[i])),
+                    title: Text(model.tabTooltip(tabs[i])),
+                    selected: tabs[i] == model.currentTab,
+                    enabled: !isOptionFixed(kOptionPeerTabIndex),
+                    trailing: ReorderableDragStartListener(
+                      index: i,
+                      child: const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Icon(Icons.drag_handle_rounded),
+                      ),
+                    ),
+                    onTap: () => Navigator.pop(sheetContext, tabs[i]),
+                  ),
+              ],
+            );
+          },
+        ),
       ),
     );
+    if (!mounted || selected == null) return;
+    await handleTabSelection(selected);
+    await bind.setLocalFlutterOption(
+        k: kOptionPeerTabIndex, v: selected.toString());
   }
 
   Widget _createPeersView() {
@@ -682,7 +813,10 @@ class _PeerTabPageState extends State<PeerTabPage>
         offstage: model.currentTabCachedPeers.isEmpty,
         child: _createMultiSelection(),
       ),
-      if (ConnectionPeerList.of(context)?.onConnect == null)
+      if ((usesWorkspaceStyle &&
+              const {TargetPlatform.macOS, TargetPlatform.windows}
+                  .contains(Theme.of(context).platform)) ||
+          ConnectionPeerList.of(context)?.onConnect == null)
         _createPeerViewTypeSwitch(context),
       Offstage(
         offstage: model.currentTab == PeerTabIndex.recent.index,
