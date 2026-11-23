@@ -553,20 +553,18 @@ impl Client {
                 } else {
                     // An authenticated upgrade has four seconds to present its session ticket.
                     // Give UDP its head start before opening the fallback TCP connection.
-                    let udp_path = if crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() {
-                        tokio::time::timeout(transport_preference::tcp_wait(Self::udp_preference_window()), udp)
-                            .await.ok().and_then(Result::ok)
-                    } else {
-                        drop(udp);
-                        None
-                    };
-                    match udp_path {
-                        Some(path) => path,
-                        None => {
-                            let tcp_permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
-                            Self::_start_inner(peer, key, token, ConnType::DEFAULT_CONN, interface,
-                                (None, None), None, None, None, server, Vec::new(), true, &tcp_permission).await?
+                    let tcp_permission = DirectRetryPermission { direct_only: true, native_upgrade: true, ..Default::default() };
+                    let tcp = Self::_start_inner(peer.clone(), key.clone(), token.clone(), ConnType::DEFAULT_CONN, interface,
+                        (None, None), None, None, None, server, Vec::new(), true, &tcp_permission);
+                    if crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() {
+                        tokio::pin!(udp);
+                        match tokio::time::timeout(transport_preference::tcp_wait(Self::udp_preference_window()), &mut udp).await {
+                            Ok(Ok(path)) => path,
+                            Ok(Err(_)) => tcp.await?,
+                            Err(_) => hbb_common::futures_util::future::select_ok([udp.boxed(), tcp.boxed()]).await?.0,
                         }
+                    } else {
+                        tcp.await?
                     }
                 };
                 let ((stream, direct, pk, kcp, label), _, _) = path;

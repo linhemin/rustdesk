@@ -137,7 +137,9 @@ impl Mode {
                     _closed: None,
                 })
             };
-            let lane = match hbb_common::timeout(45_000, attempt).await {
+            // Includes rendezvous, the bounded UDP probe window and the authenticated attachment.
+            let budget = if crate::get_udp_punch_enabled() { 75_000 } else { 45_000 };
+            let lane = match hbb_common::timeout(budget, attempt).await {
                 Ok(Ok(lane)) => Some(lane),
                 result => {
                     let reason = match result {
