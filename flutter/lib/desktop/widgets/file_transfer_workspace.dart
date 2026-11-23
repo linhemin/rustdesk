@@ -68,7 +68,8 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, bounds) {
           final dualPane = bounds.maxWidth >= 780;
-          final showBrowsers = !_showQueue || dualPane;
+          final bottomQueue = dualPane && bounds.maxHeight >= 480;
+          final showBrowsers = !_showQueue || bottomQueue;
           final queueButton = TextButton.icon(
             onPressed: () => setState(() => _showQueue = !_showQueue),
             icon: const Icon(Icons.swap_vert_rounded, size: 18),
@@ -106,7 +107,7 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
                         dualPane ? .5 : 1),
                     if (dualPane) Center(child: VerticalDivider(width: 1)),
                   ]),
-                  if (_showQueue && !dualPane) widget.queue,
+                  if (_showQueue && !bottomQueue) widget.queue,
                 ]),
               ),
               const Divider(height: 1),
@@ -124,7 +125,7 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
                   ]),
                 ),
               ),
-              if (_showQueue && dualPane)
+              if (_showQueue && bottomQueue)
                 SizedBox(
                   height: (bounds.maxHeight * .38).clamp(100.0, 260.0),
                   child: widget.queue,

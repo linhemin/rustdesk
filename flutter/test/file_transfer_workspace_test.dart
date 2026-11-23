@@ -75,5 +75,16 @@ void main() {
     expect(find.text('Active job'), findsOneWidget);
     expect(find.text('Downloads'), findsOneWidget);
     expect(find.text('Documents'), findsOneWidget);
+
+    tester.view.physicalSize = const Size(1200, 280);
+    await tester.pumpAndSettle();
+    expect(find.text('Active job'), findsOneWidget);
+    expect(find.text('Downloads'), findsNothing);
+    expect(find.text('Documents'), findsNothing);
+    await tester.tap(find.text('Status'));
+    await tester.pumpAndSettle();
+    expect(find.text('Downloads'), findsOneWidget);
+    expect(find.text('Documents'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }
