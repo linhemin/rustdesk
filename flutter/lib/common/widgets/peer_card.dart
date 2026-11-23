@@ -73,7 +73,9 @@ class _PeerCardState extends State<_PeerCard>
     if (!isWeb &&
         const {TargetPlatform.iOS, TargetPlatform.macOS, TargetPlatform.windows}
             .contains(Theme.of(context).platform)) {
-      return Obx(() => _workspaceCard(onConnect));
+      return Theme.of(context).platform == TargetPlatform.iOS
+          ? _workspaceCard(onConnect)
+          : Obx(() => _workspaceCard(onConnect));
     }
     if (onConnect != null) return _connectionRow(onConnect);
     return Obx(() =>
