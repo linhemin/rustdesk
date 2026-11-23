@@ -32,7 +32,7 @@ class ScanPage extends StatefulWidget {
     if (uri != null) {
       handleUriLink(uri: uri);
     } else {
-      showToast('Invalid QR code');
+      showToast(translate('Invalid QR code'));
     }
   }
 

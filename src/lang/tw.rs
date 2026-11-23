@@ -859,5 +859,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Scan QR code", "掃描 QR 碼"),
         ("Home and devices", "首頁與裝置"),
         ("Remote sessions", "遠端工作階段"),
+        ("Invalid QR code", "無效的 QR 碼"),
     ].iter().cloned().collect();
 }
