@@ -299,6 +299,8 @@ class _PeerTabPageState extends State<PeerTabPage>
       showDragHandle: true,
       builder: (sheetContext) => SafeArea(
         top: false,
+        minimum: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(sheetContext).bottom),
         child: ListenableBuilder(
           listenable: model,
           builder: (context, _) {
