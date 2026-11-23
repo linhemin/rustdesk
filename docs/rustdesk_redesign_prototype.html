@@ -1,0 +1,2528 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RustDesk 全端重构高保真交互设计稿 v3 — Desktop / iOS / Android</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+    .font-mono-num {
+      font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Scoped RustDesk App Preview Theme Tokens (Dark - Studio Obsidian) */
+    [data-rd-theme="dark"] {
+      --rd-canvas: #0B0D11;
+      --rd-sidebar: #101319;
+      --rd-surface: #151921;
+      --rd-surface-2: #1C212C;
+      --rd-well: #0E1015;
+      --rd-border: rgba(255, 255, 255, 0.085);
+      --rd-border-strong: rgba(255, 255, 255, 0.14);
+      --rd-ink: #F2F4F8;
+      --rd-ink-2: #9AA3B2;
+      --rd-ink-3: #667082;
+      --rd-accent: #4C8BF5;
+      --rd-accent-hover: #3B7BE8;
+      --rd-accent-soft: rgba(76, 139, 245, 0.15);
+      --rd-accent-border: rgba(76, 139, 245, 0.36);
+      --rd-green: #10B981;
+      --rd-green-soft: rgba(16, 185, 129, 0.14);
+      --rd-amber: #F59E0B;
+      --rd-amber-soft: rgba(245, 158, 11, 0.14);
+      --rd-purple: #A78BFA;
+      --rd-purple-soft: rgba(167, 139, 250, 0.14);
+      --rd-red: #EF4444;
+      --rd-red-soft: rgba(239, 68, 68, 0.15);
+      --rd-glass: rgba(18, 22, 30, 0.80);
+      --rd-glass-strong: rgba(16, 20, 28, 0.92);
+      --rd-liquid-bg: linear-gradient(180deg, rgba(46, 54, 70, 0.62) 0%, rgba(22, 26, 36, 0.72) 100%);
+      --rd-liquid-border: rgba(255, 255, 255, 0.22);
+      --rd-liquid-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.30), inset 0 -1px 0 rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.48);
+      --rd-liquid-lens: linear-gradient(180deg, rgba(255, 255, 255, 0.19) 0%, rgba(255, 255, 255, 0.08) 100%);
+      --rd-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    }
+
+    /* Scoped RustDesk App Preview Theme Tokens (Light - Crisp Porcelain) */
+    [data-rd-theme="light"] {
+      --rd-canvas: #F5F6F9;
+      --rd-sidebar: #ECEFF4;
+      --rd-surface: #FFFFFF;
+      --rd-surface-2: #F2F4F8;
+      --rd-well: #F8F9FB;
+      --rd-border: rgba(15, 23, 42, 0.085);
+      --rd-border-strong: rgba(15, 23, 42, 0.14);
+      --rd-ink: #11141A;
+      --rd-ink-2: #576071;
+      --rd-ink-3: #8590A0;
+      --rd-accent: #2563EB;
+      --rd-accent-hover: #1D4ED8;
+      --rd-accent-soft: rgba(37, 99, 235, 0.10);
+      --rd-accent-border: rgba(37, 99, 235, 0.28);
+      --rd-green: #059669;
+      --rd-green-soft: rgba(5, 150, 105, 0.11);
+      --rd-amber: #D97706;
+      --rd-amber-soft: rgba(217, 119, 6, 0.12);
+      --rd-purple: #7C3AED;
+      --rd-purple-soft: rgba(124, 58, 237, 0.11);
+      --rd-red: #DC2626;
+      --rd-red-soft: rgba(220, 38, 38, 0.11);
+      --rd-glass: rgba(255, 255, 255, 0.82);
+      --rd-glass-strong: rgba(255, 255, 255, 0.94);
+      --rd-liquid-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.78) 0%, rgba(242, 245, 252, 0.68) 100%);
+      --rd-liquid-border: rgba(255, 255, 255, 0.85);
+      --rd-liquid-highlight: inset 0 1.5px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(15, 23, 42, 0.08), 0 10px 28px rgba(15, 23, 42, 0.14), 0 1px 3px rgba(15, 23, 42, 0.08);
+      --rd-liquid-lens: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(235, 242, 255, 0.72) 100%);
+      --rd-shadow: 0 20px 50px rgba(15, 23, 42, 0.14);
+    }
+
+    .rd-surface { background: var(--rd-surface); border: 1px solid var(--rd-border); }
+    .rd-surface-2 { background: var(--rd-surface-2); border: 1px solid var(--rd-border); }
+    .rd-glass {
+      background: var(--rd-glass);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      border: 1px solid var(--rd-border-strong);
+    }
+    .rd-glass-dark {
+      background: rgba(15, 19, 27, 0.78);
+      backdrop-filter: blur(22px) saturate(170%);
+      -webkit-backdrop-filter: blur(22px) saturate(170%);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #F2F4F8;
+    }
+
+    /* Authentic iOS 26 Native Liquid Glass Bar */
+    .ios-liquid-glass {
+      background: var(--rd-liquid-bg);
+      backdrop-filter: blur(28px) saturate(210%);
+      -webkit-backdrop-filter: blur(28px) saturate(210%);
+      border: 1px solid var(--rd-liquid-border);
+      box-shadow: var(--rd-liquid-highlight);
+    }
+    .ios-liquid-lens {
+      background: var(--rd-liquid-lens);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+    .rd-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+    .rd-scroll::-webkit-scrollbar-track { background: transparent; }
+    .rd-scroll::-webkit-scrollbar-thumb { background: var(--rd-border-strong); border-radius: 99px; }
+
+    .rd-switch {
+      width: 38px; height: 22px; border-radius: 999px; position: relative;
+      background: var(--rd-border-strong); transition: background 160ms ease; cursor: pointer; flex-shrink: 0;
+    }
+    .rd-switch[data-on="true"] { background: var(--rd-accent); }
+    .rd-switch::after {
+      content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+      border-radius: 999px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.28);
+      transition: transform 160ms cubic-bezier(.2,.8,.2,1);
+    }
+    .rd-switch[data-on="true"]::after { transform: translateX(16px); }
+
+    .remote-wallpaper {
+      background:
+        radial-gradient(circle at 20% 25%, rgba(76, 139, 245, 0.28), transparent 46%),
+        radial-gradient(circle at 80% 75%, rgba(16, 185, 129, 0.20), transparent 44%),
+        linear-gradient(135deg, #0b101d 0%, #141c2f 52%, #0c101b 100%);
+    }
+
+    .device-bezel-ios {
+      border-radius: 48px;
+      padding: 10px;
+      background: linear-gradient(145deg, #2d323e, #12151c);
+      box-shadow: 0 26px 65px rgba(0,0,0,0.42), inset 0 0 0 1px rgba(255,255,255,0.16);
+    }
+    .device-bezel-android {
+      border-radius: 36px;
+      padding: 9px;
+      background: linear-gradient(145deg, #272b34, #12141a);
+      box-shadow: 0 26px 65px rgba(0,0,0,0.42), inset 0 0 0 1px rgba(255,255,255,0.12);
+    }
+    .desktop-frame {
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid var(--rd-border-strong);
+      box-shadow: var(--rd-shadow);
+    }
+
+    @keyframes pulseRing {
+      0% { transform: translate(-50%,-50%) scale(0.5); opacity: 0.9; }
+      100% { transform: translate(-50%,-50%) scale(2.2); opacity: 0; }
+    }
+    .click-ripple {
+      position: absolute; width: 22px; height: 22px; border-radius: 999px;
+      border: 2px solid #60A5FA; pointer-events: none;
+      animation: pulseRing 420ms ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased min-h-screen m-0 p-0">
+
+  <!-- Top Studio Header -->
+  <header class="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--card)]/95 backdrop-blur">
+    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg flex items-center justify-center bg-blue-600 text-white font-bold text-sm shadow-sm shrink-0">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2.5"></rect>
+            <path d="M8 21h8M12 17v4"></path>
+            <path d="M9 10l2 2 4-4"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-sm font-semibold tracking-tight text-[var(--foreground)]">RustDesk 全端交互设计稿 v3</h1>
+            <span class="px-2 py-0.5 text-[11px] font-medium rounded-full bg-emerald-500/15 text-emerald-500 border border-emerald-500/25 whitespace-nowrap">零 Emoji · 全矢量 SVG</span>
+          </div>
+          <p class="text-xs text-[var(--muted-foreground)]">桌面单层分组侧栏设置 · 双端统一 Awesun 仿向日葵环形悬浮鼠标 · iOS Inset-Grouped 设置中心 · 液态玻璃底栏</p>
+        </div>
+      </div>
+
+      <!-- Platform Switcher -->
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--background)] border border-[var(--border)]" id="platformTabs">
+        <button data-platform="desktop" class="plat-btn px-3 py-1.5 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap">桌面端</button>
+        <button data-platform="ios" class="plat-btn px-3 py-1.5 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap">iOS 端</button>
+        <button data-platform="android" class="plat-btn px-3 py-1.5 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap">Android 端</button>
+        <button data-platform="tokens" class="plat-btn px-3 py-1.5 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap">设计规范 & 改动清单</button>
+      </div>
+
+      <!-- Preview Theme Switcher -->
+      <div class="flex items-center gap-1 p-1 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+        <button id="themeDarkBtn" class="px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap">深色 Obsidian</button>
+        <button id="themeLightBtn" class="px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap">浅色 Porcelain</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sub-toolbar: Screen Selector -->
+  <div class="border-b border-[var(--border)] bg-[var(--background)]">
+    <div class="max-w-[1440px] mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-2 flex-wrap" id="screenPills"></div>
+      <div class="text-xs text-[var(--muted-foreground)]" id="screenHint"></div>
+    </div>
+  </div>
+
+  <!-- Main Preview Canvas -->
+  <main class="max-w-[1440px] mx-auto px-4 sm:px-6 py-6">
+    <div id="stage" data-rd-theme="dark"></div>
+  </main>
+
+  <!-- Global Toast -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 rounded-lg text-xs font-medium bg-neutral-900 text-white border border-white/15 shadow-xl opacity-0 pointer-events-none transition-opacity duration-200 whitespace-nowrap"></div>
+
+  <!-- Command Palette Modal -->
+  <div id="cmdModal" class="fixed inset-0 z-50 hidden items-start justify-center pt-24 px-4 bg-black/55 backdrop-blur-sm" data-rd-theme="dark">
+    <div class="w-full max-w-lg rounded-xl overflow-hidden shadow-2xl" style="background: var(--rd-surface); border: 1px solid var(--rd-border-strong); color: var(--rd-ink);">
+      <div class="flex items-center gap-2.5 px-4 py-3" style="border-bottom: 1px solid var(--rd-border);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--rd-ink-3)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="cmdInput" type="text" placeholder="输入远程 ID、设备名或命令（连接 / 文件传输 / 终端）…" class="w-full bg-transparent outline-none text-sm" style="color: var(--rd-ink);" />
+        <kbd class="px-1.5 py-0.5 text-[11px] rounded font-mono-num shrink-0" style="background: var(--rd-surface-2); color: var(--rd-ink-3); border: 1px solid var(--rd-border);">ESC</kbd>
+      </div>
+      <div class="p-2 space-y-1 max-h-72 overflow-y-auto rd-scroll" id="cmdResults"></div>
+    </div>
+  </div>
+
+<script>
+const state = {
+  platform: 'desktop',
+  theme: 'dark',
+
+  // Desktop
+  desktopScreen: 'home',
+  desktopTab: 'recent',
+  desktopView: 'grid',
+  desktopMode: 'remote',
+  desktopSearch: '',
+  desktopPassVisible: false,
+  desktopApproveMode: 'both',
+  desktopSettingsCat: 'network',
+  desktopSettingsQuery: '',
+  desktopToolbarCollapsed: false,
+  desktopOpenMenu: null, // 'display' | 'quality' | 'control' | 'more' | null
+  desktopActiveDisplay: 1,
+  desktopQualityPreset: 'balanced', // crisp | balanced | fast
+  desktopScaleMode: 'fit', // fit | original
+  desktopShowQuality: true,
+  desktopShowUdpDetail: false,
+  desktopQualityPos: { x: 20, y: 68 },
+  desktopShowQueue: true,
+
+  // Unified Mobile State (iOS & Android share identical session / file / settings ergonomics!)
+  iosScreen: 'home',
+  iosTab: 'recent',
+  androidScreen: 'home',
+  androidTab: 'recent',
+  androidServiceOn: true,
+
+  // Unified Mobile Remote Session
+  mobileLandscape: false,
+  mobileInputMode: 'trackpad', // trackpad | touch | vmouse
+  mobileCapsuleOpen: false,
+  mobileShowKeyBar: true,
+  mobileShowQuality: false,
+  mobileQualityPos: { x: 14, y: 62 },
+  mobileCursor: { x: 52, y: 44 }, // percentage inside remote canvas
+  mobileZoom: 1,
+  mobileDragLock: false,
+  mobileArmedMod: null, // 'Ctrl' | 'Alt' | '⌘' | null
+  mobileVmousePos: { x: 64, y: 58 },
+
+  // Unified Mobile File Transfer
+  mobileFileSide: 'remote', // local | remote
+  mobileFilePath: ['C:', 'Users', 'Admin', 'Workspace'],
+  mobileSelectedFiles: new Set(['render-output-4k.mp4', 'p2p-probe-trace.json']),
+  mobileShowTransferSheet: false,
+
+  // Unified Mobile Settings
+  mobileSettingsSubpage: null, // null | 'server' | 'gestures' | 'shortcuts'
+
+  toggles: {
+    directOnly: false,
+    ipv6Punch: true,
+    udpPunch: true,
+    hwCodec: true,
+    abr: true,
+    preventSleep: true,
+    clipboardSync: true,
+    audioOn: true,
+    privacyMode: false,
+    showRemoteCursor: true,
+    hapticFeedback: true,
+    edgeSwipeProtect: true,
+    autoUpdate: true,
+    lanDiscovery: true,
+    recordSession: false
+  },
+
+  // v3.1 Mobile Remote Session — Awesun (仿向日葵) Radial Mouse + Glass Rail (Unified iOS & Android)
+  ms: {
+    mode: 'pointer',         // 'pointer' | 'touch'
+    mouseVisible: true,      // Awesun virtual mouse enabled
+    mouseCollapsed: false,   // expanded radial wheel vs collapsed docked orb
+    mousePos: null,          // { x, y } center of 188x188 radial mouse in canvas px
+    mouseDockRight: true,
+    mouseDockY: 0.48,
+    wheelOpen: false,        // circular scroll annulus ring
+    wheelAngle: -0.75,       // radians for luminous orb on ring
+    pressed: null,           // 'hub' | 'left' | 'right' | 'wheelTop' | 'wheelBottom' | null
+    dragging: false,
+    displayLocked: false,
+    lockRight: true,
+    lockY: 0.14,
+    soundOn: true,
+    quality: true,
+    qPos: null,
+    functionsOpen: false,    // AwesunFunctionSheet
+    sheet: null,             // null | 'keyboard' | 'keyboardFull' | 'gamepad' | 'guide'
+    mods: {}
+  }
+};
+
+const peers = [
+  { id: '842 190 531', name: 'MacBook Pro M4 · 工作室', os: 'macOS', online: true, transport: 'P2P UDP', latency: '9 ms', group: '主力设备', fav: true, recent: true, lan: true },
+  { id: '391 048 227', name: 'Win11-Workstation RTX4090', os: 'Windows', online: true, transport: 'P2P UDP', latency: '14 ms', group: '主力设备', fav: true, recent: true, lan: true },
+  { id: '605 771 904', name: 'Ubuntu-Build-Node-01', os: 'Linux', online: true, transport: 'QUIC 中继', latency: '28 ms', group: '服务器', fav: true, recent: true, lan: false },
+  { id: '119 882 403', name: 'Pixel 9 Pro · 测试机', os: 'Android', online: true, transport: 'P2P UDP', latency: '18 ms', group: '移动设备', fav: false, recent: true, lan: true },
+  { id: '774 320 618', name: 'Mac Studio · 剪辑机', os: 'macOS', online: false, transport: '离线', latency: '—', group: '主力设备', fav: true, recent: false, lan: false },
+  { id: '520 914 883', name: 'NAS-Home-Debian', os: 'Linux', online: true, transport: '局域网直连', latency: '2 ms', group: '服务器', fav: false, recent: true, lan: true }
+];
+
+const screenDefs = {
+  desktop: [
+    { id: 'home', label: '首页与设备', hint: '修复“直连可达”单行显示 · 顶部快捷连接 + 左侧本机 ID 胶囊 + 设备库 · 按 ⌘K 打开命令面板' },
+    { id: 'incoming', label: '本机被控', hint: '本机 ID、一次性/固定密码、接入策略与系统权限自检' },
+    { id: 'session', label: '远程桌面会话', hint: '点击顶部工具栏「屏1/画质/控制/更多」体验真实下拉菜单 · 拖动左侧「实时连接质量」卡片自由移动' },
+    { id: 'files', label: '双栏文件传输', hint: '本地 / 远端双栏浏览器 + 底部可收起传输队列' },
+    { id: 'terminal', label: '远程终端', hint: '高对比终端画布 + 多标签快捷控制' },
+    { id: 'settings', label: '系统设置 (v3 精修)', hint: '进入设置时替换主侧栏（仅保留 1 层 232px macOS 风格分组侧栏）· 全矢量 SVG 图标 · 清晰分组表与分段控件' }
+  ],
+  ios: [
+    { id: 'home', label: '首页 (液态玻璃底栏)', hint: '底部还原 iOS 26 原生 Liquid Glass 折射悬浮导航胶囊 + 右侧独立快连玻璃球' },
+    { id: 'session', label: '远控会话 (原逻辑精修)', hint: '基于 Awesun 仿向日葵环形悬浮鼠标视觉升级：拖动中心圆盘移光标、点 L/R 弧键、点顶钮开环形旋转滚轮、右下三键玻璃轨与远程操作抽屉' },
+    { id: 'files', label: '文件传输 (重做)', hint: '路径面包屑 + 快捷目录 + 多选批量传输栏 + 底部可展开实时传输中心' },
+    { id: 'settings', label: '设置中心 (v3 精修)', hint: '原生 iOS Inset-Grouped 列表 · 零 Emoji 全矢量图标色块 · 对应真实 settings_page 分组与子页面' }
+  ],
+  android: [
+    { id: 'home', label: '首页与设备', hint: '与 iOS/桌面端完全统一的现代极简设计，告别旧版 Material 2' },
+    { id: 'server', label: '共享屏幕 (被控)', hint: '服务状态主卡 + 等宽 ID/密码 + 4 项权限自检清单' },
+    { id: 'session', label: '远控会话 (原逻辑精修)', hint: 'Android 与 iOS 100% 统一采用 Awesun 仿向日葵环形悬浮鼠标 + 右下玻璃控制轨 + 远程操作面板，体验完全一致' },
+    { id: 'files', label: '文件传输 (与 iOS 统一)', hint: '与 iOS 统一的面包屑、多选批量栏与传输抽屉，适配 Android 文档目录授权' },
+    { id: 'settings', label: '设置中心 (v3 精修)', hint: '统一精修后的分组设置列表（含 Android 共享屏幕分组），零 Emoji 全矢量 SVG' }
+  ],
+  tokens: [
+    { id: 'overview', label: 'v3 改版对照 & Flutter 落地方案', hint: '确认这份 v3 方案后即可按模块落地到全部 Flutter 代码并跑通测试' }
+  ]
+};
+
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+}
+
+function osIconName(os) {
+  return os === 'macOS' ? 'osMac' : os === 'Windows' ? 'osWin' : os === 'Android' ? 'osAndroid' : 'osLinux';
+}
+function osBadge(os) {
+  const map = {
+    macOS: { label: 'macOS', bg: 'rgba(148,163,184,0.14)', color: 'var(--rd-ink-2)' },
+    Windows: { label: 'Win', bg: 'rgba(59,130,246,0.14)', color: 'var(--rd-accent)' },
+    Linux: { label: 'Linux', bg: 'rgba(245,158,11,0.14)', color: 'var(--rd-amber)' },
+    Android: { label: 'Android', bg: 'rgba(16,185,129,0.14)', color: 'var(--rd-green)' }
+  };
+  const m = map[os] || map.Linux;
+  return `<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap shrink-0" style="background:${m.bg};color:${m.color}">${ic(osIconName(os), 11, 2)}<span>${m.label}</span></span>`;
+}
+
+function switchEl(key) {
+  const on = !!state.toggles[key];
+  return `<button onclick="event.stopPropagation();toggleOpt('${key}')" class="rd-switch" data-on="${on}" aria-label="${key}"></button>`;
+}
+
+window.toggleOpt = (key) => {
+  state.toggles[key] = !state.toggles[key];
+  render();
+  showToast(`已${state.toggles[key] ? '开启' : '关闭'}该选项`);
+};
+
+function filteredPeers(tab, query = '') {
+  const q = query.trim().toLowerCase();
+  return peers.filter(p => {
+    if (tab === 'fav' && !p.fav) return false;
+    if (tab === 'lan' && !p.lan) return false;
+    if (tab === 'recent' && !p.recent) return false;
+    if (q && !(p.name.toLowerCase().includes(q) || p.id.replace(/\s+/g,'').includes(q.replace(/\s+/g,'')) || p.group.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+/* ==================== v3 SHARED ICONS & CONTROLS ==================== */
+const IC = {
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',
+  sliders: '<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+  palette: '<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.8-.9 1.8-1.9 0-.5-.2-.9-.5-1.3-.3-.3-.5-.8-.5-1.3 0-1 .8-1.8 1.8-1.8H17a4 4 0 0 0 4-4c0-4.3-4-7.7-9-7.7z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="15" cy="7.5" r="1"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  lang: '<path d="M4 5h9M8.5 3v2M6.5 5c.5 3.5 2.5 6 5.5 7.5M10.5 5c-.5 3.5-2.5 6-5.5 7.5M13 21l4-10 4 10M14.5 17.5h5"/>',
+  chip: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  network: '<rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/>',
+  record: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>',
+  note: '<path d="M5 4h14v11H9.5L5 19V4z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
+  power: '<path d="M12 3v9M6.3 6.3a8 8 0 1 0 11.4 0"/>',
+  share: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 17h.01"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>',
+  doc: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/>',
+  finger: '<path d="M12 11v3a8 8 0 0 1-1.5 4.5M8 8.5A5 5 0 0 1 17 11v1.5M5.5 12a6.5 6.5 0 0 1 .6-2.8M17 16a12 12 0 0 1-.8 3.5M9 13.5a10 10 0 0 1-1.5 5"/>',
+  hash: '<path d="M5 9h14M5 15h14M10 3 8 21M16 3l-2 18"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chevR: '<path d="m9 6 6 6-6 6"/>',
+  chevL: '<path d="m15 6-6 6 6 6"/>',
+  updown: '<path d="m8 9 4-4 4 4M8 15l4 4 4-4"/>',
+  check: '<path d="m5 12 5 5 9-10"/>',
+  mouse: '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>',
+  touch: '<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11M12 10.5a1.5 1.5 0 0 1 3 0V12M15 11.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-.6a6 6 0 0 1-5-2.7L4 15a1.5 1.5 0 0 1 2.4-1.8L9 15"/>',
+  target: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4V5z"/>',
+  phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  linkoff: '<path d="M9 15l-2 2a3 3 0 0 1-4.2-4.2l3-3M15 9l2-2a3 3 0 0 1 4.2 4.2l-3 3M4 4l16 16"/>',
+  grip: '<circle cx="9" cy="7" r="1"/><circle cx="15" cy="7" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="17" r="1"/><circle cx="15" cy="17" r="1"/>',
+  minus: '<path d="M6 12h12"/>',
+  wheel: '<circle cx="12" cy="12" r="8"/><path d="M12 8v8M9.5 10.5 12 8l2.5 2.5M9.5 13.5 12 16l2.5-2.5"/>',
+  kbHide: '<rect x="2" y="3" width="20" height="12" rx="2"/><path d="M6 7h.01M10 7h.01M14 7h.01M18 7h.01M7 11h10M9 19l3 2 3-2"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5V14M12 17.5h.01"/>',
+  move: '<path d="M12 3v18M3 12h18M12 3 9.5 5.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/>',
+  click: '<path d="m9 9 11 4-5 1.5L13.5 20 9 9z"/><path d="M5 3.5 6 6M3 8l2.5.6M10 2.5 9.5 5"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v.01M17 21h4v-4M14 18v3"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>',
+  video: '<rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/>',
+  code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>',
+  archive: '<path d="M4 4h16v4H4zM6 8v11a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8M10 12h4"/>',
+  folderPlus: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 11v5M9.5 13.5h5"/>',
+  sort: '<path d="M7 4v16M7 4 4 7M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3"/>',
+  rotate: '<rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 18h.01"/>',
+  osMac: '<path d="M12 3a2 2 0 0 1 2 2v14a2 2 0 1 1-4 0V5a2 2 0 0 1 2-2z" opacity="0"/><rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>',
+  osWin: '<path d="M3 5.5 10.5 4.4V11H3V5.5zM12 4.2 21 3v8h-9V4.2zM3 12.5h7.5v6.6L3 18v-5.5zM12 12.5h9V21l-9-1.3v-7.2z"/>',
+  osLinux: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="m7 9 3 3-3 3M13 15h4"/>',
+  osAndroid: '<rect x="6" y="3" width="12" height="18" rx="2.5"/><path d="M10 17.5h4"/>',
+  gamepad: '<rect x="2" y="6" width="20" height="12" rx="4"/><path d="M6 12h4M8 10v4M15 11h.01M17.5 13h.01"/>',
+  camera: '<path d="M4 8h3l2-2h6l2 2h3a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 19H4a1.5 1.5 0 0 1-1.5-1.5v-8A1.5 1.5 0 0 1 4 8z"/><circle cx="12" cy="13.5" r="3"/>',
+  volumeOn: '<path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+  volumeOff: '<path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/>',
+  unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.6-1.5"/>',
+  wave: '<path d="M2 12h3l2.5-6 4 12 3-8 2.5 2H22"/>',
+  switchMon: '<rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="9" y="11" width="13" height="9" rx="1.5"/>',
+  aweKbd: '<circle cx="5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="19" cy="7.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="6.8" cy="11.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="10.3" cy="11.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="13.8" cy="11.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="17.3" cy="11.5" r="1.2" fill="currentColor" stroke="none"/><path d="M6.5 16h11" stroke-width="2.4"/>',
+  aweWheel: '<path d="m7 9 5-5 5 5M7 15l5 5 5-5"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14.6-4.5L4 8M4 4v4h4M4 13a8 8 0 0 0 14.6 4.5L20 16M20 20v-4h-4"/>'
+};
+function ic(name, size = 16, sw = 1.8, extra = '') {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" ${extra}>${IC[name] || ''}</svg>`;
+}
+function tile(name, color, size = 28, radius = 8, glyph = 15) {
+  return `<span class="inline-flex items-center justify-center shrink-0" style="width:${size}px;height:${size}px;border-radius:${radius}px;background:${color};color:#fff;box-shadow: inset 0 0 0 0.5px rgba(255,255,255,0.18), 0 1px 2px rgba(0,0,0,0.18);">${ic(name, glyph, 2)}</span>`;
+}
+if (!state.seg) state.seg = {};
+function seg(key, options, def) {
+  const cur = state.seg[key] ?? def ?? options[0];
+  return `<div class="inline-flex p-[3px] rounded-lg" style="background: var(--rd-surface-2); border: 1px solid var(--rd-border);">
+    ${options.map(o => `<button onclick="event.stopPropagation();state.seg['${key}']='${o}';render()" class="px-3 h-[26px] rounded-md text-[12px] font-medium cursor-pointer whitespace-nowrap transition"
+      style="background:${cur===o?'var(--rd-surface)':'transparent'}; color:${cur===o?'var(--rd-ink)':'var(--rd-ink-3)'}; box-shadow:${cur===o?'0 1px 2px rgba(0,0,0,0.18), inset 0 0 0 1px var(--rd-border)':'none'};">${o}</button>`).join('')}
+  </div>`;
+}
+function selectBox(value, w = 'auto') {
+  return `<button onclick="event.stopPropagation();showToast('弹出选项菜单')" class="h-8 pl-3 pr-2 rounded-lg inline-flex items-center justify-between gap-2 text-[12.5px] cursor-pointer whitespace-nowrap"
+    style="min-width:${w};background: var(--rd-surface-2); border: 1px solid var(--rd-border); color: var(--rd-ink);">
+    <span>${value}</span><span style="color: var(--rd-ink-3);">${ic('updown', 13, 2)}</span></button>`;
+}
+function btnGhost(label, onclick = "showToast('已打开')") {
+  return `<button onclick="event.stopPropagation();${onclick}" class="h-8 px-3 rounded-lg text-[12.5px] font-medium cursor-pointer whitespace-nowrap"
+    style="background: var(--rd-surface-2); border: 1px solid var(--rd-border); color: var(--rd-ink);">${label}</button>`;
+}
+function btnPrimary(label, onclick = "showToast('已完成')") {
+  return `<button onclick="event.stopPropagation();${onclick}" class="h-8 px-3.5 rounded-lg text-[12.5px] font-semibold text-white cursor-pointer whitespace-nowrap" style="background: var(--rd-accent);">${label}</button>`;
+}
+
+
+/* ==================== DESKTOP SHELL ==================== */
+function renderDesktopShell() {
+  const activeNav = state.desktopScreen;
+  const navItems = [
+    { id: 'home', label: '首页与设备', icon: `<path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1V9.5z"/>` },
+    { id: 'incoming', label: '本机被控', icon: `<rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/>` },
+    { id: 'session', label: '远程会话', badge: '1', icon: `<rect x="2" y="3" width="20" height="14" rx="2"/><path d="m10 8 5 3-5 3V8z"/>` },
+    { id: 'files', label: '文件传输', icon: `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>` },
+    { id: 'terminal', label: '终端', icon: `<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>` }
+  ];
+
+  const topTabs = [
+    { id: 'home', title: '工作台', dot: null },
+    { id: 'session', title: 'MacBook Pro M4', dot: 'var(--rd-green)', sub: '9ms' },
+    { id: 'files', title: '文件 · Win11', dot: 'var(--rd-accent)', sub: '2项' },
+    { id: 'terminal', title: 'SSH · Ubuntu', dot: 'var(--rd-amber)', sub: '' },
+    ...(activeNav === 'settings' ? [{ id: 'settings', title: '系统设置', dot: null, sub: '' }] : [])
+  ];
+
+  // Settings & session screens get clean full-width layout (NO double sidebar!)
+  const hideAppSidebar = ['session', 'files', 'terminal', 'settings'].includes(activeNav);
+
+  return `
+  <div class="desktop-frame w-full" style="background: var(--rd-canvas); color: var(--rd-ink); min-height: 675px; display: flex; flex-direction: column;">
+    <!-- Top Window Bar -->
+    <div class="h-10 px-3 flex items-center justify-between select-none shrink-0" style="background: var(--rd-sidebar); border-bottom: 1px solid var(--rd-border);">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="flex items-center gap-1.5 mr-1 shrink-0">
+          <span class="w-2.5 h-2.5 rounded-full bg-[#ff5f57]"></span>
+          <span class="w-2.5 h-2.5 rounded-full bg-[#febc2e]"></span>
+          <span class="w-2.5 h-2.5 rounded-full bg-[#28c840]"></span>
+        </div>
+        <div class="flex items-center gap-1 overflow-x-auto">
+          ${topTabs.map(t => {
+            const active = (activeNav === t.id) || (t.id === 'home' && activeNav === 'incoming');
+            return `
+              <button onclick="setDesktopScreen('${t.id}')" class="h-7 px-2.5 rounded-md text-xs flex items-center gap-2 transition cursor-pointer whitespace-nowrap shrink-0"
+                style="background:${active ? 'var(--rd-surface)' : 'transparent'}; color:${active ? 'var(--rd-ink)' : 'var(--rd-ink-2)'}; border: 1px solid ${active ? 'var(--rd-border)' : 'transparent'};">
+                ${t.dot ? `<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:${t.dot}"></span>` : ''}
+                <span class="font-medium">${t.title}</span>
+                ${t.sub ? `<span class="text-[10px] font-mono-num" style="color:var(--rd-ink-3)">${t.sub}</span>` : ''}
+              </button>
+            `;
+          }).join('')}
+          <button onclick="openCmd()" title="新建连接 (⌘K)" class="w-7 h-7 rounded-md flex items-center justify-center cursor-pointer shrink-0" style="color: var(--rd-ink-3);">+</button>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 shrink-0">
+        <button onclick="openCmd()" class="hidden sm:flex items-center gap-2 h-7 px-2.5 rounded-md text-xs cursor-pointer whitespace-nowrap"
+          style="background: var(--rd-surface); border: 1px solid var(--rd-border); color: var(--rd-ink-3);">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>快速连接 / 搜索</span>
+          <kbd class="font-mono-num text-[10px] px-1 rounded" style="background: var(--rd-surface-2);">⌘K</kbd>
+        </button>
+        <button onclick="setDesktopScreen(state.desktopScreen==='settings' ? 'home' : 'settings')" class="w-7 h-7 rounded-md flex items-center justify-center cursor-pointer"
+          style="background:${activeNav==='settings'?'var(--rd-accent-soft)':'transparent'}; color:${activeNav==='settings'?'var(--rd-accent)':'var(--rd-ink-2)'};" title="设置 (⌘,)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="flex flex-1 min-h-[635px]">
+      ${hideAppSidebar ? '' : `
+      <aside class="w-[216px] shrink-0 flex flex-col justify-between p-2.5 select-none" style="background: var(--rd-sidebar); border-right: 1px solid var(--rd-border);">
+        <div class="space-y-4">
+          <div class="flex items-center justify-between px-2 pt-1">
+            <div class="flex items-center gap-2">
+              <div class="w-6 h-6 rounded-md flex items-center justify-center text-white text-xs font-bold" style="background: var(--rd-accent);">R</div>
+              <span class="text-[14px] font-semibold tracking-tight">RustDesk</span>
+            </div>
+            <span class="text-[10px] font-mono-num px-1.5 py-0.5 rounded" style="background: var(--rd-surface-2); color: var(--rd-ink-3);">v1.4</span>
+          </div>
+
+          <div class="p-2.5 rounded-xl" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[11px] font-medium" style="color: var(--rd-ink-3);">本机 ID</span>
+              <span class="inline-flex items-center gap-1 text-[11px] whitespace-nowrap" style="color: var(--rd-green);">
+                <span class="w-1.5 h-1.5 rounded-full" style="background: var(--rd-green);"></span>就绪
+              </span>
+            </div>
+            <div class="flex items-center justify-between gap-1">
+              <span class="font-mono-num text-[15px] font-semibold tracking-tight whitespace-nowrap">482 910 347</span>
+              <button onclick="showToast('已复制本机 ID: 482 910 347')" class="p-1 rounded hover:opacity-80 cursor-pointer shrink-0" style="color: var(--rd-ink-2);" title="复制 ID">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              </button>
+            </div>
+            <div class="mt-1.5 pt-1.5 flex items-center justify-between text-[11px]" style="border-top: 1px solid var(--rd-border); color: var(--rd-ink-3);">
+              <span class="font-mono-num">${state.desktopPassVisible ? 'k9M4x2' : '••••••'}</span>
+              <div class="flex items-center gap-1.5 whitespace-nowrap">
+                <button onclick="state.desktopPassVisible=!state.desktopPassVisible;render()" class="cursor-pointer" style="color: var(--rd-ink-2);">${state.desktopPassVisible ? '隐藏' : '显示'}</button>
+                <span>·</span>
+                <button onclick="setDesktopScreen('incoming')" class="cursor-pointer" style="color: var(--rd-accent);">管理</button>
+              </div>
+            </div>
+          </div>
+
+          <nav class="space-y-0.5">
+            ${navItems.map(item => {
+              const sel = activeNav === item.id;
+              return `
+                <button onclick="setDesktopScreen('${item.id}')" class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-[13px] transition cursor-pointer whitespace-nowrap"
+                  style="background:${sel ? 'var(--rd-surface)' : 'transparent'}; color:${sel ? 'var(--rd-ink)' : 'var(--rd-ink-2)'}; font-weight:${sel ? '600' : '500'}; border: 1px solid ${sel ? 'var(--rd-border)' : 'transparent'};">
+                  <span class="flex items-center gap-2.5">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:${sel ? 'var(--rd-accent)' : 'var(--rd-ink-3)'}">${item.icon}</svg>
+                    ${item.label}
+                  </span>
+                  ${item.badge ? `<span class="px-1.5 rounded text-[10px] font-mono-num" style="background: var(--rd-accent-soft); color: var(--rd-accent);">${item.badge}</span>` : ''}
+                </button>
+              `;
+            }).join('')}
+          </nav>
+        </div>
+
+        <div class="space-y-1.5 pt-2" style="border-top: 1px solid var(--rd-border);">
+          <button onclick="setDesktopScreen('settings')" class="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-[13px] cursor-pointer whitespace-nowrap"
+            style="color: var(--rd-ink-2);">
+            <span class="flex items-center gap-2.5">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color: var(--rd-ink-3)"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              系统设置
+            </span>
+            <span class="text-[11px] font-mono-num" style="color: var(--rd-ink-3);">⌘,</span>
+          </button>
+          <div class="px-2.5 py-1 flex items-center justify-between text-[11px] whitespace-nowrap" style="color: var(--rd-ink-3);">
+            <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full" style="background: var(--rd-green);"></span>自建中继 · UDP/QUIC</span>
+          </div>
+        </div>
+      </aside>
+      `}
+
+      <section class="flex-1 min-w-0 flex flex-col overflow-hidden">
+        ${renderDesktopContent()}
+      </section>
+    </div>
+  </div>`;
+}
+
+function renderDesktopContent() {
+  if (state.desktopScreen === 'home') return renderDesktopHome();
+  if (state.desktopScreen === 'incoming') return renderDesktopIncoming();
+  if (state.desktopScreen === 'session') return renderDesktopSession();
+  if (state.desktopScreen === 'files') return renderDesktopFiles();
+  if (state.desktopScreen === 'terminal') return renderDesktopTerminal();
+  if (state.desktopScreen === 'settings') return renderDesktopSettings();
+  return '';
+}
+
+function renderDesktopHome() {
+  const modes = [
+    { id: 'remote', label: '远程桌面' },
+    { id: 'files', label: '文件传输' },
+    { id: 'terminal', label: '终端' },
+    { id: 'tunnel', label: '端口转发' }
+  ];
+  const tabs = [
+    { id: 'recent', label: '最近连接', count: 5 },
+    { id: 'fav', label: '收藏', count: 4 },
+    { id: 'lan', label: '局域网发现', count: 4 },
+    { id: 'ab', label: '地址簿', count: 6 }
+  ];
+  const list = filteredPeers(state.desktopTab, state.desktopSearch);
+
+  return `
+  <div class="p-6 space-y-5 overflow-y-auto rd-scroll flex-1">
+    <!-- Quick Connect Hero Bar (Fix #1: whitespace-nowrap shrink-0!) -->
+    <div class="p-4 rounded-2xl rd-surface">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div class="flex items-center gap-2">
+          <span class="text-[13px] font-semibold whitespace-nowrap">快速连接</span>
+          <span class="text-xs" style="color: var(--rd-ink-3);">输入远程 ID、局域网 IP 或设备别名</span>
+        </div>
+        <div class="flex items-center gap-1 p-0.5 rounded-lg" style="background: var(--rd-surface-2); border: 1px solid var(--rd-border);">
+          ${modes.map(m => `
+            <button onclick="state.desktopMode='${m.id}';render()" class="px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap"
+              style="background:${state.desktopMode===m.id ? 'var(--rd-surface)' : 'transparent'}; color:${state.desktopMode===m.id ? 'var(--rd-ink)' : 'var(--rd-ink-3)'};">
+              ${m.label}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2.5">
+        <div class="flex-1 min-w-0 flex items-center gap-2.5 h-11 px-3.5 rounded-xl" style="background: var(--rd-well); border: 1px solid var(--rd-border-strong);">
+          <svg width="16" height="16" class="shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--rd-accent)"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+          <input type="text" value="842 190 531" placeholder="例如 482 910 347 或 MacBook…" class="flex-1 min-w-0 bg-transparent outline-none text-[15px] font-mono-num font-medium" style="color: var(--rd-ink);" />
+          <span class="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap shrink-0" style="background: var(--rd-green-soft); color: var(--rd-green);">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background: var(--rd-green);"></span>
+            <span>P2P 直连可达 · 9ms</span>
+          </span>
+        </div>
+        <button onclick="setDesktopScreen('${state.desktopMode==='files'?'files':state.desktopMode==='terminal'?'terminal':'session'}');showToast('正在以 P2P 直连连接 842 190 531…')"
+          class="h-11 px-5 rounded-xl text-xs font-semibold text-white flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0 hover:opacity-95"
+          style="background: var(--rd-accent);">
+          <span>连接</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Device Library Toolbar -->
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-1.5 flex-wrap">
+        ${tabs.map(t => {
+          const active = state.desktopTab === t.id;
+          return `
+            <button onclick="state.desktopTab='${t.id}';render()" class="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+              style="background:${active ? 'var(--rd-surface)' : 'transparent'}; color:${active ? 'var(--rd-ink)' : 'var(--rd-ink-2)'}; border: 1px solid ${active ? 'var(--rd-border-strong)' : 'transparent'};">
+              <span>${t.label}</span>
+              <span class="text-[11px] font-mono-num" style="color: var(--rd-ink-3);">${t.count}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 h-8 px-2.5 rounded-lg" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+          <svg width="13" height="13" class="shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--rd-ink-3)"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" value="${state.desktopSearch}" oninput="state.desktopSearch=this.value;render()" placeholder="筛选设备…" class="w-36 bg-transparent outline-none text-xs" style="color: var(--rd-ink);" />
+        </div>
+        <div class="flex items-center p-0.5 rounded-lg shrink-0" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+          <button onclick="state.desktopView='grid';render()" class="px-2 py-1 rounded text-xs cursor-pointer whitespace-nowrap" style="background:${state.desktopView==='grid'?'var(--rd-surface-2)':'transparent'}; color:${state.desktopView==='grid'?'var(--rd-ink)':'var(--rd-ink-3)'};">卡片</button>
+          <button onclick="state.desktopView='list';render()" class="px-2 py-1 rounded text-xs cursor-pointer whitespace-nowrap" style="background:${state.desktopView==='list'?'var(--rd-surface-2)':'transparent'}; color:${state.desktopView==='list'?'var(--rd-ink)':'var(--rd-ink-3)'};">列表</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Peer Cards -->
+    ${state.desktopView === 'grid' ? `
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        ${list.map(p => `
+          <div class="p-3.5 rounded-xl rd-surface transition hover:border-[var(--rd-accent-border)] flex flex-col justify-between gap-3">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background:${p.online ? 'var(--rd-green)' : 'var(--rd-ink-3)'}"></span>
+                  <h3 class="text-[13.5px] font-semibold truncate">${p.name}</h3>
+                </div>
+                <div class="mt-1 flex items-center gap-2 text-xs whitespace-nowrap" style="color: var(--rd-ink-3);">
+                  <span class="font-mono-num">${p.id}</span><span>·</span><span>${p.group}</span>
+                </div>
+              </div>
+              ${osBadge(p.os)}
+            </div>
+
+            <div class="pt-2.5 flex items-center justify-between gap-2" style="border-top: 1px solid var(--rd-border);">
+              <div class="flex items-center gap-1.5 text-[11px] font-mono-num whitespace-nowrap" style="color: var(--rd-ink-2);">
+                <span>${p.transport}</span>
+                ${p.online ? `<span style="color: var(--rd-ink-3);">·</span><span style="color: var(--rd-green);">${p.latency}</span>` : ''}
+              </div>
+              <div class="flex items-center gap-1 shrink-0">
+                <button onclick="setDesktopScreen('files')" class="px-2 py-1 rounded-md text-[11px] font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">文件</button>
+                <button onclick="setDesktopScreen('terminal')" class="px-2 py-1 rounded-md text-[11px] font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">终端</button>
+                <button onclick="setDesktopScreen('session')" class="px-2.5 py-1 rounded-md text-[11px] font-semibold text-white cursor-pointer whitespace-nowrap" style="background:${p.online ? 'var(--rd-accent)' : 'var(--rd-ink-3)'};">连接</button>
+              </div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    ` : `
+      <div class="rounded-xl rd-surface overflow-hidden">
+        <div class="grid grid-cols-12 px-4 py-2 text-[11px] font-medium" style="background: var(--rd-surface-2); color: var(--rd-ink-3); border-bottom: 1px solid var(--rd-border);">
+          <div class="col-span-4">设备名称</div>
+          <div class="col-span-2">远程 ID</div>
+          <div class="col-span-2">系统</div>
+          <div class="col-span-2">链路状态</div>
+          <div class="col-span-2 text-right">操作</div>
+        </div>
+        ${list.map((p, idx) => `
+          <div class="grid grid-cols-12 items-center px-4 py-2.5 text-xs" style="${idx ? 'border-top: 1px solid var(--rd-border);' : ''}">
+            <div class="col-span-4 flex items-center gap-2 min-w-0">
+              <span class="w-2 h-2 rounded-full shrink-0" style="background:${p.online ? 'var(--rd-green)' : 'var(--rd-ink-3)'}"></span>
+              <span class="font-medium truncate">${p.name}</span>
+            </div>
+            <div class="col-span-2 font-mono-num whitespace-nowrap" style="color: var(--rd-ink-2);">${p.id}</div>
+            <div class="col-span-2">${osBadge(p.os)}</div>
+            <div class="col-span-2 font-mono-num text-[11px] whitespace-nowrap" style="color:${p.online ? 'var(--rd-green)' : 'var(--rd-ink-3)'}">${p.transport} ${p.online ? '· '+p.latency : ''}</div>
+            <div class="col-span-2 flex justify-end gap-1">
+              <button onclick="setDesktopScreen('files')" class="px-2 py-1 rounded text-[11px] cursor-pointer whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">文件</button>
+              <button onclick="setDesktopScreen('session')" class="px-2.5 py-1 rounded text-[11px] font-semibold text-white cursor-pointer whitespace-nowrap" style="background: var(--rd-accent);">连接</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `}
+  </div>`;
+}
+
+function renderDesktopIncoming() {
+  const perms = [
+    { name: '屏幕录制权限 (Screen Recording)', ok: true, desc: '允许向主控端传输本机桌面画面' },
+    { name: '辅助功能权限 (Accessibility)', ok: true, desc: '允许远程鼠标与键盘输入控制' },
+    { name: '输入监控权限 (Input Monitoring)', ok: false, desc: '建议开启以支持完整系统组合键' }
+  ];
+  return `
+  <div class="p-6 max-w-3xl space-y-5 overflow-y-auto rd-scroll flex-1">
+    <div>
+      <h2 class="text-lg font-semibold tracking-tight">本机被控接入</h2>
+      <p class="text-xs mt-1" style="color: var(--rd-ink-3);">提供本机 ID 与密码即可远程访问此桌面，全部流量端到端加密。</p>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+      <div class="p-4 rounded-xl rd-surface space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium" style="color: var(--rd-ink-3);">本机设备 ID</span>
+          <span class="px-2 py-0.5 rounded-full text-[11px] font-medium whitespace-nowrap" style="background: var(--rd-green-soft); color: var(--rd-green);">服务运行中</span>
+        </div>
+        <div class="font-mono-num text-2xl font-bold tracking-tight">482 910 347</div>
+        <div class="flex items-center gap-2 pt-1">
+          <button onclick="showToast('已复制邀请凭据')" class="px-3 py-1.5 rounded-lg text-xs font-medium text-white cursor-pointer whitespace-nowrap" style="background: var(--rd-accent);">复制邀请凭据</button>
+          <button onclick="showToast('修改本机 ID')" class="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">自定义 ID</button>
+        </div>
+      </div>
+      <div class="p-4 rounded-xl rd-surface space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium" style="color: var(--rd-ink-3);">一次性访问密码</span>
+          <button onclick="showToast('已刷新密码')" class="text-xs cursor-pointer whitespace-nowrap" style="color: var(--rd-accent);">刷新密码</button>
+        </div>
+        <div class="font-mono-num text-2xl font-bold tracking-wider">${state.desktopPassVisible ? 'k9M4x2' : '• • • • • •'}</div>
+        <div class="flex items-center gap-2 pt-1">
+          <button onclick="state.desktopPassVisible=!state.desktopPassVisible;render()" class="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink);">${state.desktopPassVisible ? '隐藏密码' : '显示密码'}</button>
+          <button onclick="showToast('设置永久密码')" class="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">永久密码</button>
+        </div>
+      </div>
+    </div>
+    <div class="p-4 rounded-xl rd-surface space-y-3">
+      <div class="text-xs font-semibold">接入验证策略</div>
+      <div class="grid grid-cols-3 gap-2">
+        ${[{id:'password',title:'仅通过密码',desc:'无人值守推荐'},{id:'click',title:'仅通过点击接受',desc:'需本机手动确认'},{id:'both',title:'密码或点击均可',desc:'默认灵活模式'}].map(m => `
+          <button onclick="state.desktopApproveMode='${m.id}';render()" class="p-3 rounded-xl text-left transition cursor-pointer"
+            style="background:${state.desktopApproveMode===m.id ? 'var(--rd-accent-soft)' : 'var(--rd-well)'}; border: 1px solid ${state.desktopApproveMode===m.id ? 'var(--rd-accent-border)' : 'var(--rd-border)'};">
+            <div class="text-xs font-semibold" style="color:${state.desktopApproveMode===m.id ? 'var(--rd-accent)' : 'var(--rd-ink)'};">${m.title}</div>
+            <div class="text-[11px] mt-0.5" style="color: var(--rd-ink-3);">${m.desc}</div>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="rounded-xl rd-surface overflow-hidden">
+      <div class="px-4 py-3 text-xs font-semibold" style="border-bottom: 1px solid var(--rd-border);">系统权限自检</div>
+      ${perms.map((pm, i) => `
+        <div class="px-4 py-3 flex items-center justify-between gap-3" style="${i ? 'border-top: 1px solid var(--rd-border);' : ''}">
+          <div><div class="text-xs font-medium">${pm.name}</div><div class="text-[11px] mt-0.5" style="color: var(--rd-ink-3);">${pm.desc}</div></div>
+          ${pm.ok ? `<span class="px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap" style="background: var(--rd-green-soft); color: var(--rd-green);">已授权</span>`
+                  : `<button onclick="showToast('跳转系统设置授权')" class="px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-amber-soft); color: var(--rd-amber);">前往开启</button>`}
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+}
+
+/* Fix #3 (Real Interactive Dropdowns) & Fix #4 (Draggable Real-Time Quality Card) */
+function renderDesktopSession() {
+  const m = state.desktopOpenMenu;
+
+  const menuItem = (label, right, onClick, active = false) => `
+    <button onclick="event.stopPropagation();${onClick}" class="w-full px-3 py-2 rounded-lg flex items-center justify-between gap-4 text-xs transition cursor-pointer hover:bg-white/5"
+      style="background:${active ? 'var(--rd-accent-soft)' : 'transparent'}; color:${active ? 'var(--rd-accent)' : 'var(--rd-ink)'};">
+      <span class="font-medium whitespace-nowrap">${label}</span>
+      <span class="text-[11px] whitespace-nowrap" style="color:${active ? 'var(--rd-accent)' : 'var(--rd-ink-3)'}">${right}</span>
+    </button>`;
+
+  const dropdownPanel = () => {
+    if (!m) return '';
+    if (m === 'quality') {
+      return `
+      <div onclick="event.stopPropagation()" class="mt-2 w-72 rounded-2xl rd-glass p-2.5 shadow-2xl space-y-2 text-xs" style="color: var(--rd-ink);">
+        <div class="px-2 pt-1 text-[11px] font-semibold" style="color: var(--rd-ink-3);">画质预设</div>
+        <div class="grid grid-cols-3 gap-1 p-1 rounded-xl" style="background: var(--rd-surface-2);">
+          ${[{id:'crisp',l:'极致清晰'},{id:'balanced',l:'平衡流畅'},{id:'fast',l:'极速低延迟'}].map(p => `
+            <button onclick="state.desktopQualityPreset='${p.id}';render();showToast('画质切换：${p.l}')" class="py-1.5 rounded-lg text-[11px] font-medium cursor-pointer"
+              style="background:${state.desktopQualityPreset===p.id?'var(--rd-accent)':'transparent'}; color:${state.desktopQualityPreset===p.id?'#fff':'var(--rd-ink-2)'};">${p.l}</button>
+          `).join('')}
+        </div>
+        <div class="px-2 pt-1 text-[11px] font-semibold" style="color: var(--rd-ink-3);">缩放与显示</div>
+        <div class="space-y-0.5">
+          ${menuItem('自适应窗口缩放', state.desktopScaleMode==='fit' ? ic('check', 13, 2.4) : '', "state.desktopScaleMode='fit';render()", state.desktopScaleMode==='fit')}
+          ${menuItem('1:1 原始像素', state.desktopScaleMode==='original' ? ic('check', 13, 2.4) : '', "state.desktopScaleMode='original';render()", state.desktopScaleMode==='original')}
+        </div>
+        <div class="pt-1.5 space-y-2 px-2 pb-1" style="border-top: 1px solid var(--rd-border);">
+          <div class="flex items-center justify-between"><span>硬件解码 (AV1/HEVC)</span>${switchEl('hwCodec')}</div>
+          <div class="flex items-center justify-between"><span>显示远端光标</span>${switchEl('showRemoteCursor')}</div>
+        </div>
+      </div>`;
+    }
+    if (m === 'control') {
+      return `
+      <div onclick="event.stopPropagation()" class="mt-2 w-64 rounded-2xl rd-glass p-2.5 shadow-2xl space-y-2 text-xs" style="color: var(--rd-ink);">
+        <div class="px-2 pt-1 text-[11px] font-semibold" style="color: var(--rd-ink-3);">输入与同步</div>
+        <div class="space-y-2 px-2">
+          <div class="flex items-center justify-between"><span>剪贴板双向同步</span>${switchEl('clipboardSync')}</div>
+          <div class="flex items-center justify-between"><span>远端音频传输</span>${switchEl('audioOn')}</div>
+        </div>
+        <div class="pt-1.5 space-y-0.5" style="border-top: 1px solid var(--rd-border);">
+          ${menuItem('发送 Ctrl + Alt + Del', '⌘⌃⌦', "state.desktopOpenMenu=null;render();showToast('已发送 Ctrl+Alt+Del')")}
+          ${menuItem('粘贴本地剪贴板为键入', '文本', "state.desktopOpenMenu=null;render();showToast('已模拟键入剪贴板文本')")}
+          ${menuItem('锁定远端会话', 'Win+L', "state.desktopOpenMenu=null;render();showToast('已发送锁屏指令')")}
+        </div>
+      </div>`;
+    }
+    if (m === 'more') {
+      return `
+      <div onclick="event.stopPropagation()" class="mt-2 w-64 rounded-2xl rd-glass p-2.5 shadow-2xl space-y-2 text-xs" style="color: var(--rd-ink);">
+        <div class="px-2 pt-1 text-[11px] font-semibold" style="color: var(--rd-ink-3);">会话高级操作</div>
+        <div class="space-y-2 px-2">
+          <div class="flex items-center justify-between"><span>隐私模式（黑屏防窥）</span>${switchEl('privacyMode')}</div>
+        </div>
+        <div class="pt-1.5 space-y-0.5" style="border-top: 1px solid var(--rd-border);">
+          ${menuItem('开始录制本次会话', 'MP4', "state.desktopOpenMenu=null;render();showToast('已开始录屏')")}
+          ${menuItem('截取远端画面', 'PNG', "state.desktopOpenMenu=null;render();showToast('截图已保存至桌面')")}
+          ${menuItem('打开实时质量监控', state.desktopShowQuality ? '已显示' : '隐藏', "state.desktopShowQuality=!state.desktopShowQuality;state.desktopOpenMenu=null;render()")}
+          ${menuItem('重启远端设备', '需确认', "state.desktopOpenMenu=null;render();showToast('已弹出重启确认框')")}
+        </div>
+      </div>`;
+    }
+    return '';
+  };
+
+  return `
+  <div id="desktopSessionCanvas" onclick="if(state.desktopOpenMenu){state.desktopOpenMenu=null;render();}" class="relative flex-1 remote-wallpaper overflow-hidden select-none">
+    <!-- Simulated Remote macOS Desktop Content -->
+    <div class="absolute inset-0 p-12 flex items-center justify-center opacity-85 pointer-events-none">
+      <div class="w-full max-w-2xl rounded-xl overflow-hidden shadow-2xl border border-white/10 bg-[#141821]/90">
+        <div class="h-8 px-3 flex items-center justify-between bg-[#1c212e] border-b border-white/10">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-white/20"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-white/20"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-white/20"></span>
+            <span class="ml-2 text-[11px] font-mono-num text-slate-400">屏幕 ${state.desktopActiveDisplay} — MacBook Pro M4 · ${state.desktopQualityPreset.toUpperCase()}</span>
+          </div>
+          ${state.toggles.privacyMode ? `<span class="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-300">隐私黑屏生效中</span>` : ''}
+        </div>
+        <div class="p-5 font-mono-num text-xs leading-6 text-slate-300 space-y-1">
+          <div><span class="text-blue-400">pub async fn</span> <span class="text-emerald-400">upgrade_direct_udp</span>(peer: &amp;PeerEndpoint) -&gt; Result&lt;Transport&gt; {</div>
+          <div class="pl-4 text-slate-400">// 点击上方工具栏体验真实下拉菜单 · 拖动左侧质量面板可任意停放</div>
+          <div class="pl-4"><span class="text-purple-400">let</span> probe = ProbeRound::tiered_ports(peer).<span class="text-blue-400">await</span>?;</div>
+          <div class="pl-4"><span class="text-purple-400">Ok</span>(Transport::DirectUdp(probe.best_pair()))</div>
+          <div>}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Top Floating Glass Pill Toolbar + Real Dropdown Menus -->
+    <div class="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center">
+      ${state.desktopToolbarCollapsed ? `
+        <button onclick="event.stopPropagation();state.desktopToolbarCollapsed=false;render()" class="px-4 py-1.5 rounded-full rd-glass text-[11px] font-mono-num flex items-center gap-2 shadow-lg cursor-pointer whitespace-nowrap" style="color: var(--rd-ink);">
+          <span class="w-1.5 h-1.5 rounded-full" style="background: var(--rd-green);"></span>
+          <span>P2P UDP · 9 ms · 60 FPS</span>
+          <span style="color: var(--rd-ink-3);">▾ 展开</span>
+        </button>
+      ` : `
+        <div onclick="event.stopPropagation()" class="px-2 py-1.5 rounded-full rd-glass shadow-xl flex items-center gap-1 text-xs" style="color: var(--rd-ink);">
+          <button onclick="state.desktopShowQuality=!state.desktopShowQuality;render()" class="px-2.5 py-1 rounded-full flex items-center gap-1.5 font-mono-num text-[11px] font-medium cursor-pointer whitespace-nowrap"
+            style="background:${state.desktopShowQuality ? 'var(--rd-green-soft)' : 'var(--rd-surface-2)'}; color: var(--rd-green);">
+            <span class="w-1.5 h-1.5 rounded-full" style="background: var(--rd-green);"></span>
+            <span>P2P UDP · 9ms</span>
+          </button>
+
+          <span class="w-px h-4 mx-0.5" style="background: var(--rd-border-strong);"></span>
+
+          <div class="flex items-center gap-0.5 px-1 py-0.5 rounded-full" style="background: var(--rd-surface-2);">
+            <button onclick="state.desktopActiveDisplay=1;render();showToast('已切换显示器 1')" class="px-2 py-0.5 rounded-full text-[11px] font-semibold cursor-pointer whitespace-nowrap" style="background:${state.desktopActiveDisplay===1?'var(--rd-accent)':'transparent'}; color:${state.desktopActiveDisplay===1?'#fff':'var(--rd-ink-2)'};">屏 1</button>
+            <button onclick="state.desktopActiveDisplay=2;render();showToast('已切换显示器 2')" class="px-2 py-0.5 rounded-full text-[11px] font-semibold cursor-pointer whitespace-nowrap" style="background:${state.desktopActiveDisplay===2?'var(--rd-accent)':'transparent'}; color:${state.desktopActiveDisplay===2?'#fff':'var(--rd-ink-2)'};">屏 2</button>
+          </div>
+
+          <button onclick="state.desktopOpenMenu=state.desktopOpenMenu==='quality'?null:'quality';render()" class="px-2.5 py-1 rounded-full cursor-pointer whitespace-nowrap"
+            style="background:${m==='quality'?'var(--rd-accent-soft)':'transparent'}; color:${m==='quality'?'var(--rd-accent)':'var(--rd-ink-2)'};">画质 ▾</button>
+          <button onclick="state.desktopOpenMenu=state.desktopOpenMenu==='control'?null:'control';render()" class="px-2.5 py-1 rounded-full cursor-pointer whitespace-nowrap"
+            style="background:${m==='control'?'var(--rd-accent-soft)':'transparent'}; color:${m==='control'?'var(--rd-accent)':'var(--rd-ink-2)'};">控制 ▾</button>
+          <button onclick="setDesktopScreen('files')" class="px-2.5 py-1 rounded-full cursor-pointer whitespace-nowrap" style="color: var(--rd-ink-2);">文件</button>
+          <button onclick="setDesktopScreen('terminal')" class="px-2.5 py-1 rounded-full cursor-pointer whitespace-nowrap" style="color: var(--rd-ink-2);">终端</button>
+          <button onclick="state.desktopOpenMenu=state.desktopOpenMenu==='more'?null:'more';render()" class="px-2.5 py-1 rounded-full cursor-pointer whitespace-nowrap"
+            style="background:${m==='more'?'var(--rd-accent-soft)':'transparent'}; color:${m==='more'?'var(--rd-accent)':'var(--rd-ink-2)'};">更多 ▾</button>
+
+          <span class="w-px h-4 mx-0.5" style="background: var(--rd-border-strong);"></span>
+
+          <button onclick="state.desktopToolbarCollapsed=true;state.desktopOpenMenu=null;render()" title="收起工具栏" class="w-7 h-7 rounded-full flex items-center justify-center cursor-pointer" style="color: var(--rd-ink-3);">▴</button>
+          <button onclick="setDesktopScreen('home');showToast('已断开远程会话')" class="px-2.5 py-1 rounded-full text-[11px] font-semibold cursor-pointer whitespace-nowrap" style="background: var(--rd-red-soft); color: var(--rd-red);">断开</button>
+        </div>
+        ${dropdownPanel()}
+      `}
+    </div>
+
+    <!-- Draggable Real-time Quality & P2P Diagnostics Card -->
+    ${state.desktopShowQuality ? `
+      <div id="desktopQualityCard" style="left:${state.desktopQualityPos.x}px; top:${state.desktopQualityPos.y}px; color: var(--rd-ink);"
+        class="absolute z-20 w-[272px] rounded-2xl rd-glass p-3.5 shadow-2xl space-y-3 text-xs">
+        <div id="desktopQualityHandle" class="flex items-center justify-between cursor-grab active:cursor-grabbing pb-1" style="border-bottom: 1px solid var(--rd-border);">
+          <div class="flex items-center gap-1.5 font-semibold">
+            <span style="color: var(--rd-ink-3);" title="按住拖动">⋮⋮</span>
+            <span class="w-2 h-2 rounded-full" style="background: var(--rd-green);"></span>
+            <span>实时连接质量</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-[10px]" style="color: var(--rd-ink-3);">可拖动</span>
+            <button onclick="state.desktopShowQuality=false;render()" class="w-5 h-5 rounded flex items-center justify-center cursor-pointer" style="color: var(--rd-ink-3);">${ic('close', 12, 2.2)}</button>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-2">
+          <div class="p-2 rounded-lg" style="background: var(--rd-surface-2);">
+            <div class="text-[10px]" style="color: var(--rd-ink-3);">帧率</div>
+            <div class="font-mono-num text-sm font-bold mt-0.5">60 <span class="text-[10px] font-normal">FPS</span></div>
+          </div>
+          <div class="p-2 rounded-lg" style="background: var(--rd-surface-2);">
+            <div class="text-[10px]" style="color: var(--rd-ink-3);">延迟</div>
+            <div class="font-mono-num text-sm font-bold mt-0.5" style="color: var(--rd-green);">9 <span class="text-[10px] font-normal">ms</span></div>
+          </div>
+          <div class="p-2 rounded-lg" style="background: var(--rd-surface-2);">
+            <div class="text-[10px]" style="color: var(--rd-ink-3);">码率</div>
+            <div class="font-mono-num text-sm font-bold mt-0.5">8.4 <span class="text-[10px] font-normal">Mb</span></div>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 text-[11px]">
+          <div class="flex justify-between"><span style="color: var(--rd-ink-3);">编码 / 色度</span><span class="font-mono-num">AV1 HW · 4:2:0</span></div>
+          <div class="flex justify-between"><span style="color: var(--rd-ink-3);">当前传输</span><span class="font-mono-num" style="color: var(--rd-green);">直连 · Native UDP</span></div>
+          <div class="flex justify-between"><span style="color: var(--rd-ink-3);">保底链路</span><span class="font-mono-num" style="color: var(--rd-ink-2);">QUIC 中继热备</span></div>
+        </div>
+
+        <button onclick="state.desktopShowUdpDetail=!state.desktopShowUdpDetail;render()" class="w-full py-1.5 rounded-lg text-[11px] font-medium cursor-pointer" style="background: var(--rd-accent-soft); color: var(--rd-accent); border: 1px solid var(--rd-accent-border);">
+          ${state.desktopShowUdpDetail ? '收起双端 UDP 诊断 ▴' : '展开双端 UDP 逐端口诊断 (3 轮) ▾'}
+        </button>
+
+        ${state.desktopShowUdpDetail ? `
+          <div class="p-2 rounded-lg font-mono-num text-[10px] space-y-1" style="background: var(--rd-well); border: 1px solid var(--rd-border); color: var(--rd-ink-2);">
+            <div class="flex justify-between"><span>R1 :54102 → :51820</span><span style="color:var(--rd-green)">TX 4 / RX 4</span></div>
+            <div class="flex justify-between"><span>R2 :54103 → :51821</span><span style="color:var(--rd-ink-3)">TX 4 / RX 0</span></div>
+            <div class="flex justify-between"><span>R3 局域网直通</span><span style="color:var(--rd-green)">192.168.1.24 · 2ms</span></div>
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
+  </div>`;
+}
+
+function renderDesktopFiles() {
+  const localFiles = [
+    { name: 'design-assets', type: 'dir', size: '—', date: '今天 14:20' },
+    { name: 'rustdesk-release-v1.4.dmg', type: 'file', size: '48.2 MB', date: '今天 11:05' },
+    { name: 'p2p-probe-trace.json', type: 'file', size: '124 KB', date: '昨天 22:18' }
+  ];
+  const remoteFiles = [
+    { name: 'Projects', type: 'dir', size: '—', date: '今天 19:10' },
+    { name: 'render-output-4k.mp4', type: 'file', size: '1.24 GB', date: '今天 16:30' },
+    { name: 'docker-compose.yml', type: 'file', size: '4.2 KB', date: '11-20' }
+  ];
+  const pane = (title, path, files, actionText) => `
+    <div class="flex-1 min-w-0 flex flex-col" style="background: var(--rd-canvas);">
+      <div class="px-4 py-2.5 flex items-center justify-between gap-2" style="background: var(--rd-surface); border-bottom: 1px solid var(--rd-border);">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-xs font-semibold whitespace-nowrap">${title}</span>
+          <span class="text-xs font-mono-num truncate px-2 py-0.5 rounded" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">${path}</span>
+        </div>
+        <button onclick="showToast('${actionText}')" class="px-2.5 py-1 rounded-md text-[11px] font-semibold text-white cursor-pointer whitespace-nowrap shrink-0" style="background: var(--rd-accent);">${actionText}</button>
+      </div>
+      <div class="flex-1 overflow-y-auto rd-scroll p-2 space-y-0.5">
+        ${files.map((f, i) => `
+          <div class="px-3 py-2 rounded-lg flex items-center justify-between text-xs cursor-pointer" style="${i===1 ? 'background: var(--rd-accent-soft); border: 1px solid var(--rd-accent-border);' : 'border: 1px solid transparent;'}">
+            <div class="flex items-center gap-2.5 min-w-0"><span style="color:${f.type==='dir'?'var(--rd-amber)':'var(--rd-ink-2)'}">${ic(f.type==='dir' ? 'folder' : 'doc', 15, 1.8)}</span><span class="font-medium truncate">${f.name}</span></div>
+            <div class="flex items-center gap-4 shrink-0 font-mono-num text-[11px]" style="color: var(--rd-ink-3);"><span>${f.size}</span><span class="w-16 text-right">${f.date}</span></div>
+          </div>
+        `).join('')}
+      </div>
+    </div>`;
+
+  return `
+  <div class="flex-1 flex flex-col overflow-hidden">
+    <div class="flex-1 flex overflow-hidden">
+      ${pane('本地 · Mac', '/Users/linhemin/Desktop', localFiles, '发送到远端 →')}
+      <div class="w-px" style="background: var(--rd-border);"></div>
+      ${pane('远端 · Win11', 'C:/Users/Admin/Workspace', remoteFiles, '← 拉取到本地')}
+    </div>
+    <div style="background: var(--rd-surface); border-top: 1px solid var(--rd-border);">
+      <div class="px-4 py-2 flex items-center justify-between">
+        <button onclick="state.desktopShowQueue=!state.desktopShowQueue;render()" class="text-xs font-semibold flex items-center gap-2 cursor-pointer">
+          <span>传输队列</span>
+          <span class="px-2 py-0.5 rounded-full text-[10px] font-mono-num" style="background: var(--rd-accent-soft); color: var(--rd-accent);">2 进行中 · 46.8 MB/s</span>
+        </button>
+        <button onclick="state.desktopShowQueue=!state.desktopShowQueue;render()" class="text-xs cursor-pointer" style="color: var(--rd-ink-3);">${state.desktopShowQueue ? '收起 ▾' : '展开 ▴'}</button>
+      </div>
+      ${state.desktopShowQueue ? `
+        <div class="px-4 pb-3"><div class="p-2.5 rounded-lg flex items-center gap-3 text-xs" style="background: var(--rd-surface-2);">
+          <span class="font-medium truncate w-48">render-output-4k.mp4</span>
+          <div class="flex-1 h-1.5 rounded-full overflow-hidden" style="background: var(--rd-border-strong);"><div class="h-full rounded-full" style="width: 68%; background: var(--rd-accent);"></div></div>
+          <span class="font-mono-num text-[11px] whitespace-nowrap" style="color: var(--rd-ink-2);">68% · 46.8 MB/s</span>
+        </div></div>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderDesktopTerminal() {
+  return `
+  <div class="flex-1 flex flex-col bg-[#0A0C10] text-[#E6EDF3]">
+    <div class="h-10 px-4 flex items-center justify-between border-b border-white/10 bg-[#11141B] text-xs">
+      <div class="flex items-center gap-2.5">
+        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+        <span class="font-semibold">ubuntu@Ubuntu-Build-Node-01</span>
+        <span class="font-mono-num text-[11px] text-slate-400">605 771 904 · QUIC 28ms</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="showToast('已复制')" class="px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-[11px] cursor-pointer">复制</button>
+        <button onclick="showToast('已粘贴')" class="px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-[11px] cursor-pointer">粘贴</button>
+        <button onclick="setDesktopScreen('home')" class="px-2.5 py-1 rounded bg-red-500/15 text-red-400 text-[11px] cursor-pointer">断开</button>
+      </div>
+    </div>
+    <div class="flex-1 p-5 font-mono-num text-[13px] leading-6 overflow-y-auto rd-scroll space-y-1">
+      <div><span class="text-emerald-400">ubuntu@build-01</span>:<span class="text-blue-400">~/rustdesk</span>$ cargo test --workspace --lib</div>
+      <div class="text-emerald-400">test result: ok. 142 passed; 0 failed; finished in 2.41s</div>
+      <div class="mt-2"><span class="text-emerald-400">ubuntu@build-01</span>:<span class="text-blue-400">~/rustdesk</span>$ <span class="inline-block w-2 h-4 align-middle bg-blue-400 animate-pulse"></span></div>
+    </div>
+  </div>`;
+}
+
+/* v3 Desktop Settings: single sidebar (replaces the app sidebar), grouped macOS-style sections */
+function renderDesktopSettings() {
+  const groups = [
+    { name: '通用', items: [
+      { id: 'general', label: '常规', icon: 'sliders', tint: '#8E8E93' },
+      { id: 'appearance', label: '外观', icon: 'palette', tint: '#AF52DE' }
+    ]},
+    { name: '连接', items: [
+      { id: 'network', label: '网络', icon: 'globe', tint: '#0A84FF' },
+      { id: 'security', label: '安全', icon: 'shield', tint: '#30B158' },
+      { id: 'display', label: '显示与画质', icon: 'monitor', tint: '#FF9F0A' },
+      { id: 'audio', label: '音频与录制', icon: 'mic', tint: '#FF453A' }
+    ]},
+    { name: '其他', items: [
+      { id: 'shortcuts', label: '键盘快捷键', icon: 'keyboard', tint: '#636366' },
+      { id: 'account', label: '账号', icon: 'user', tint: '#5E5CE6' },
+      { id: 'about', label: '关于 RustDesk', icon: 'info', tint: '#8E8E93' }
+    ]}
+  ];
+  const all = groups.flatMap(g => g.items);
+  const cur = all.find(i => i.id === state.desktopSettingsCat) || all[2];
+
+  const section = (title, rows, footer = '') => `
+    <section class="space-y-2">
+      ${title ? `<h3 class="px-1 text-[12px] font-semibold" style="color: var(--rd-ink-2);">${title}</h3>` : ''}
+      <div class="rounded-xl overflow-hidden" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+        ${rows.map((r, i) => `<div style="${i ? 'border-top: 1px solid var(--rd-border);' : ''}">${r}</div>`).join('')}
+      </div>
+      ${footer ? `<p class="px-1 text-[11.5px] leading-relaxed" style="color: var(--rd-ink-3);">${footer}</p>` : ''}
+    </section>`;
+  const row = (title, desc, control) => `
+    <div class="min-h-[54px] px-4 py-2.5 flex items-center justify-between gap-6">
+      <div class="min-w-0">
+        <div class="text-[13px] font-medium" style="color: var(--rd-ink);">${title}</div>
+        ${desc ? `<div class="text-[11.5px] mt-0.5 leading-snug" style="color: var(--rd-ink-3);">${desc}</div>` : ''}
+      </div>
+      <div class="shrink-0 flex items-center gap-2">${control}</div>
+    </div>`;
+
+  const pages = {
+    network: () => `
+      <div class="rounded-xl p-4 flex items-center justify-between gap-4" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+        <div class="flex items-center gap-3.5 min-w-0">
+          ${tile('network', '#0A84FF', 40, 11, 20)}
+          <div class="min-w-0">
+            <div class="text-[13.5px] font-semibold">自建服务器</div>
+            <div class="text-[12px] font-mono-num mt-0.5 truncate" style="color: var(--rd-ink-2);">hbbs.myhost.dev:21116 · hbbr.myhost.dev:21117</div>
+            <div class="mt-1.5 flex items-center gap-1.5">
+              <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap" style="background: var(--rd-green-soft); color: var(--rd-green);"><span class="w-1.5 h-1.5 rounded-full" style="background: var(--rd-green);"></span>已连接 · 11 ms</span>
+              <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">${ic('lock', 11, 2)}密钥已校验</span>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          ${btnGhost('测试连接', "showToast('服务器连通性正常 · 11 ms')")}
+          ${btnPrimary('编辑', "showToast('打开 ID / 中继服务器编辑')")}
+        </div>
+      </div>
+      ${section('连接方式', [
+        row('仅允许直连', '只使用 P2P 直连；直连失败时显示原因，不回落到中继', switchEl('directOnly')),
+        row('代理', 'Socks5 / HTTP(S) 代理服务器', selectBox('未设置', '120px')),
+        row('使用 WebSocket', '在受限网络中通过 WebSocket 连接服务器', switchEl('lanDiscovery'))
+      ])}
+      ${section('P2P 打洞', [
+        row('UDP 打洞', '优先建立原生 UDP 直连通道', switchEl('udpPunch')),
+        row('IPv6 P2P 连接', '双栈网络下优先尝试 IPv6 直连', switchEl('ipv6Punch')),
+        row('TCP 打洞', '在 UDP 受阻时尝试 TCP 打洞', switchEl('abr'))
+      ], '修改后对新建立的连接生效，当前会话不受影响。')}
+      ${section('诊断', [
+        row('记录 P2P 诊断', '保存每轮打洞的本地端口、目标与收发计数', switchEl('autoUpdate')),
+        row('诊断日志', '导出最近 20 次连接的打洞记录', btnGhost('导出…', "showToast('已导出诊断日志')"))
+      ])}`,
+    general: () => `
+      ${section('语言与地区', [ row('界面语言', '', selectBox('简体中文', '132px')) ])}
+      ${section('启动', [
+        row('开机时启动 RustDesk', '登录系统后在后台启动服务', switchEl('autoUpdate')),
+        row('启动时检查更新', '', switchEl('lanDiscovery'))
+      ])}
+      ${section('会话', [
+        row('连接结束时添加备注', '断开会话后弹出备注输入框', switchEl('recordSession')),
+        row('会话期间保持唤醒', '主控会话进行时阻止本机休眠', switchEl('preventSleep'))
+      ])}`,
+    appearance: () => `
+      <section class="space-y-2">
+        <h3 class="px-1 text-[12px] font-semibold" style="color: var(--rd-ink-2);">主题</h3>
+        <div class="grid grid-cols-3 gap-3">
+          ${[{id:'light',l:'浅色',bg:'#F5F6F9',fg:'#FFFFFF',ln:'#E3E6EC'},{id:'dark',l:'深色',bg:'#0B0D11',fg:'#151921',ln:'#262C38'},{id:'system',l:'跟随系统',bg:'linear-gradient(90deg,#F5F6F9 50%,#0B0D11 50%)',fg:'transparent',ln:'#8890a0'}].map(t => {
+            const on = (state.seg.theme ?? state.theme) === t.id;
+            return `<button onclick="state.seg.theme='${t.id}';if('${t.id}'!=='system'){state.theme='${t.id}'};render()" class="p-2 rounded-xl text-left cursor-pointer" style="background: var(--rd-surface); border: 1.5px solid ${on?'var(--rd-accent)':'var(--rd-border)'};">
+              <div class="h-[72px] rounded-lg p-2 flex gap-1.5" style="background:${t.bg};">
+                <div class="w-1/4 rounded" style="background:${t.fg}; border: 1px solid ${t.ln};"></div>
+                <div class="flex-1 space-y-1.5"><div class="h-2.5 w-2/3 rounded" style="background:${t.ln};"></div><div class="h-6 rounded" style="background:${t.fg}; border:1px solid ${t.ln};"></div></div>
+              </div>
+              <div class="mt-2 px-0.5 flex items-center justify-between text-[12.5px] font-medium"><span>${t.l}</span>${on?`<span style="color: var(--rd-accent);">${ic('check', 14, 2.4)}</span>`:''}</div>
+            </button>`;
+          }).join('')}
+        </div>
+      </section>
+      ${section('界面', [
+        row('设备列表样式', '', seg('peerView', ['卡片','列表','紧凑'], '卡片')),
+        row('在菜单栏显示图标', '', switchEl('showRemoteCursor'))
+      ])}`,
+    security: () => `
+      ${section('接入方式', [
+        row('接受连接请求', '', seg('approve', ['密码','点击确认','两者皆可'], '两者皆可')),
+        row('密码类型', '', seg('pwType', ['一次性','固定','两者'], '一次性')),
+        row('一次性密码长度', '', selectBox('6 位', '96px')),
+        row('固定密码', '未设置', btnGhost('设置…'))
+      ])}
+      ${section('验证', [
+        row('双重验证 (2FA)', '使用验证器 App 生成的动态码确认连接', btnGhost('启用…')),
+        row('受信任设备', '3 台设备可跳过双重验证', btnGhost('管理…')),
+        row('信任有效期', '', selectBox('30 天', '96px'))
+      ])}
+      ${section('访问控制', [
+        row('IP 白名单', '只允许列表中的地址发起连接', btnGhost('编辑…')),
+        row('拒绝局域网发现', '', switchEl('privacyMode'))
+      ])}`,
+    display: () => `
+      ${section('默认画质', [
+        row('画质', '新会话的默认画质偏好', seg('quality', ['清晰','平衡','流畅'], '平衡')),
+        row('视频编码', '', selectBox('自动', '110px')),
+        row('自适应码率', '根据网络状况自动调整码率', switchEl('abr'))
+      ])}
+      ${section('硬件', [
+        row('硬件编解码', 'VideoToolbox / NVENC / VAAPI', switchEl('hwCodec')),
+        row('显示远端光标', '', switchEl('showRemoteCursor'))
+      ])}`,
+    audio: () => `
+      ${section('音频', [ row('传输远端声音', '', switchEl('audioOn')), row('音频输入设备', '', selectBox('系统默认', '130px')) ])}
+      ${section('录制', [ row('自动录制主控会话', '', switchEl('recordSession')), row('录制保存位置', '~/Movies/RustDesk', btnGhost('更改…')) ])}`,
+    shortcuts: () => `
+      ${section('会话快捷键', [
+        row('切换全屏', '', `<kbd class="px-2 py-1 rounded-md text-[11.5px] font-mono-num" style="background: var(--rd-surface-2); border: 1px solid var(--rd-border);">⌃ ⌘ F</kbd>`),
+        row('发送 Ctrl+Alt+Del', '', `<kbd class="px-2 py-1 rounded-md text-[11.5px] font-mono-num" style="background: var(--rd-surface-2); border: 1px solid var(--rd-border);">⌃ ⌥ ⌫</kbd>`),
+        row('显示 / 隐藏工具栏', '', `<kbd class="px-2 py-1 rounded-md text-[11.5px] font-mono-num" style="background: var(--rd-surface-2); border: 1px solid var(--rd-border);">⌃ ⌘ T</kbd>`)
+      ])}`,
+    account: () => `
+      <div class="rounded-xl p-4 flex items-center justify-between" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+        <div class="flex items-center gap-3"><span class="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold" style="background: linear-gradient(135deg,#0A84FF,#5E5CE6);">LH</span>
+        <div><div class="text-[13.5px] font-semibold">linhemin</div><div class="text-[12px]" style="color: var(--rd-ink-3);">已登录 · 地址簿已同步</div></div></div>
+        ${btnGhost('退出登录')}
+      </div>`,
+    about: () => `
+      ${section('', [
+        row('版本', '', `<span class="text-[12.5px] font-mono-num" style="color: var(--rd-ink-2);">1.4.0</span>`),
+        row('构建日期', '', `<span class="text-[12.5px] font-mono-num" style="color: var(--rd-ink-2);">2026-11-22</span>`),
+        row('隐私声明', '', btnGhost('查看'))
+      ])}`
+  };
+
+  return `
+  <div class="flex-1 flex overflow-hidden">
+    <aside class="w-[232px] shrink-0 flex flex-col" style="background: var(--rd-sidebar); border-right: 1px solid var(--rd-border);">
+      <div class="px-3 pt-3 pb-2 space-y-3">
+        <button onclick="setDesktopScreen('home')" class="flex items-center gap-1 text-[12px] font-medium cursor-pointer" style="color: var(--rd-ink-2);">${ic('chevL', 14, 2)}返回工作台</button>
+        <div class="flex items-center gap-2 h-8 px-2.5 rounded-lg" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+          <span style="color: var(--rd-ink-3);">${ic('search', 13, 2)}</span>
+          <input id="dSetSearch" type="text" value="${state.desktopSettingsQuery}" oninput="state.desktopSettingsQuery=this.value;render();const el=document.getElementById('dSetSearch');if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);}" placeholder="搜索设置" class="w-full bg-transparent outline-none text-[12.5px]" style="color: var(--rd-ink);" />
+        </div>
+      </div>
+      <nav class="flex-1 overflow-y-auto rd-scroll px-2 pb-3 space-y-3">
+        ${groups.map(g => ({...g, items: g.items.filter(it => !state.desktopSettingsQuery.trim() || it.label.includes(state.desktopSettingsQuery.trim()) || g.name.includes(state.desktopSettingsQuery.trim()))})).filter(g => g.items.length).map(g => `
+          <div>
+            <div class="px-2 pb-1 text-[11px] font-medium" style="color: var(--rd-ink-3);">${g.name}</div>
+            ${g.items.map(it => {
+              const on = it.id === cur.id;
+              return `<button onclick="state.desktopSettingsCat='${it.id}';render()" class="w-full h-8 px-2 rounded-md flex items-center gap-2.5 text-[13px] cursor-pointer"
+                style="background:${on ? 'var(--rd-accent)' : 'transparent'}; color:${on ? '#fff' : 'var(--rd-ink)'};">
+                ${tile(it.icon, it.tint, 20, 5.5, 12)}<span class="${on ? 'font-medium' : ''}">${it.label}</span></button>`;
+            }).join('')}
+          </div>`).join('')}
+      </nav>
+    </aside>
+    <div class="flex-1 overflow-y-auto rd-scroll" style="background: var(--rd-canvas);">
+      <div class="max-w-[680px] mx-auto px-8 py-7 space-y-6">
+        <header class="flex items-center gap-3">
+          ${tile(cur.icon, cur.tint, 34, 9, 18)}
+          <h2 class="text-[20px] font-semibold tracking-tight">${cur.label}</h2>
+        </header>
+        ${(pages[cur.id] || pages.network)()}
+      </div>
+    </div>
+  </div>`;
+}
+
+
+/* ==================== UNIFIED MOBILE COMPONENTS (iOS + Android) ==================== */
+function renderMobilePeerList(tab, platform) {
+  const list = filteredPeers(tab);
+  return list.map(p => `
+    <div onclick="setMobileScreen('${platform}','session')" class="p-3 rounded-2xl rd-surface flex items-center justify-between gap-2.5 cursor-pointer active:scale-[0.99] transition">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-sm font-semibold"
+          style="background:${p.online ? 'var(--rd-accent-soft)' : 'var(--rd-surface-2)'}; color:${p.online ? 'var(--rd-accent)' : 'var(--rd-ink-3)'};">
+          ${ic(osIconName(p.os), 18, 1.9)}
+        </div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:${p.online ? 'var(--rd-green)' : 'var(--rd-ink-3)'}"></span>
+            <span class="text-[13px] font-semibold truncate">${p.name}</span>
+          </div>
+          <div class="text-[11px] font-mono-num mt-0.5 flex items-center gap-1.5 whitespace-nowrap" style="color: var(--rd-ink-3);">
+            <span>${p.id}</span><span>·</span>
+            <span style="color:${p.online ? 'var(--rd-green)' : 'var(--rd-ink-3)'}">${p.online ? p.transport+' '+p.latency : '离线'}</span>
+          </div>
+        </div>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        <button onclick="event.stopPropagation();setMobileScreen('${platform}','files')" class="w-7 h-7 rounded-lg flex items-center justify-center text-xs cursor-pointer" style="background: var(--rd-surface-2); color: var(--rd-ink-2);" title="文件传输">${ic('folder', 14, 1.9)}</button>
+        <button onclick="event.stopPropagation();showToast('更多操作：终端 / 重命名 / 收藏 / 唤醒')" class="w-7 h-7 rounded-lg flex items-center justify-center text-sm cursor-pointer" style="color: var(--rd-ink-3);">⋯</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+/* v3.1 Mobile Remote Session: Awesun (仿向日葵) Radial Virtual Mouse + Floating Glass Rail (Unified iOS & Android) */
+function renderUnifiedMobileSession(platform) {
+  const s = state.ms;
+  const isLand = state.mobileLandscape;
+  const isIOS = platform === 'ios';
+
+  const glassSurface = 'background: rgba(16, 22, 34, 0.76); backdrop-filter: blur(22px) saturate(180%); -webkit-backdrop-filter: blur(22px) saturate(180%); border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 12px 32px rgba(0,0,0,0.44), inset 0 1px 0 rgba(255,255,255,0.10);';
+  const orbGlass = isIOS
+    ? 'background: linear-gradient(150deg, rgba(255,255,255,0.22), rgba(24,32,48,0.68)); backdrop-filter: blur(20px) saturate(190%); -webkit-backdrop-filter: blur(20px) saturate(190%); border: 1px solid rgba(255,255,255,0.28); box-shadow: 0 8px 22px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.35);'
+    : 'background: rgba(20, 27, 40, 0.84); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid rgba(255,255,255,0.16); box-shadow: 0 8px 22px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.12);';
+  const ink = '#F1F5FA', dim = 'rgba(226,234,246,0.62)', acc = '#60A5FA', accSolid = '#3B82F6';
+
+  // Canvas dimensions for default placement
+  const cw = isLand ? 722 : 374;
+  const ch = isLand ? 392 : 762;
+  const cx = s.mousePos ? s.mousePos.x : Math.round(cw * (isLand ? 0.56 : 0.62));
+  const cy = s.mousePos ? s.mousePos.y : Math.round(ch * (isLand ? 0.56 : 0.54));
+  // Offset pointer tip (exact Awesun gap: top-left of thumb so finger never obscures click target!)
+  const tipX = Math.max(10, cx - 86);
+  const tipY = Math.max(isLand ? 12 : 48, cy - 68);
+
+  // ---- 1. QualityMonitor HUD (draggable, toggled via 远程操作 -> 品质检测) ----
+  const qualityHud = !s.quality ? '' : `
+    <div id="mobileQualityCard" class="absolute z-30 w-[162px] rounded-2xl p-2.5 text-[10.5px] font-mono-num select-none"
+      style="${glassSurface} color:${ink}; ${s.qPos ? `left:${s.qPos.x}px;top:${s.qPos.y}px;` : `left:12px;top:${isLand ? 12 : 48}px;`}">
+      <div id="mobileQualityHandle" class="flex items-center justify-between pb-1.5 mb-1.5 cursor-grab" style="border-bottom: 1px solid rgba(255,255,255,0.09);">
+        <span class="flex items-center gap-1.5 font-sans font-semibold text-[11px]"><span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>直连 · UDP</span>
+        <span style="color:${dim};">${ic('grip', 12, 2)}</span>
+      </div>
+      <div class="grid grid-cols-2 gap-x-2 gap-y-0.5">
+        ${[['速度','1.08 MB/s'],['FPS','60'],['延迟','9 ms'],['码率','8.2 Mb/s'],['编码','AV1']].map(([k,v]) => `<span style="color:${dim};" class="font-sans">${k}</span><span class="text-right">${v}</span>`).join('')}
+      </div>
+    </div>`;
+
+  // ---- 2. Awesun Radial Virtual Mouse (仿向日葵环形悬浮鼠标) ----
+  const activeFill = 'rgba(59, 130, 246, 0.88)';
+  const restFill = 'rgba(20, 27, 40, 0.72)';
+  const ringStroke = 'rgba(255, 255, 255, 0.28)';
+  const ox = 94 + 58 * Math.cos(s.wheelAngle);
+  const oy = 94 + 58 * Math.sin(s.wheelAngle);
+
+  const mouseCollapsedOrb = `
+    <button id="aweMouseDock" title="展开虚拟鼠标"
+      class="absolute z-25 w-10 h-10 rounded-full flex items-center justify-center cursor-grab active:scale-95 transition-transform"
+      style="${orbGlass} color:${acc}; ${s.mouseDockRight ? 'right:12px;' : 'left:12px;'} top:${Math.round(s.mouseDockY * 100)}%; transform:translateY(-50%);">
+      ${ic('mouse', 20, 1.9)}
+    </button>`;
+
+  const mouseExpanded = `
+    <!-- Awesun Offset Pointer Cursor (top-left of thumb, never obscured) -->
+    <div id="awePointerEl" class="absolute z-20 pointer-events-none" style="left:${tipX}px; top:${tipY}px;">
+      <svg width="17" height="23" viewBox="0 0 15 21" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.65));">
+        <path d="M0 0 L15 13.0 L9.0 13.9 L11.8 19.3 L8.5 21 L5.8 15.3 L1.8 18.7 Z" fill="#FFFFFF" stroke="#0B0F17" stroke-width="1.35" stroke-linejoin="round"/>
+      </svg>
+    </div>
+
+    <!-- Awesun 188x188 Radial Virtual Mouse Cluster -->
+    <div id="aweMouseEl" class="absolute z-20 select-none" style="left:${cx - 94}px; top:${cy - 94}px; width:188px; height:188px; pointer-events:none;">
+      <svg width="188" height="188" viewBox="0 0 188 188" class="overflow-visible" style="filter: drop-shadow(0 10px 24px rgba(0,0,0,0.48));">
+        <defs>
+          <radialGradient id="aweHubGrad" cx="35%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="rgba(255,255,255,0.26)"/>
+            <stop offset="100%" stop-color="rgba(20,27,40,0.78)"/>
+          </radialGradient>
+          <filter id="aweOrbGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+
+        ${s.wheelOpen ? `
+          <!-- Circular Annulus Scroll Ring (AwesunAnnulus) -->
+          <g id="aweScrollRing" class="cursor-grab" style="pointer-events:auto;">
+            <circle cx="94" cy="94" r="58" fill="none" stroke="rgba(16,22,34,0.74)" stroke-width="28"/>
+            <circle cx="94" cy="94" r="72" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="1.2"/>
+            <circle cx="94" cy="94" r="44" fill="none" stroke="rgba(255,255,255,0.16)" stroke-width="1.2"/>
+            ${Array.from({length: 24}).map((_, i) => {
+              const a = i * Math.PI / 12;
+              const r1 = i % 6 === 0 ? 52 : 55;
+              const r2 = i % 6 === 0 ? 64 : 61;
+              return `<line x1="${(94+r1*Math.cos(a)).toFixed(1)}" y1="${(94+r1*Math.sin(a)).toFixed(1)}" x2="${(94+r2*Math.cos(a)).toFixed(1)}" y2="${(94+r2*Math.sin(a)).toFixed(1)}" stroke="${i%6===0?'rgba(96,165,250,0.75)':'rgba(255,255,255,0.26)'}" stroke-width="${i%6===0?'1.6':'1'}" stroke-linecap="round"/>`;
+            }).join('')}
+            <!-- Luminous Rotating Scroll Orb -->
+            <circle id="aweRingOrb" cx="${ox.toFixed(1)}" cy="${oy.toFixed(1)}" r="10.5" fill="#60A5FA" filter="url(#aweOrbGlow)"/>
+            <circle id="aweRingOrbCore" cx="${ox.toFixed(1)}" cy="${oy.toFixed(1)}" r="5" fill="#FFFFFF"/>
+            <text x="94" y="91" text-anchor="middle" fill="#EEF4FC" font-size="10.5" font-weight="600" style="pointer-events:none;">环形滚轮</text>
+            <text x="94" y="104" text-anchor="middle" fill="rgba(226,234,246,0.65)" font-size="9" style="pointer-events:none;">沿环滑动滚动</text>
+          </g>
+        ` : `
+          <!-- Left Arc Band (左键 · 点击/按住拖选) -->
+          <g id="aweLeftArc" class="cursor-pointer" style="pointer-events:auto;">
+            <path d="M 46.1 130.1 A 60 60 0 0 1 46.1 57.9" fill="none" stroke="${s.pressed==='left'||s.dragging ? 'rgba(147,197,253,0.9)' : ringStroke}" stroke-width="29" stroke-linecap="round"/>
+            <path id="aweLeftFill" d="M 46.1 130.1 A 60 60 0 0 1 46.1 57.9" fill="none" stroke="${s.pressed==='left'||s.dragging ? activeFill : restFill}" stroke-width="26.5" stroke-linecap="round"/>
+            <text x="34" y="98" text-anchor="middle" fill="${s.pressed==='left'||s.dragging ? '#FFFFFF' : '#E2EAF6'}" font-size="11" font-weight="700" style="pointer-events:none;">L</text>
+          </g>
+
+          <!-- Right Arc Band (右键) -->
+          <g id="aweRightArc" class="cursor-pointer" style="pointer-events:auto;">
+            <path d="M 141.9 57.9 A 60 60 0 0 1 141.9 130.1" fill="none" stroke="${s.pressed==='right' ? 'rgba(147,197,253,0.9)' : ringStroke}" stroke-width="29" stroke-linecap="round"/>
+            <path id="aweRightFill" d="M 141.9 57.9 A 60 60 0 0 1 141.9 130.1" fill="none" stroke="${s.pressed==='right' ? activeFill : restFill}" stroke-width="26.5" stroke-linecap="round"/>
+            <text x="154" y="98" text-anchor="middle" fill="${s.pressed==='right' ? '#FFFFFF' : '#E2EAF6'}" font-size="11" font-weight="700" style="pointer-events:none;">R</text>
+          </g>
+
+          <!-- Center Circular Hub (拖动移动指针 · 轻点左键) -->
+          <g id="aweHub" class="cursor-grab" style="pointer-events:auto;">
+            <circle cx="94" cy="94" r="30.5" fill="${s.pressed==='hub'||s.dragging ? activeFill : 'url(#aweHubGrad)'}" stroke="${s.pressed==='hub'||s.dragging ? '#93C5FD' : 'rgba(255,255,255,0.34)'}" stroke-width="1.6"/>
+            <circle cx="94" cy="94" r="24" fill="none" stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+            <!-- Subtle directional reticle glyph -->
+            <path d="M94 82v4M94 102v4M82 94h4M102 94h4" stroke="rgba(255,255,255,0.55)" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="94" cy="94" r="3.2" fill="${s.pressed==='hub'||s.dragging ? '#FFFFFF' : '#60A5FA'}"/>
+          </g>
+
+          <!-- Top Small Button (打开环形滚轮) -->
+          <g id="aweWheelTop" class="cursor-pointer" style="pointer-events:auto;">
+            <circle cx="94" cy="35" r="14.5" fill="${s.pressed==='wheelTop' ? activeFill : restFill}" stroke="${ringStroke}" stroke-width="1.4"/>
+            <path d="M90.5 33.2 L94 29.7 L97.5 33.2 M90.5 36.8 L94 40.3 L97.5 36.8" fill="none" stroke="#E2EAF6" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>
+
+          <!-- Bottom Small Button (鼠标中键 · 滚轮纹路) -->
+          <g id="aweWheelBottom" class="cursor-pointer" style="pointer-events:auto;">
+            <circle cx="94" cy="153" r="14.5" fill="${s.pressed==='wheelBottom' ? activeFill : restFill}" stroke="${ringStroke}" stroke-width="1.4"/>
+            ${[-5, -2.5, 0, 2.5, 5].map(dy => `<line x1="88" y1="${153 + dy}" x2="100" y2="${153 + dy}" stroke="rgba(226,234,246,0.7)" stroke-width="1.35" stroke-linecap="round"/>`).join('')}
+          </g>
+        `}
+
+        <!-- Close / Collapse Mini Button (offset +68, -68) -->
+        <g id="aweClose" class="cursor-pointer" style="pointer-events:auto;">
+          <circle cx="162" cy="26" r="12.5" fill="rgba(16,22,34,0.78)" stroke="rgba(255,255,255,0.28)" stroke-width="1.2"/>
+          <path d="M158 22 L166 30 M166 22 L158 30" stroke="rgba(241,245,250,0.85)" stroke-width="1.6" stroke-linecap="round"/>
+        </g>
+      </svg>
+    </div>`;
+
+  const virtualMouseLayer = (!s.mouseVisible || s.functionsOpen || s.sheet === 'guide' || s.sheet === 'gamepad')
+    ? '' : (s.mouseCollapsed ? mouseCollapsedOrb : mouseExpanded);
+
+  // ---- 3. Floating Controls: Lock Edge Orb + Bottom-Right 3-Button Liquid Glass Rail ----
+  const hideRail = s.sheet === 'keyboard' || s.sheet === 'keyboardFull';
+  const floatingRail = hideRail ? '' : `
+    <!-- Draggable Display Lock Button (AwesunDockButton) -->
+    <button id="aweLockBtn" title="${s.displayLocked ? '解除锁定显示' : '锁定显示'}"
+      onclick="event.stopPropagation();state.ms.displayLocked=!state.ms.displayLocked;render();showToast(state.ms.displayLocked?'已锁定画面缩放与平移':'已解除画面锁定')"
+      class="absolute z-30 w-10 h-10 rounded-full flex items-center justify-center cursor-pointer active:scale-95 transition"
+      style="${orbGlass} color:${s.displayLocked ? '#F59E0B' : ink}; right:12px; top:${isLand ? 14 : 52}px;">
+      ${ic(s.displayLocked ? 'lock' : 'unlock', 18, 1.9)}
+    </button>
+
+    <!-- Bottom-Right 3-Button Vertical Rail (Keyboard / Gamepad / Remote Actions) -->
+    <div class="absolute z-30 right-3 ${isLand ? 'bottom-3' : 'bottom-7'} flex flex-col gap-2" onclick="event.stopPropagation()">
+      <button title="键盘" onclick="state.ms.sheet=state.ms.sheet==='keyboard'?null:'keyboard';state.ms.functionsOpen=false;render()"
+        class="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer active:scale-95 transition"
+        style="${orbGlass} color:${ink};">${ic('aweKbd', 21, 1.8)}</button>
+      <button title="游戏键盘" onclick="state.ms.sheet=state.ms.sheet==='gamepad'?null:'gamepad';state.ms.functionsOpen=false;render()"
+        class="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer active:scale-95 transition"
+        style="${orbGlass} color:${s.sheet==='gamepad' ? acc : ink};">${ic('gamepad', 19, 1.85)}</button>
+      <button title="远程操作" onclick="state.ms.functionsOpen=!state.ms.functionsOpen;state.ms.sheet=null;render()"
+        class="w-10 h-10 rounded-full flex items-center justify-center cursor-pointer active:scale-95 transition"
+        style="${orbGlass} color:${acc}; box-shadow: 0 8px 22px rgba(59,130,246,0.32), inset 0 1px 0 rgba(255,255,255,0.35); border-color: rgba(96,165,250,0.45);">${ic('aweWheel', 20, 2.1)}</button>
+    </div>`;
+
+  // ---- 4. AwesunFunctionSheet ("远程操作" Bottom Sheet) ----
+  const tileBtn = (iconName, label, onclick, active = false, danger = false) => `
+    <button onclick="event.stopPropagation();${onclick}" class="py-2.5 px-1 rounded-2xl flex flex-col items-center justify-center gap-1.5 cursor-pointer transition active:scale-95"
+      style="background:${danger ? 'rgba(239,68,68,0.14)' : active ? 'rgba(59,130,246,0.22)' : 'rgba(255,255,255,0.06)'}; border: 1px solid ${danger ? 'rgba(239,68,68,0.28)' : active ? 'rgba(96,165,250,0.42)' : 'rgba(255,255,255,0.08)'}; color:${danger ? '#FCA5A5' : active ? '#93C5FD' : ink};">
+      ${ic(iconName, 19, 1.85)}
+      <span class="text-[10.5px] font-medium leading-none whitespace-nowrap">${label}</span>
+    </button>`;
+
+  const functionsSheet = !s.functionsOpen ? '' : `
+    <div onclick="state.ms.functionsOpen=false;render()" class="absolute inset-0 z-40 flex items-end" style="background: rgba(4,7,13,0.45); backdrop-filter: blur(3px);">
+      <div onclick="event.stopPropagation()" class="w-full max-h-[80%] rounded-t-[26px] flex flex-col overflow-hidden" style="${glassSurface} color:${ink}; border-bottom:none;">
+        <div class="px-5 pt-4 pb-2.5 flex items-center justify-between shrink-0">
+          <span class="text-[15px] font-semibold tracking-tight">远程操作</span>
+          <button onclick="state.ms.functionsOpen=false;render()" class="w-7 h-7 rounded-full flex items-center justify-center cursor-pointer" style="background: rgba(255,255,255,0.10); color:${ink};">${ic('close', 14, 2.2)}</button>
+        </div>
+        <div class="flex-1 overflow-y-auto rd-scroll px-5 pb-6 space-y-4">
+          <!-- 会话 -->
+          <div class="space-y-2">
+            <div class="text-[11px] font-semibold tracking-wide" style="color:${dim};">会话</div>
+            <div class="grid grid-cols-4 gap-2">
+              ${tileBtn('linkoff', '断开', `setMobileScreen('${platform}','home');showToast('已断开连接')`, false, true)}
+              ${tileBtn('camera', '截图', "state.ms.functionsOpen=false;render();showToast('截图已保存到相册')")}
+              ${tileBtn(s.soundOn ? 'volumeOn' : 'volumeOff', s.soundOn ? '声音已开' : '声音已关', "state.ms.soundOn=!state.ms.soundOn;render()", s.soundOn)}
+              ${tileBtn('switchMon', '切换屏幕', "showToast('已切换到屏幕 2')")}
+              ${tileBtn('chat', '聊天', "state.ms.functionsOpen=false;render();showToast('打开会话聊天')")}
+              ${tileBtn('sliders', '更多操作', "showToast('Ctrl+Alt+Del / 剪贴板 / 重启')")}
+            </div>
+          </div>
+
+          <!-- 远控方式 -->
+          <div class="space-y-2 pt-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-semibold tracking-wide" style="color:${dim};">远控方式</span>
+              <button onclick="state.ms.functionsOpen=false;state.ms.sheet='guide';render()" class="inline-flex items-center gap-0.5 text-[11.5px] font-medium cursor-pointer" style="color:${acc};">手势指南${ic('chevR', 13, 2.2)}</button>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              ${[['pointer','指针模式','拖动移动光标','mouse'],['touch','触控模式','指哪点哪直控','touch']].map(([id,t,sub,icName]) => `
+                <button onclick="state.ms.mode='${id}';render()" class="p-2.5 rounded-2xl text-left flex items-center gap-2.5 cursor-pointer transition"
+                  style="background:${s.mode===id ? 'rgba(59,130,246,0.22)' : 'rgba(255,255,255,0.06)'}; border: 1px solid ${s.mode===id ? 'rgba(96,165,250,0.48)' : 'rgba(255,255,255,0.08)'};">
+                  <span class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0" style="background:${s.mode===id ? accSolid : 'rgba(255,255,255,0.09)'}; color:#fff;">${ic(icName, 16, 1.9)}</span>
+                  <div class="min-w-0">
+                    <div class="text-[12.5px] font-semibold leading-tight">${t}</div>
+                    <div class="text-[10px] mt-0.5 truncate" style="color:${dim};">${sub}</div>
+                  </div>
+                </button>`).join('')}
+            </div>
+            <div onclick="state.ms.mouseVisible=!state.ms.mouseVisible;if(state.ms.mouseVisible)state.ms.mouseCollapsed=false;render()" class="px-3.5 py-2.5 rounded-2xl flex items-center justify-between cursor-pointer" style="background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);">
+              <div class="flex items-center gap-2.5">
+                <span style="color:${acc};">${ic('mouse', 17, 1.9)}</span>
+                <div>
+                  <div class="text-[12.5px] font-medium">悬浮虚拟鼠标</div>
+                  <div class="text-[10.5px]" style="color:${dim};">环形左右键 · 中键 · 旋转滚轮环</div>
+                </div>
+              </div>
+              <span class="w-10 h-6 rounded-full p-0.5 flex items-center transition" style="background:${s.mouseVisible ? accSolid : 'rgba(255,255,255,0.18)'}; justify-content:${s.mouseVisible ? 'flex-end' : 'flex-start'};">
+                <span class="w-5 h-5 rounded-full bg-white shadow"></span>
+              </span>
+            </div>
+          </div>
+
+          <!-- 键盘 -->
+          <div class="space-y-2 pt-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
+            <div class="text-[11px] font-semibold tracking-wide" style="color:${dim};">键盘</div>
+            <div class="grid grid-cols-4 gap-2">
+              ${tileBtn('keyboard', '系统键盘', "state.ms.functionsOpen=false;state.ms.sheet='keyboard';render()")}
+              ${tileBtn('aweKbd', '虚拟键盘', "state.ms.functionsOpen=false;state.ms.sheet='keyboardFull';render()")}
+              ${tileBtn('sliders', '自定义键', "showToast('打开快捷按键栏编辑')")}
+              ${tileBtn('gamepad', '游戏键盘', "state.ms.functionsOpen=false;state.ms.sheet='gamepad';render()")}
+            </div>
+          </div>
+
+          <!-- 显示与连接 -->
+          <div class="space-y-2 pt-2" style="border-top: 1px solid rgba(255,255,255,0.08);">
+            <div class="text-[11px] font-semibold tracking-wide" style="color:${dim};">显示与连接</div>
+            <div class="grid grid-cols-2 gap-2">
+              ${tileBtn('monitor', '显示设置', "showToast('画质 / 编码 / 帧率设置')")}
+              ${tileBtn('wave', s.quality ? '关闭品质检测' : '品质检测', "state.ms.quality=!state.ms.quality;state.ms.functionsOpen=false;render()", s.quality)}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  // ---- 5. Keyboard Accessory Strip & Full Keyboard (AwesunKeyboardAccessory / AwesunKeyboardView) ----
+  const kbChip = (label, onclick, active = false) => `
+    <button onclick="event.stopPropagation();${onclick}" class="h-7 px-2.5 rounded-lg text-[11.5px] font-medium shrink-0 cursor-pointer whitespace-nowrap transition"
+      style="background:${active ? accSolid : 'rgba(255,255,255,0.10)'}; color:#fff; border: 1px solid ${active ? 'rgba(147,197,253,0.5)' : 'rgba(255,255,255,0.08)'};">${label}</button>`;
+
+  const keyboardLayer = (s.sheet !== 'keyboard' && s.sheet !== 'keyboardFull') ? '' : `
+    <div class="absolute inset-x-0 bottom-0 z-40" onclick="event.stopPropagation()" style="${glassSurface} border-left:none; border-right:none; border-bottom:none; color:${ink};">
+      <!-- 38pt Accessory Strip -->
+      <div class="h-10 px-2 flex items-center gap-1.5" style="border-bottom:${s.sheet==='keyboardFull' ? '1px solid rgba(255,255,255,0.08)' : 'none'};">
+        ${kbChip('快捷键', "showToast('打开常用快捷键')")}
+        <div class="flex-1 flex items-center gap-1 overflow-x-auto no-scrollbar">
+          ${[['ctrl','Ctrl'],['shift','Shift'],['alt','Alt'],['meta','⌘']].map(([id,l]) => kbChip(l, `state.ms.mods['${id}']=!state.ms.mods['${id}'];render()`, !!s.mods[id])).join('')}
+          ${['Esc','Tab','Del','Win'].map(k => kbChip(k, `showToast('发送 ${k}')`)).join('')}
+        </div>
+        ${kbChip(s.sheet==='keyboardFull' ? '收起' : '全键盘', `state.ms.sheet=state.ms.sheet==='keyboardFull'?'keyboard':'keyboardFull';render()`, s.sheet==='keyboardFull')}
+        <button onclick="state.ms.sheet=null;render()" class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 cursor-pointer" style="background: rgba(255,255,255,0.08); color:${ink};">${ic('close', 13, 2.2)}</button>
+      </div>
+      ${s.sheet === 'keyboardFull' ? `
+        <div class="p-2 pb-4 space-y-1.5 select-none">
+          ${[
+            ['Esc','F1','F2','F3','F4','F5','F6','F7','F8','Del'],
+            ['Q','W','E','R','T','Y','U','I','O','P'],
+            ['A','S','D','F','G','H','J','K','L','⏎'],
+            ['⇧','Z','X','C','V','B','N','M','↑','⌫'],
+            ['Ctrl','Alt','⌘','Space','←','↓','→']
+          ].map(row => `
+            <div class="flex items-center gap-1">
+              ${row.map(k => `<button onclick="showToast('按键：${k}')" class="${k==='Space' ? 'flex-[3]' : 'flex-1'} h-8 rounded-lg text-[11px] font-medium cursor-pointer active:translate-y-px"
+                style="background: rgba(255,255,255,0.10); color:${ink}; box-shadow: inset 0 -1.5px 0 rgba(0,0,0,0.35);">${k}</button>`).join('')}
+            </div>`).join('')}
+        </div>` : ''}
+    </div>`;
+
+  // ---- 6. Gamepad Overlay Preview ----
+  const gamepadLayer = s.sheet !== 'gamepad' ? '' : `
+    <div class="absolute inset-x-3 bottom-4 z-35 flex items-end justify-between pointer-events-none">
+      <div class="w-28 h-28 rounded-full flex items-center justify-center relative pointer-events-auto" style="${glassSurface}">
+        <button onclick="showToast('W')" class="absolute top-2 left-1/2 -translate-x-1/2 w-8 h-8 rounded-lg text-xs font-semibold cursor-pointer" style="background:rgba(255,255,255,0.10);color:${ink};">W</button>
+        <button onclick="showToast('S')" class="absolute bottom-2 left-1/2 -translate-x-1/2 w-8 h-8 rounded-lg text-xs font-semibold cursor-pointer" style="background:rgba(255,255,255,0.10);color:${ink};">S</button>
+        <button onclick="showToast('A')" class="absolute left-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg text-xs font-semibold cursor-pointer" style="background:rgba(255,255,255,0.10);color:${ink};">A</button>
+        <button onclick="showToast('D')" class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg text-xs font-semibold cursor-pointer" style="background:rgba(255,255,255,0.10);color:${ink};">D</button>
+      </div>
+      <button onclick="state.ms.sheet=null;render()" class="pointer-events-auto px-3 h-8 rounded-full text-[11px] font-medium cursor-pointer" style="${glassSurface} color:${ink};">退出游戏键盘</button>
+      <div class="grid grid-cols-2 gap-2 pointer-events-auto p-2.5 rounded-2xl" style="${glassSurface}">
+        ${['Shift','Space','E','F'].map(k => `<button onclick="showToast('${k}')" class="w-11 h-10 rounded-xl text-[11px] font-semibold cursor-pointer" style="background:rgba(59,130,246,0.22); border:1px solid rgba(96,165,250,0.4); color:#fff;">${k}</button>`).join('')}
+      </div>
+    </div>`;
+
+  // ---- 7. Gesture Guide Sheet (AwesunGuideSheet) ----
+  const guideLayer = s.sheet !== 'guide' ? '' : `
+    <div onclick="state.ms.sheet=null;render()" class="absolute inset-0 z-40 flex items-end" style="background: rgba(4,7,13,0.45); backdrop-filter: blur(3px);">
+      <div onclick="event.stopPropagation()" class="w-full rounded-t-[26px] p-5 space-y-3" style="${glassSurface} color:${ink}; border-bottom:none;">
+        <div class="flex items-center justify-between">
+          <span class="text-[15px] font-semibold">手势与虚拟鼠标指南</span>
+          <button onclick="state.ms.sheet=null;render()" class="w-7 h-7 rounded-full flex items-center justify-center cursor-pointer" style="background: rgba(255,255,255,0.10);">${ic('close', 14, 2.2)}</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-[11.5px]">
+          ${[
+            ['拖动中心圆盘','移动光标（指针在左上方不遮挡）'],
+            ['左弧 L / 按住拖动','左键单击 / 左键按住拖选'],
+            ['右弧 R','右键菜单'],
+            ['顶部滚轮钮','展开环形旋转滚轮'],
+            ['底部中键钮','触发鼠标中键'],
+            ['右上角 ×','收起为边缘悬浮球 / 退出滚轮']
+          ].map(([k,v]) => `<div class="p-2.5 rounded-xl" style="background: rgba(255,255,255,0.06);"><div class="font-semibold">${k}</div><div class="text-[10.5px] mt-0.5" style="color:${dim};">${v}</div></div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+
+  return `
+  <div id="mobileRemoteCanvas" class="flex-1 relative overflow-hidden select-none" style="touch-action:none; background:#05070B;">
+    <!-- Simulated Remote Desktop Wallpaper + Workspace -->
+    <div class="absolute inset-0 remote-wallpaper flex items-center justify-center pointer-events-none">
+      <div class="w-[90%] rounded-xl overflow-hidden shadow-2xl border border-white/10 bg-[#121621]/92">
+        <div class="h-5 px-2.5 flex items-center gap-1.5 bg-[#1b2130] border-b border-white/10">
+          <span class="w-1.5 h-1.5 rounded-full bg-red-400/80"></span><span class="w-1.5 h-1.5 rounded-full bg-amber-400/80"></span><span class="w-1.5 h-1.5 rounded-full bg-emerald-400/80"></span>
+          <span class="ml-1 text-[8.5px] font-mono-num text-slate-400">MacBook Pro M4 — 2560 × 1600 · ${s.mode === 'pointer' ? '指针模式' : '触控模式'}</span>
+        </div>
+        <div class="p-3 font-mono-num text-[9.5px] leading-4 text-slate-300 space-y-1">
+          <div class="text-blue-400">▸ rustdesk/flutter/ios/Runner/Awesun</div>
+          <div class="text-slate-400">  拖动中心圆盘移动指针 · 点 L/R 弧键 · 点顶部钮开环形滚轮</div>
+          <div class="grid grid-cols-3 gap-1.5 pt-1">
+            ${['AwesunSessionView','AwesunSheetsView','AwesunTokens'].map(f => `<div class="px-2 py-1 rounded bg-white/5 border border-white/10 text-[8.5px] text-slate-300 truncate">${f}.swift</div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${qualityHud}
+    ${virtualMouseLayer}
+    ${floatingRail}
+    ${gamepadLayer}
+    ${keyboardLayer}
+    ${functionsSheet}
+    ${guideLayer}
+  </div>`;
+}
+
+/* Fix #7: Redesigned Mobile File Transfer (Breadcrumbs + Shortcuts + Multi-Select Batch Bar + Transfer Drawer) */
+function renderUnifiedMobileFiles(platform) {
+  const isRemote = state.mobileFileSide === 'remote';
+  const files = isRemote ? [
+    { name: 'Projects', type: 'dir', meta: '14 项 · 今天 19:10', badge: '' },
+    { name: 'render-output-4k.mp4', type: 'video', meta: '1.24 GB · 今天 16:30', badge: 'MP4' },
+    { name: 'p2p-probe-trace.json', type: 'code', meta: '124 KB · 昨天 22:18', badge: 'JSON' },
+    { name: 'release-arm64.zip', type: 'zip', meta: '64.2 MB · 11-19', badge: 'ZIP' },
+    { name: 'design-spec-v2.pdf', type: 'doc', meta: '8.4 MB · 11-18', badge: 'PDF' }
+  ] : [
+    { name: '下载 (Downloads)', type: 'dir', meta: '23 项 · 今天 15:02', badge: '' },
+    { name: '屏幕录制_20261122.mov', type: 'video', meta: '186 MB · 今天 11:40', badge: 'MOV' },
+    { name: 'id_ed25519.pub', type: 'code', meta: '1.1 KB · 11-12', badge: 'KEY' }
+  ];
+
+  const iconStyle = (t) => ({
+    dir: { bg: 'var(--rd-amber-soft)', c: 'var(--rd-amber)', g: ic('folder', 18, 1.9) },
+    video: { bg: 'var(--rd-purple-soft)', c: 'var(--rd-purple)', g: ic('video', 18, 1.9) },
+    code: { bg: 'var(--rd-accent-soft)', c: 'var(--rd-accent)', g: ic('code', 18, 1.9) },
+    zip: { bg: 'var(--rd-green-soft)', c: 'var(--rd-green)', g: ic('archive', 18, 1.9) },
+    doc: { bg: 'var(--rd-red-soft)', c: 'var(--rd-red)', g: ic('doc', 18, 1.9) }
+  }[t] || { bg: 'var(--rd-surface-2)', c: 'var(--rd-ink-2)', g: ic('doc', 18, 1.9) });
+
+  const selCount = state.mobileSelectedFiles.size;
+
+  return `
+  <div class="flex-1 flex flex-col overflow-hidden relative">
+    <!-- Top Header -->
+    <div class="px-4 pt-1 pb-2.5 flex items-center justify-between gap-2">
+      <div>
+        <div class="text-base font-bold tracking-tight flex items-center gap-2">
+          <span>文件传输</span>
+          <span class="text-[10px] font-mono-num px-1.5 py-0.5 rounded-full font-medium" style="background: var(--rd-green-soft); color: var(--rd-green);">P2P 46 MB/s</span>
+        </div>
+        <div class="text-[11px]" style="color: var(--rd-ink-3);">已连接：Win11-Workstation</div>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <button onclick="showToast('新建文件夹')" class="w-8 h-8 rounded-xl rd-surface flex items-center justify-center cursor-pointer" style="color: var(--rd-ink-2);" title="新建文件夹">${ic('folderPlus', 15, 1.9)}</button>
+        <button onclick="showToast('按修改时间 / 大小排序')" class="w-8 h-8 rounded-xl rd-surface flex items-center justify-center cursor-pointer" style="color: var(--rd-ink-2);" title="排序">${ic('sort', 15, 1.9)}</button>
+      </div>
+    </div>
+
+    <!-- Segmented Local / Remote Switcher -->
+    <div class="px-4 pb-2.5">
+      <div class="grid grid-cols-2 p-1 rounded-2xl" style="background: var(--rd-surface); border: 1px solid var(--rd-border);">
+        <button onclick="state.mobileFileSide='local';render()" class="py-2 rounded-xl text-xs font-semibold cursor-pointer transition"
+          style="background:${!isRemote?'var(--rd-accent)':'transparent'}; color:${!isRemote?'#fff':'var(--rd-ink-2)'};">本机存储</button>
+        <button onclick="state.mobileFileSide='remote';render()" class="py-2 rounded-xl text-xs font-semibold cursor-pointer transition"
+          style="background:${isRemote?'var(--rd-accent)':'transparent'}; color:${isRemote?'#fff':'var(--rd-ink-2)'};">远端 · Win11</button>
+      </div>
+    </div>
+
+    <!-- Breadcrumb Bar + Quick Jump Chips -->
+    <div class="px-4 pb-2 space-y-2">
+      <div class="flex items-center gap-1 overflow-x-auto text-[11px] font-mono-num py-1 px-2.5 rounded-xl" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">
+        ${(isRemote ? state.mobileFilePath : ['本机', 'RustDesk']).map((seg, i, arr) => `
+          <span class="${i===arr.length-1?'font-semibold':''} whitespace-nowrap" style="${i===arr.length-1?'color:var(--rd-ink)':''}">${seg}</span>
+          ${i<arr.length-1 ? `<span style="color:var(--rd-ink-3)">›</span>` : ''}
+        `).join('')}
+      </div>
+      <div class="flex items-center gap-1.5 overflow-x-auto">
+        ${['桌面','下载','文档','根目录'].map(q => `
+          <button onclick="showToast('跳转到：${q}')" class="px-2.5 py-1 rounded-full text-[11px] shrink-0 cursor-pointer whitespace-nowrap" style="background: var(--rd-surface); border: 1px solid var(--rd-border); color: var(--rd-ink-2);">${q}</button>
+        `).join('')}
+      </div>
+    </div>
+
+    <!-- Rich Selectable File List -->
+    <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-36 space-y-1.5">
+      ${files.map(f => {
+        const st = iconStyle(f.type);
+        const checked = state.mobileSelectedFiles.has(f.name);
+        return `
+          <div onclick="toggleFileSelect('${f.name}','${f.type}')" class="p-2.5 rounded-2xl flex items-center justify-between gap-2.5 cursor-pointer transition"
+            style="background:${checked ? 'var(--rd-accent-soft)' : 'var(--rd-surface)'}; border: 1px solid ${checked ? 'var(--rd-accent-border)' : 'var(--rd-border)'};">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xs font-bold shrink-0" style="background:${st.bg}; color:${st.c};">${st.g}</div>
+              <div class="min-w-0">
+                <div class="text-[13px] font-medium truncate">${f.name}</div>
+                <div class="text-[11px] font-mono-num mt-0.5" style="color: var(--rd-ink-3);">${f.meta}</div>
+              </div>
+            </div>
+            ${f.type==='dir'
+              ? `<span class="text-xs px-1" style="color: var(--rd-ink-3);">›</span>`
+              : `<div class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+                  style="background:${checked?'var(--rd-accent)':'transparent'}; border:1.5px solid ${checked?'var(--rd-accent)':'var(--rd-border-strong)'}; color:#fff;">${checked ? ic('check', 12, 2.6) : ''}</div>`
+            }
+          </div>
+        `;
+      }).join('')}
+    </div>
+
+    <!-- Floating Batch Action Bar + Live Transfer Queue Pill -->
+    <div class="absolute ${platform==='ios' ? 'bottom-[86px]' : 'bottom-[74px]'} inset-x-3 z-20 space-y-2">
+      ${selCount > 0 ? `
+        <div class="p-2.5 rounded-2xl rd-glass shadow-xl flex items-center justify-between gap-2 text-xs">
+          <div class="pl-1">
+            <div class="font-semibold">已选 ${selCount} 项</div>
+            <div class="text-[10px] font-mono-num" style="color: var(--rd-ink-3);">约 1.24 GB</div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button onclick="state.mobileSelectedFiles.clear();render()" class="px-2.5 py-1.5 rounded-xl text-[11px] cursor-pointer" style="background: var(--rd-surface-2); color: var(--rd-ink-2);">取消</button>
+            <button onclick="state.mobileShowTransferSheet=true;render();showToast('已加入高速传输队列')" class="px-3.5 py-1.5 rounded-xl text-[11px] font-semibold text-white cursor-pointer whitespace-nowrap" style="background: var(--rd-accent);">${isRemote ? '↓ 拉取到本机' : '↑ 发送到远端'}</button>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Compact Live Transfer Status Pill -->
+      <button onclick="state.mobileShowTransferSheet=!state.mobileShowTransferSheet;render()" class="w-full px-3.5 py-2 rounded-2xl rd-surface flex items-center justify-between text-[11px] shadow-md cursor-pointer">
+        <span class="flex items-center gap-2 font-medium">
+          <span class="w-2 h-2 rounded-full animate-pulse" style="background: var(--rd-accent);"></span>
+          <span>传输任务 2 进行中</span>
+        </span>
+        <span class="font-mono-num" style="color: var(--rd-accent);">68% · 46.8 MB/s ▴</span>
+      </button>
+    </div>
+
+    <!-- Expandable Transfer Queue Bottom Sheet -->
+    ${state.mobileShowTransferSheet ? `
+      <div class="absolute inset-x-0 bottom-0 z-40 rounded-t-3xl rd-glass p-4 shadow-2xl space-y-3" style="background: var(--rd-surface); border-top: 1px solid var(--rd-border-strong);">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold">传输队列 (2 进行中)</span>
+          <button onclick="state.mobileShowTransferSheet=false;render()" class="text-xs cursor-pointer" style="color: var(--rd-ink-3);">收起 ${ic('close', 12, 2.2)}</button>
+        </div>
+        <div class="p-3 rounded-2xl space-y-2" style="background: var(--rd-surface-2);">
+          <div class="flex items-center justify-between text-xs"><span class="font-medium truncate">render-output-4k.mp4</span><span class="font-mono-num text-[11px]" style="color: var(--rd-accent);">68%</span></div>
+          <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--rd-border-strong);"><div class="h-full rounded-full" style="width:68%; background: var(--rd-accent);"></div></div>
+          <div class="flex justify-between text-[10px] font-mono-num" style="color: var(--rd-ink-3);"><span>842 MB / 1.24 GB</span><span>46.8 MB/s · 剩余 9s</span></div>
+        </div>
+        <div class="p-3 rounded-2xl flex items-center justify-between text-xs" style="background: var(--rd-surface-2);">
+          <span class="truncate">p2p-probe-trace.json</span>
+          <span class="inline-flex items-center gap-1 text-[11px] font-medium" style="color: var(--rd-green);">${ic('check', 12, 2.4)} 已完成</span>
+        </div>
+      </div>
+    ` : ''}
+  </div>`;
+}
+
+window.toggleFileSelect = (name, type) => {
+  if (type === 'dir') { showToast(`已打开目录：${name}`); return; }
+  if (state.mobileSelectedFiles.has(name)) state.mobileSelectedFiles.delete(name);
+  else state.mobileSelectedFiles.add(name);
+  render();
+};
+
+/* v3 Mobile Settings: inset-grouped list that mirrors the real settings_page.dart sections */
+function renderUnifiedMobileSettings(platform) {
+  const ios = platform === 'ios';
+  const sub = state.mobileSettingsSubpage;
+  const chev = `<span style="color: var(--rd-ink-3); opacity:.7;">${ic('chevR', 15, 2.2)}</span>`;
+  const value = (t) => `<span class="text-[14px]" style="color: var(--rd-ink-3);">${t}</span>`;
+  const group = (header, rows, footer = '') => `
+    <section>
+      ${header ? `<div class="px-4 pb-1.5 text-[12px] ${ios ? 'uppercase tracking-wide' : 'font-semibold'}" style="color:${ios ? 'var(--rd-ink-3)' : 'var(--rd-accent)'};">${header}</div>` : ''}
+      <div class="rounded-[14px] overflow-hidden" style="background: var(--rd-surface); ${ios ? '' : 'border: 1px solid var(--rd-border);'}">
+        ${rows.map((r, i) => `<div class="relative">${i ? `<div class="absolute top-0 right-0 h-px" style="left:${r.icon === false ? 16 : 56}px; background: var(--rd-border);"></div>` : ''}${r.html}</div>`).join('')}
+      </div>
+      ${footer ? `<div class="px-4 pt-1.5 text-[12px] leading-snug" style="color: var(--rd-ink-3);">${footer}</div>` : ''}
+    </section>`;
+  const row = (iconName, color, title, trailing = chev, onclick = '', subtitle = '') => ({ icon: !!iconName, html: `
+    <div ${onclick ? `onclick="${onclick}"` : ''} class="min-h-[46px] pl-4 pr-3.5 py-2 flex items-center gap-3 ${onclick ? 'cursor-pointer active:bg-black/5' : ''}">
+      ${iconName ? tile(iconName, color, 29, 7.5, 16) : ''}
+      <div class="flex-1 min-w-0">
+        <div class="text-[14.5px] truncate" style="color: var(--rd-ink);">${title}</div>
+        ${subtitle ? `<div class="text-[12px] truncate" style="color: var(--rd-ink-3);">${subtitle}</div>` : ''}
+      </div>
+      <div class="shrink-0 flex items-center gap-1.5">${trailing}</div>
+    </div>` });
+  const navBar = (title) => `
+    <div class="px-2 pt-1 pb-2 grid grid-cols-[1fr_auto_1fr] items-center">
+      <button onclick="state.mobileSettingsSubpage=null;render()" class="flex items-center gap-0.5 text-[15px] cursor-pointer justify-self-start" style="color: var(--rd-accent);">${ic('chevL', 20, 2.2)}设置</button>
+      <span class="text-[15px] font-semibold">${title}</span><span></span>
+    </div>`;
+
+  if (sub === 'network') {
+    return `
+    <div class="flex-1 flex flex-col overflow-hidden">
+      ${navBar('网络')}
+      <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-28 pt-2 space-y-6">
+        ${group('连接', [
+          row(null, '', '仅允许直连', switchEl('directOnly')),
+          row(null, '', 'Socks5 / HTTP(S) 代理', value('未设置') + chev, "showToast('编辑代理')"),
+          row(null, '', '使用 WebSocket', switchEl('lanDiscovery'))
+        ].map(r => ({...r, icon:false})), '开启“仅允许直连”后不会使用中继服务器；直连失败时会显示失败原因。')}
+        ${group('P2P', [
+          row(null, '', 'UDP 打洞', switchEl('udpPunch')),
+          row(null, '', 'TCP 打洞', switchEl('abr')),
+          row(null, '', 'IPv6 P2P 连接', switchEl('ipv6Punch')),
+          row(null, '', 'WebRTC P2P 连接', switchEl('privacyMode'))
+        ].map(r => ({...r, icon:false})))}
+        ${group('诊断', [ row(null, '', '记录 P2P 诊断', switchEl('autoUpdate')) ].map(r => ({...r, icon:false})), '记录每轮打洞的本地端口、目标地址与收发计数，用于排查直连失败。')}
+      </div>
+    </div>`;
+  }
+  if (sub === 'server') {
+    const field = (label, val) => `
+      <div class="min-h-[46px] px-4 py-2 flex items-center gap-3">
+        <span class="w-[86px] shrink-0 text-[14.5px]">${label}</span>
+        <input value="${val}" class="flex-1 min-w-0 bg-transparent outline-none text-[14px] font-mono-num" style="color: var(--rd-ink-2);" />
+      </div>`;
+    return `
+    <div class="flex-1 flex flex-col overflow-hidden">
+      <div class="px-2 pt-1 pb-2 grid grid-cols-[1fr_auto_1fr] items-center">
+        <button onclick="state.mobileSettingsSubpage=null;render()" class="text-[15px] cursor-pointer justify-self-start px-2" style="color: var(--rd-accent);">取消</button>
+        <span class="text-[15px] font-semibold">ID / 中继服务器</span>
+        <button onclick="state.mobileSettingsSubpage=null;render();showToast('已保存')" class="text-[15px] font-semibold cursor-pointer justify-self-end px-2" style="color: var(--rd-accent);">保存</button>
+      </div>
+      <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-28 pt-2 space-y-6">
+        ${group('', [
+          {icon:false, html: field('ID 服务器', 'hbbs.myhost.dev')},
+          {icon:false, html: field('中继服务器', 'hbbr.myhost.dev')},
+          {icon:false, html: field('API 服务器', 'https://api.myhost.dev')},
+          {icon:false, html: field('Key', 'r9K4pLm2Qx8…vW3=')}
+        ], '留空则使用默认的公共服务器。')}
+        <button onclick="showToast('打开相机扫描配置二维码')" class="w-full h-[46px] rounded-[14px] flex items-center justify-center gap-2 text-[14.5px] cursor-pointer" style="background: var(--rd-surface); color: var(--rd-accent);">${ic('qr', 17, 2)}扫描二维码导入</button>
+      </div>
+    </div>`;
+  }
+
+  return `
+  <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-28 space-y-6">
+    <div class="pt-1 space-y-2.5">
+      <div class="flex items-end justify-between">
+        <h1 class="${ios ? 'text-[30px]' : 'text-[24px]'} font-bold tracking-tight leading-none">设置</h1>
+        <button onclick="showToast('打开扫码导入配置')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer" style="background: var(--rd-surface); color: var(--rd-accent);">${ic('qr', 16, 2)}</button>
+      </div>
+      <div class="h-9 px-2.5 rounded-[11px] flex items-center gap-2" style="background: var(--rd-surface-2);">
+        <span style="color: var(--rd-ink-3);">${ic('search', 15, 2)}</span>
+        <input placeholder="搜索" class="flex-1 bg-transparent outline-none text-[14.5px]" style="color: var(--rd-ink);" />
+      </div>
+    </div>
+
+    <section onclick="showToast('打开账号')" class="rounded-[14px] px-4 py-3 flex items-center gap-3 cursor-pointer" style="background: var(--rd-surface); ${ios ? '' : 'border: 1px solid var(--rd-border);'}">
+      <span class="w-[54px] h-[54px] rounded-full flex items-center justify-center text-white text-[19px] font-semibold shrink-0" style="background: linear-gradient(135deg,#0A84FF,#5E5CE6);">LH</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-[17px] font-semibold truncate">linhemin</div>
+        <div class="text-[12.5px] truncate" style="color: var(--rd-ink-3);">RustDesk 账号 · 地址簿已同步</div>
+      </div>
+      ${chev}
+    </section>
+
+    ${group('连接', [
+      row('network', '#0A84FF', 'ID / 中继服务器', value('自建') + chev, "state.mobileSettingsSubpage='server';render()"),
+      row('globe', '#30B158', '网络', value(state.toggles.directOnly ? '仅直连' : '自动') + chev, "state.mobileSettingsSubpage='network';render()")
+    ])}
+
+    ${group('通用', [
+      row('lang', '#FF9F0A', '语言', value('简体中文') + chev, "showToast('选择语言')"),
+      row(state.theme === 'dark' ? 'moon' : 'sun', '#5E5CE6', '外观', value(state.theme === 'dark' ? '深色' : '浅色') + chev, "state.theme=state.theme==='dark'?'light':'dark';render()"),
+      row('keyboard', '#636366', '键盘快捷键', value('12') + chev, "showToast('打开键盘快捷键')"),
+      row('note', '#FFB800', '连接结束时添加备注', switchEl('recordSession')),
+      row('power', '#30B158', '主控会话期间保持唤醒', switchEl('preventSleep'))
+    ])}
+
+    ${group('显示与编码', [
+      row('monitor', '#FF9F0A', '显示设置', chev, "showToast('打开默认显示设置')"),
+      row('chip', '#FF453A', '硬件编解码', switchEl('hwCodec'))
+    ], ios ? '使用 VideoToolbox 进行硬件解码。' : '使用 MediaCodec 进行硬件编解码。')}
+
+    ${ios ? '' : group('共享屏幕', [
+      row('share', '#0A84FF', '屏幕常亮', value('被控时') + chev, "showToast('选择屏幕常亮策略')"),
+      row('power', '#30B158', '开机自动启动服务', switchEl('autoUpdate')),
+      row('layers', '#AF52DE', '悬浮窗', switchEl('showRemoteCursor'))
+    ])}
+
+    ${group('录制', [
+      row('record', '#FF453A', '自动录制主控会话', switchEl('audioOn')),
+      row('folder', '#0A84FF', '保存位置', value(ios ? '文件 › RustDesk' : 'Movies/RustDesk') + chev, "showToast('选择目录')")
+    ])}
+
+    ${group('安全', [
+      row('lock', '#30B158', '双重验证', value('未启用') + chev, "showToast('设置 2FA')"),
+      row('shield', '#0A84FF', '受信任设备', value('3') + chev, "showToast('管理受信任设备')")
+    ])}
+
+    ${group('关于', [
+      row('info', '#8E8E93', '版本', value('1.4.0'), ''),
+      row('hash', '#8E8E93', '本机 ID', `<span class="text-[14px] font-mono-num" style="color: var(--rd-ink-3);">482 910 347</span>`, ''),
+      row('finger', '#8E8E93', '指纹', `<span class="text-[13px] font-mono-num" style="color: var(--rd-ink-3);">a1f3 9c…</span>`, ''),
+      row('doc', '#8E8E93', '隐私声明', chev, "showToast('打开隐私声明')")
+    ])}
+  </div>`;
+}
+
+
+/* ==================== iOS VIEW (Fix #5: Authentic iOS 26 Native Liquid Glass Bottom Tab Bar) ==================== */
+function renderIOSView() {
+  const scr = state.iosScreen;
+  const isLand = scr === 'session' && state.mobileLandscape;
+
+  const iosLiquidNav = () => `
+    <div class="absolute bottom-4 inset-x-4 z-30 flex items-center justify-center gap-2.5 pointer-events-none">
+      <!-- Authentic iOS 26 Liquid Glass Tab Capsule -->
+      <div class="ios-liquid-glass pointer-events-auto rounded-full p-1 flex items-center gap-0.5">
+        ${[
+          { id: 'home', label: '连接', svg: `<rect x="2" y="4" width="20" height="13" rx="2.5"/><path d="M8 20h8M12 17v3"/>` },
+          { id: 'files', label: '文件', svg: `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>` },
+          { id: 'settings', label: '设置', svg: `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>` }
+        ].map(t => {
+          const active = scr === t.id;
+          return `
+            <button onclick="state.mobileSettingsSubpage=null;setMobileScreen('ios','${t.id}')"
+              class="w-[74px] py-1.5 rounded-full flex flex-col items-center justify-center gap-0.5 cursor-pointer transition-all ${active ? 'ios-liquid-lens' : ''}"
+              style="color:${active ? 'var(--rd-accent)' : 'var(--rd-ink)'}; opacity:${active ? '1' : '0.72'};">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${active?'2.2':'1.8'}">${t.svg}</svg>
+              <span class="text-[10px] font-semibold tracking-tight leading-none">${t.label}</span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      <!-- Companion Liquid Glass Action Orb (iOS 26 pattern) -->
+      <button onclick="setMobileScreen('ios','session');showToast('快速进入上次远控会话')" title="快速连接"
+        class="ios-liquid-glass pointer-events-auto w-[50px] h-[50px] rounded-full flex items-center justify-center cursor-pointer transition active:scale-95"
+        style="color: var(--rd-accent);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+      </button>
+    </div>`;
+
+  return `
+  <div class="flex flex-col lg:flex-row items-start justify-center gap-8">
+    <div class="device-bezel-ios mx-auto transition-all duration-300" style="width:${isLand ? '740px' : '392px'}; max-width: 100%;">
+      <div class="rounded-[38px] overflow-hidden flex flex-col relative" style="background: var(--rd-canvas); color: var(--rd-ink); height:${isLand ? '410px' : '780px'};">
+        <!-- Status Bar + Dynamic Island -->
+        <div class="h-11 px-6 flex items-center justify-between text-[11px] font-semibold shrink-0 select-none ${scr==='session' ? 'absolute top-0 inset-x-0 z-40 text-white pointer-events-none' : ''}">
+          <span class="font-mono-num">9:41</span>
+          ${isLand ? '' : `<div class="w-24 h-6 rounded-full bg-black"></div>`}
+          <div class="flex items-center gap-1.5 font-mono-num"><span>5G</span><span>100%</span></div>
+        </div>
+
+        ${scr === 'home' ? `
+          <div class="px-4 pt-1 pb-2 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold" style="background: var(--rd-accent);">R</div>
+              <span class="text-lg font-bold tracking-tight">RustDesk</span>
+            </div>
+            <button onclick="showToast('打开扫码快速连接')" class="w-8 h-8 rounded-full rd-surface flex items-center justify-center cursor-pointer">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+            </button>
+          </div>
+
+          <div class="px-4 pb-3">
+            <div class="p-1.5 rounded-2xl rd-surface flex items-center gap-2">
+              <input type="text" placeholder="输入远程 ID 或设备名…" class="flex-1 min-w-0 bg-transparent px-2.5 py-2 text-[14px] font-mono-num outline-none" style="color: var(--rd-ink);" />
+              <button onclick="setMobileScreen('ios','session')" class="h-9 px-4 rounded-xl text-xs font-semibold text-white cursor-pointer whitespace-nowrap shrink-0" style="background: var(--rd-accent);">连接</button>
+            </div>
+          </div>
+
+          <div class="px-4 pb-2.5 flex items-center gap-1.5 overflow-x-auto">
+            ${[{id:'recent',l:'最近'},{id:'fav',l:'收藏'},{id:'lan',l:'局域网'},{id:'ab',l:'地址簿'}].map(t => `
+              <button onclick="state.iosTab='${t.id}';render()" class="px-3 py-1.5 rounded-full text-xs font-medium shrink-0 cursor-pointer whitespace-nowrap"
+                style="background:${state.iosTab===t.id ? 'var(--rd-ink)' : 'var(--rd-surface)'}; color:${state.iosTab===t.id ? 'var(--rd-canvas)' : 'var(--rd-ink-2)'}; border: 1px solid var(--rd-border);">${t.l}</button>
+            `).join('')}
+          </div>
+
+          <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-28 space-y-2">
+            ${renderMobilePeerList(state.iosTab, 'ios')}
+          </div>
+          ${iosLiquidNav()}
+        ` : scr === 'session' ? `
+          ${renderUnifiedMobileSession('ios')}
+        ` : scr === 'files' ? `
+          ${renderUnifiedMobileFiles('ios')}
+          ${iosLiquidNav()}
+        ` : `
+          ${renderUnifiedMobileSettings('ios')}
+          ${iosLiquidNav()}
+        `}
+      </div>
+    </div>
+
+    <div class="flex-1 max-w-md space-y-3 text-xs">
+      ${scr === 'session' ? `
+      <div class="p-3.5 rounded-2xl bg-[var(--card)] border border-[var(--border)] flex items-center justify-between gap-3">
+        <div>
+          <div class="font-semibold text-xs">模拟横竖屏方向</div>
+          <div class="text-[11px] text-[var(--muted-foreground)] mt-0.5">当前：${isLand ? '横屏远控视图' : '竖屏远控视图'}</div>
+        </div>
+        <button onclick="state.mobileLandscape=!state.mobileLandscape;render()" class="h-8 px-3 rounded-lg inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-accent-soft); color: var(--rd-accent); border: 1px solid var(--rd-accent-border);">${ic('rotate', 14, 2)}<span>${isLand ? '切回竖屏' : '切换横屏'}</span></button>
+      </div>` : ''}
+      <div class="p-4 rounded-2xl bg-[var(--card)] border border-[var(--border)] space-y-2">
+        <div class="font-semibold text-sm">iOS v3 重点精修</div>
+        <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+          <li><strong>远控会话：基于 Awesun 仿向日葵环形鼠标视觉重构</strong>：严格保留 <code>AwesunSessionView</code> 几何与交互（左上偏置指针防遮挡、中心圆盘拖动、L/R 弧形左右键、顶钮展开环形旋转滚轮、底钮中键、× 收起边缘悬浮球、锁定钮、右下三键液态玻璃轨与「远程操作」抽屉），将原厚黑边灰白鼠标升级为深海晶透毛玻璃 + 蓝色发光交互反馈。</li>
+          <li><strong>原生 Liquid Glass 液态玻璃底栏</strong>：落地继续复用仓库已有原生 <code>AppleWorkspaceNavigation</code>。</li>
+          <li><strong>设置页重做</strong>：采用标准 iOS Inset-Grouped 分组卡片、零 Emoji 全矢量图标色块、完整映射真实 <code>settings_page.dart</code> 分组并支持「网络」「ID / 中继服务器」二级页。</li>
+        </ul>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ==================== ANDROID VIEW (100% Unified Ergonomics with iOS!) ==================== */
+function renderAndroidView() {
+  const scr = state.androidScreen;
+  const isLand = scr === 'session' && state.mobileLandscape;
+  const nav = [
+    { id: 'home', label: '连接' },
+    { id: 'server', label: '被控' },
+    { id: 'files', label: '文件' },
+    { id: 'settings', label: '设置' }
+  ];
+
+  return `
+  <div class="flex flex-col lg:flex-row items-start justify-center gap-8">
+    <div class="device-bezel-android mx-auto transition-all duration-300" style="width:${isLand ? '740px' : '392px'}; max-width: 100%;">
+      <div class="rounded-[28px] overflow-hidden flex flex-col relative" style="background: var(--rd-canvas); color: var(--rd-ink); height:${isLand ? '410px' : '780px'};">
+        <div class="h-9 px-5 flex items-center justify-between text-[11px] font-mono-num shrink-0 select-none ${scr==='session' ? 'absolute top-0 inset-x-0 z-40 text-white pointer-events-none' : ''}">
+          <span>10:24</span>
+          ${isLand ? '' : `<div class="w-3 h-3 rounded-full bg-black"></div>`}
+          <span>Wi-Fi · 92%</span>
+        </div>
+
+        ${scr === 'home' ? `
+          <div class="px-4 pt-1 pb-2 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <div class="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold" style="background: var(--rd-accent);">R</div>
+              <span class="text-base font-bold tracking-tight">RustDesk</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap" style="background: var(--rd-green-soft); color: var(--rd-green);">● 就绪</span>
+              <button onclick="showToast('打开二维码扫描')" class="w-8 h-8 rounded-xl rd-surface flex items-center justify-center cursor-pointer">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="px-4 pb-3">
+            <div class="p-1.5 rounded-2xl rd-surface flex items-center gap-2">
+              <input type="text" placeholder="输入远程 ID / 搜索设备…" class="flex-1 min-w-0 bg-transparent px-2.5 py-2 text-[14px] font-mono-num outline-none" style="color: var(--rd-ink);" />
+              <button onclick="setMobileScreen('android','session')" class="h-9 px-4 rounded-xl text-xs font-semibold text-white cursor-pointer whitespace-nowrap shrink-0" style="background: var(--rd-accent);">连接</button>
+            </div>
+          </div>
+
+          <div class="px-4 pb-2.5 flex items-center gap-1.5 overflow-x-auto">
+            ${[{id:'recent',l:'最近'},{id:'fav',l:'收藏'},{id:'lan',l:'局域网'},{id:'ab',l:'地址簿'}].map(t => `
+              <button onclick="state.androidTab='${t.id}';render()" class="px-3 py-1.5 rounded-full text-xs font-medium shrink-0 cursor-pointer whitespace-nowrap"
+                style="background:${state.androidTab===t.id ? 'var(--rd-ink)' : 'var(--rd-surface)'}; color:${state.androidTab===t.id ? 'var(--rd-canvas)' : 'var(--rd-ink-2)'}; border: 1px solid var(--rd-border);">${t.l}</button>
+            `).join('')}
+          </div>
+
+          <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-20 space-y-2">
+            ${renderMobilePeerList(state.androidTab, 'android')}
+          </div>
+        ` : scr === 'server' ? `
+          <div class="px-4 pt-1 pb-3 flex items-center justify-between">
+            <span class="text-base font-bold">共享屏幕（被控端）</span>
+            <button onclick="showToast('接入策略设置菜单')" class="px-2.5 py-1 rounded-lg rd-surface text-xs cursor-pointer" style="color: var(--rd-ink-2);">策略 ▾</button>
+          </div>
+          <div class="flex-1 overflow-y-auto rd-scroll px-4 pb-20 space-y-3">
+            <div class="p-4 rounded-2xl rd-surface space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <div class="text-xs font-semibold">远程协助服务</div>
+                  <div class="text-[11px] mt-0.5" style="color:${state.androidServiceOn ? 'var(--rd-green)' : 'var(--rd-ink-3)'}">
+                    ${state.androidServiceOn ? '● 服务运行中 · 允许远端接入' : '○ 服务未启动'}
+                  </div>
+                </div>
+                <button onclick="state.androidServiceOn=!state.androidServiceOn;render()" class="px-3.5 py-2 rounded-xl text-xs font-semibold cursor-pointer whitespace-nowrap"
+                  style="background:${state.androidServiceOn ? 'var(--rd-red-soft)' : 'var(--rd-accent)'}; color:${state.androidServiceOn ? 'var(--rd-red)' : '#fff'};">
+                  ${state.androidServiceOn ? '停止服务' : '启动服务'}
+                </button>
+              </div>
+              <div class="grid grid-cols-2 gap-2 pt-2" style="border-top: 1px solid var(--rd-border);">
+                <div class="p-2.5 rounded-xl" style="background: var(--rd-surface-2);">
+                  <div class="text-[10px]" style="color: var(--rd-ink-3);">本机 ID</div>
+                  <div class="font-mono-num text-sm font-bold mt-0.5">119 882 403</div>
+                </div>
+                <div class="p-2.5 rounded-xl" style="background: var(--rd-surface-2);">
+                  <div class="text-[10px]" style="color: var(--rd-ink-3);">一次性密码</div>
+                  <div class="font-mono-num text-sm font-bold mt-0.5">m7P2q9</div>
+                </div>
+              </div>
+            </div>
+            <div class="rounded-2xl rd-surface overflow-hidden">
+              <div class="px-3.5 py-2.5 text-[11px] font-semibold" style="background: var(--rd-surface-2); color: var(--rd-ink-3);">被控权限自检 (3/4 已就绪)</div>
+              ${[{name:'屏幕捕获权限',ok:true},{name:'无障碍远程输入',ok:true},{name:'系统悬浮窗',ok:true},{name:'全部文件读写授权',ok:false}].map((pm, i) => `
+                <div class="px-3.5 py-3 flex items-center justify-between text-xs" style="${i ? 'border-top: 1px solid var(--rd-border);' : ''}">
+                  <span class="font-medium">${pm.name}</span>
+                  ${pm.ok ? `<span class="inline-flex items-center gap-1 text-[11px] font-medium" style="color: var(--rd-green);">${ic('check', 12, 2.4)} 已开启</span>`
+                          : `<button onclick="showToast('跳转 Android 授权页')" class="px-2.5 py-1 rounded-lg text-[11px] font-medium cursor-pointer" style="background: var(--rd-amber-soft); color: var(--rd-amber);">去授权</button>`}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        ` : scr === 'session' ? `
+          ${renderUnifiedMobileSession('android')}
+        ` : scr === 'files' ? `
+          ${renderUnifiedMobileFiles('android')}
+        ` : `
+          ${renderUnifiedMobileSettings('android')}
+        `}
+
+        ${scr === 'session' ? '' : `
+          <div class="h-16 px-3 flex items-center justify-around shrink-0" style="background: var(--rd-surface); border-top: 1px solid var(--rd-border);">
+            ${nav.map(n => {
+              const sel = scr === n.id;
+              return `
+                <button onclick="state.mobileSettingsSubpage=null;setMobileScreen('android','${n.id}')" class="px-4 py-1.5 rounded-full text-xs font-medium cursor-pointer transition whitespace-nowrap"
+                  style="background:${sel ? 'var(--rd-accent-soft)' : 'transparent'}; color:${sel ? 'var(--rd-accent)' : 'var(--rd-ink-2)'}; font-weight:${sel ? '600' : '500'};">
+                  ${n.label}
+                </button>
+              `;
+            }).join('')}
+          </div>
+        `}
+      </div>
+    </div>
+
+    <div class="flex-1 max-w-md space-y-3 text-xs">
+      ${scr === 'session' ? `
+      <div class="p-3.5 rounded-2xl bg-[var(--card)] border border-[var(--border)] flex items-center justify-between gap-3">
+        <div>
+          <div class="font-semibold text-xs">模拟横竖屏方向</div>
+          <div class="text-[11px] text-[var(--muted-foreground)] mt-0.5">当前：${isLand ? '横屏远控视图' : '竖屏远控视图'}</div>
+        </div>
+        <button onclick="state.mobileLandscape=!state.mobileLandscape;render()" class="h-8 px-3 rounded-lg inline-flex items-center gap-1.5 text-xs font-medium cursor-pointer whitespace-nowrap" style="background: var(--rd-accent-soft); color: var(--rd-accent); border: 1px solid var(--rd-accent-border);">${ic('rotate', 14, 2)}<span>${isLand ? '切回竖屏' : '切换横屏'}</span></button>
+      </div>` : ''}
+      <div class="p-4 rounded-2xl bg-[var(--card)] border border-[var(--border)] space-y-2">
+        <div class="font-semibold text-sm">Android v3 重点精修</div>
+        <ul class="space-y-1.5 text-[var(--muted-foreground)] list-disc pl-4 leading-relaxed">
+          <li><strong>Android 与 iOS 统一 Awesun 仿向日葵远控体系</strong>：落地时把 iOS 的 <code>Awesun</code> 环形虚拟鼠标（中心盘 / L·R 弧键 / 环形滚轮 / 中键 / 边缘收纳球）、右下三键轨、键盘附带条与「远程操作」抽屉完整复用/移植到 Android，双端逻辑与视觉完全一致。</li>
+          <li><strong>设置中心与共享屏幕</strong>：采用与 iOS 一致的分组卡片与矢量色块图标（零 Emoji），并保留 Android 独有的「共享屏幕」分组与被控权限自检页。</li>
+        </ul>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ==================== DESIGN TOKENS & CHECKLIST ==================== */
+function renderTokensView() {
+  const items = [
+    ['1. 桌面快速连接“直连可达”换行', '已加 whitespace-nowrap shrink-0 与单行排版，显示清晰干净。'],
+    ['2. 桌面设置界面 (v3 重做)', '进入设置时替换主侧栏（仅保留单层 232px macOS 风格分组侧栏 + 实时搜索），右侧居中 680px 精致分组表、分段控件与主题预览卡。'],
+    ['3. 桌面远程会话下拉效果', '屏 1 / 画质 / 控制 / 更多均已实现真实毛玻璃下拉交互面板与即时开关。'],
+    ['4. 实时连接质量可拖动', '桌面端与移动端实时质量面板均支持鼠标/触摸自由拖动，并可展开逐端口 UDP 诊断。'],
+    ['5. iOS 原生液态玻璃底栏', '还原 iOS 26 Liquid Glass 折射胶囊与透镜高亮；Flutter 代码继续对接原生 AppleWorkspaceNavigation。'],
+    ['6. 手机远控会话 (Awesun 仿向日葵双端统一)', '基于仓库已有 Awesun 环形悬浮鼠标（偏置指针、中心拖动盘、L/R 弧键、旋转滚轮环、中键、边缘收纳球、右下三键玻璃轨与远程操作抽屉）进行毛玻璃视觉精修，并同步落地到 iOS 与 Android。'],
+    ['7. 手机文件传输重做', '路径面包屑、快捷目录胶囊、多选批量操作浮条与可展开实时传输队列抽屉，全 SVG 文件类型图标。'],
+    ['8. 手机设置中心 (v3 重做)', '标准 iOS Inset-Grouped 列表、零 Emoji 全矢量 SVG 色块图标，真实对应 settings_page.dart 全部分组与「网络 / ID 与中继服务器」二级页。']
+  ];
+  return `
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <div class="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border)] space-y-3">
+      <h2 class="text-sm font-semibold">全部 8 项修改对照清单</h2>
+      <div class="space-y-2">
+        ${items.map(([k, v]) => `
+          <div class="p-3 rounded-xl border border-[var(--border)] bg-[var(--background)] text-xs">
+            <div class="font-semibold text-[var(--foreground)] flex items-center gap-1.5"><span style="color: var(--rd-green);">${ic('check', 13, 2.4)}</span><span>${k}</span></div>
+            <div class="text-[var(--muted-foreground)] mt-0.5">${v}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div class="p-5 rounded-2xl bg-[var(--card)] border border-[var(--border)] space-y-3 text-xs text-[var(--muted-foreground)] leading-relaxed">
+      <h2 class="text-sm font-semibold text-[var(--foreground)]">确认后的 Flutter 落地步骤</h2>
+      <div class="p-3 rounded-xl border border-[var(--border)] bg-[var(--background)]">
+        <div class="font-semibold text-[var(--foreground)] mb-1">Step 1 · 统一设计系统层 (<code>flutter/packages/rustdesk_ui/</code>)</div>
+        放开 <code>usesWorkspaceStyle</code> 覆盖 iOS / Android / macOS / Windows / Linux 全平台，写入 Obsidian & Porcelain 色板、排版、卡片、开关、胶囊与玻璃组件。
+      </div>
+      <div class="p-3 rounded-xl border border-[var(--border)] bg-[var(--background)]">
+        <div class="font-semibold text-[var(--foreground)] mb-1">Step 2 · 桌面端页面重构 (<code>flutter/lib/desktop/</code>)</div>
+        重构主壳、快速连接与设备库、本机被控、单层分组侧栏设置页、悬浮玻璃远程工具栏与可拖动质量诊断面板、双栏文件传输与终端。
+      </div>
+      <div class="p-3 rounded-xl border border-[var(--border)] bg-[var(--background)]">
+        <div class="font-semibold text-[var(--foreground)] mb-1">Step 3 · iOS & Android 统一移动端重构 (<code>flutter/lib/mobile/</code>)</div>
+        iOS 保留原生液态玻璃底栏；双端远控在原组件与原逻辑上做纯视觉精修；统一首页、文件传输（面包屑/多选/队列抽屉）、Inset-Grouped 设置中心与 Android 被控共享页，并跑通全部 <code>flutter test</code>。
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ==================== INTERACTION & DRAG BINDINGS ==================== */
+window.setDesktopScreen = (id) => { state.desktopScreen = id; state.desktopOpenMenu = null; render(); };
+window.setMobileScreen = (plat, id) => {
+  if (plat === 'ios') state.iosScreen = id;
+  if (plat === 'android') state.androidScreen = id;
+  state.mobileCapsuleOpen = false;
+  render();
+};
+
+window.triggerRemoteClick = (btn) => {
+  const canvas = document.getElementById('mobileRemoteCanvas');
+  if (canvas) {
+    const r = document.createElement('div');
+    r.className = 'click-ripple';
+    r.style.left = state.mobileCursor.x + '%';
+    r.style.top = state.mobileCursor.y + '%';
+    canvas.appendChild(r);
+    setTimeout(() => r.remove(), 450);
+  }
+  showToast(`远端触发：${btn}`);
+};
+
+function bindDraggables() {
+  const dragBy = (handle, onDelta, onEnd, onStart) => {
+    if (!handle) return;
+    handle.onpointerdown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      onStart && onStart(e);
+      let lx = e.clientX, ly = e.clientY, moved = 0;
+      const mv = (ev) => {
+        const dx = ev.clientX - lx, dy = ev.clientY - ly;
+        lx = ev.clientX; ly = ev.clientY;
+        moved += Math.abs(dx) + Math.abs(dy);
+        onDelta(dx, dy, ev);
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', mv);
+        window.removeEventListener('pointerup', up);
+        onEnd && onEnd(moved);
+      };
+      window.addEventListener('pointermove', mv);
+      window.addEventListener('pointerup', up);
+    };
+  };
+  const clampIn = (el, box, x, y) => ({
+    x: Math.max(4, Math.min(box.clientWidth - el.offsetWidth - 4, x)),
+    y: Math.max(4, Math.min(box.clientHeight - el.offsetHeight - 4, y))
+  });
+
+  // Desktop quality card
+  const dCard = document.getElementById('desktopQualityCard');
+  const dCanvas = document.getElementById('desktopSessionCanvas');
+  if (dCard && dCanvas) dragBy(document.getElementById('desktopQualityHandle'), (dx, dy) => {
+    const p = clampIn(dCard, dCanvas, state.desktopQualityPos.x + dx, state.desktopQualityPos.y + dy);
+    state.desktopQualityPos = p; dCard.style.left = p.x + 'px'; dCard.style.top = p.y + 'px';
+  });
+
+  const canvas = document.getElementById('mobileRemoteCanvas');
+  if (!canvas) return;
+  const s = state.ms;
+
+  const rippleAt = (x, y, label) => {
+    const r = document.createElement('div');
+    r.className = 'click-ripple';
+    r.style.left = x + 'px';
+    r.style.top = y + 'px';
+    canvas.appendChild(r);
+    setTimeout(() => r.remove(), 450);
+    showToast(`远端触发：${label}`);
+  };
+
+  // Quality Monitor HUD drag
+  const qCard = document.getElementById('mobileQualityCard');
+  if (qCard) dragBy(document.getElementById('mobileQualityHandle'), (dx, dy) => {
+    const base = s.qPos || { x: qCard.offsetLeft, y: qCard.offsetTop };
+    const p = clampIn(qCard, canvas, base.x + dx, base.y + dy);
+    s.qPos = p; qCard.style.left = p.x + 'px'; qCard.style.top = p.y + 'px'; qCard.style.right = 'auto';
+  });
+
+  // Awesun Collapsed Mouse Dock Orb (tap to expand, drag to snap left/right edge)
+  const dockOrb = document.getElementById('aweMouseDock');
+  if (dockOrb) dragBy(dockOrb, (dx, dy, ev) => {
+    const cr = canvas.getBoundingClientRect();
+    const ny = Math.max(0.12, Math.min(0.86, (ev.clientY - cr.top) / cr.height));
+    s.mouseDockY = ny;
+    s.mouseDockRight = (ev.clientX - cr.left) >= cr.width / 2;
+    dockOrb.style.top = Math.round(ny * 100) + '%';
+    dockOrb.style.right = s.mouseDockRight ? '12px' : 'auto';
+    dockOrb.style.left = s.mouseDockRight ? 'auto' : '12px';
+  }, (moved) => {
+    if (moved < 6) { s.mouseCollapsed = false; render(); }
+  });
+
+  // Awesun Radial Virtual Mouse controls
+  const mouseEl = document.getElementById('aweMouseEl');
+  const ptrEl = document.getElementById('awePointerEl');
+  const getCenter = () => s.mousePos || { x: mouseEl.offsetLeft + 94, y: mouseEl.offsetTop + 94 };
+  const setCenter = (nx, ny) => {
+    const cx = Math.max(92, Math.min(canvas.clientWidth - 76, nx));
+    const cy = Math.max(82, Math.min(canvas.clientHeight - 78, ny));
+    s.mousePos = { x: cx, y: cy };
+    mouseEl.style.left = (cx - 94) + 'px';
+    mouseEl.style.top = (cy - 94) + 'px';
+    if (ptrEl) {
+      ptrEl.style.left = Math.max(10, cx - 86) + 'px';
+      ptrEl.style.top = Math.max(12, cy - 68) + 'px';
+    }
+  };
+  const currentTip = () => {
+    const c = getCenter();
+    return { x: Math.max(10, c.x - 86), y: Math.max(12, c.y - 68) };
+  };
+
+  if (mouseEl) {
+    // Hub: drag to move pointer + mouse; tap = left click
+    dragBy(document.getElementById('aweHub'), (dx, dy) => {
+      const c = getCenter();
+      setCenter(c.x + dx, c.y + dy);
+    }, (moved) => {
+      s.pressed = null;
+      if (moved < 5) { const t = currentTip(); rippleAt(t.x, t.y, '左键单击'); }
+      render();
+    }, () => { s.pressed = 'hub'; });
+
+    // Left Arc: tap = left click; hold & drag = left-button drag select
+    dragBy(document.getElementById('aweLeftArc'), (dx, dy) => {
+      s.dragging = true;
+      const c = getCenter();
+      setCenter(c.x + dx, c.y + dy);
+    }, (moved) => {
+      const wasDrag = s.dragging && moved >= 5;
+      s.pressed = null; s.dragging = false;
+      const t = currentTip();
+      rippleAt(t.x, t.y, wasDrag ? '左键拖放释放' : '鼠标左键');
+      render();
+    }, () => { s.pressed = 'left'; const f = document.getElementById('aweLeftFill'); if (f) f.setAttribute('stroke', 'rgba(59,130,246,0.88)'); });
+
+    // Right Arc: right click
+    const rArc = document.getElementById('aweRightArc');
+    if (rArc) rArc.onpointerdown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const t = currentTip();
+      rippleAt(t.x, t.y, '鼠标右键');
+    };
+
+    // Top small button: open circular scroll ring
+    const wTop = document.getElementById('aweWheelTop');
+    if (wTop) wTop.onpointerdown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      s.wheelOpen = true;
+      render();
+      showToast('已打开环形滚轮：沿环顺/逆时针滑动');
+    };
+
+    // Bottom small button: middle click
+    const wBot = document.getElementById('aweWheelBottom');
+    if (wBot) wBot.onpointerdown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const t = currentTip();
+      rippleAt(t.x, t.y, '鼠标中键');
+    };
+
+    // Close/collapse button: close scroll ring or collapse to edge dock orb
+    const closeBtn = document.getElementById('aweClose');
+    if (closeBtn) closeBtn.onpointerdown = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (s.wheelOpen) { s.wheelOpen = false; } else { s.mouseCollapsed = true; }
+      render();
+    };
+
+    // Circular Annulus Scroll Ring: drag around circumference rotates glowing orb & scrolls
+    const scrollRing = document.getElementById('aweScrollRing');
+    if (scrollRing) {
+      let lastAngle = null;
+      dragBy(scrollRing, (dx, dy, ev) => {
+        const rect = mouseEl.getBoundingClientRect();
+        const a = Math.atan2(ev.clientY - (rect.top + 94), ev.clientX - (rect.left + 94));
+        s.wheelAngle = a;
+        const ox = (94 + 58 * Math.cos(a)).toFixed(1);
+        const oy = (94 + 58 * Math.sin(a)).toFixed(1);
+        const orb = document.getElementById('aweRingOrb');
+        const core = document.getElementById('aweRingOrbCore');
+        if (orb) { orb.setAttribute('cx', ox); orb.setAttribute('cy', oy); }
+        if (core) { core.setAttribute('cx', ox); core.setAttribute('cy', oy); }
+        lastAngle = a;
+      }, (moved) => {
+        if (moved > 8) showToast('已触发滚轮滚动');
+      });
+    }
+  }
+
+  // Canvas direct tap when in touch mode (or outside mouse)
+  canvas.onpointerdown = (e) => {
+    if (e.target.closest('button') || e.target.closest('#aweMouseEl') || e.target.closest('#mobileQualityCard') || s.functionsOpen || s.sheet) return;
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    if (s.mode === 'touch') {
+      rippleAt(x, y, '触控单击');
+    } else if (mouseEl) {
+      setCenter(x + 86, y + 68);
+      rippleAt(x, y, '移动光标并左键');
+    }
+  };
+}
+
+window.openCmd = () => {
+  const modal = document.getElementById('cmdModal');
+  modal.setAttribute('data-rd-theme', state.theme);
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  const inp = document.getElementById('cmdInput'); inp.value = ''; renderCmdResults('');
+  setTimeout(() => inp.focus(), 30);
+};
+window.closeCmd = () => {
+  const modal = document.getElementById('cmdModal');
+  modal.classList.add('hidden'); modal.classList.remove('flex');
+};
+function renderCmdResults(q) {
+  const ql = q.trim().toLowerCase();
+  const matched = peers.filter(p => !ql || p.name.toLowerCase().includes(ql) || p.id.replace(/\s+/g,'').includes(ql));
+  document.getElementById('cmdResults').innerHTML = matched.map(p => `
+    <button onclick="closeCmd();setDesktopScreen('session');showToast('快速连接至 ${p.name}')" class="w-full px-3 py-2.5 rounded-lg flex items-center justify-between text-left text-xs cursor-pointer" style="background: var(--rd-surface-2);">
+      <div><div class="font-semibold">${p.name}</div><div class="text-[11px] font-mono-num" style="color: var(--rd-ink-3);">${p.id} · ${p.os}</div></div>
+      <span class="text-[11px] font-medium whitespace-nowrap" style="color: var(--rd-accent);">回车连接 ↵</span>
+    </button>
+  `).join('') || `<div class="p-4 text-center text-xs" style="color: var(--rd-ink-3);">直接按回车连接「${q}」</div>`;
+}
+
+document.getElementById('cmdInput').addEventListener('input', (e) => renderCmdResults(e.target.value));
+document.getElementById('cmdModal').addEventListener('click', (e) => { if (e.target.id === 'cmdModal') closeCmd(); });
+window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openCmd(); }
+  if (e.key === 'Escape') closeCmd();
+});
+document.querySelectorAll('.plat-btn').forEach(btn => btn.addEventListener('click', () => { state.platform = btn.dataset.platform; render(); }));
+document.getElementById('themeDarkBtn').addEventListener('click', () => { state.theme = 'dark'; render(); });
+document.getElementById('themeLightBtn').addEventListener('click', () => { state.theme = 'light'; render(); });
+
+window.selectScreen = (id) => {
+  if (state.platform === 'desktop') { state.desktopScreen = id; state.desktopOpenMenu = null; }
+  else if (state.platform === 'ios') { state.iosScreen = id; state.mobileSettingsSubpage = null; }
+  else if (state.platform === 'android') { state.androidScreen = id; state.mobileSettingsSubpage = null; }
+  render();
+};
+
+function render() {
+  document.querySelectorAll('.plat-btn').forEach(btn => {
+    const active = btn.dataset.platform === state.platform;
+    btn.style.background = active ? 'var(--primary)' : 'transparent';
+    btn.style.color = active ? 'var(--primary-foreground)' : 'var(--muted-foreground)';
+  });
+
+  const darkBtn = document.getElementById('themeDarkBtn');
+  const lightBtn = document.getElementById('themeLightBtn');
+  darkBtn.style.background = state.theme === 'dark' ? 'var(--card)' : 'transparent';
+  darkBtn.style.color = state.theme === 'dark' ? 'var(--foreground)' : 'var(--muted-foreground)';
+  lightBtn.style.background = state.theme === 'light' ? 'var(--card)' : 'transparent';
+  lightBtn.style.color = state.theme === 'light' ? 'var(--foreground)' : 'var(--muted-foreground)';
+
+  const defs = screenDefs[state.platform];
+  const curScreen = state.platform === 'desktop' ? state.desktopScreen
+    : state.platform === 'ios' ? state.iosScreen
+    : state.platform === 'android' ? state.androidScreen : 'overview';
+
+  document.getElementById('screenPills').innerHTML = defs.map(d => {
+    const active = d.id === curScreen;
+    return `<button onclick="selectScreen('${d.id}')" class="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition border whitespace-nowrap"
+      style="background:${active ? 'var(--card)' : 'transparent'}; border-color:${active ? 'var(--primary)' : 'var(--border)'}; color:${active ? 'var(--foreground)' : 'var(--muted-foreground)'};">${d.label}</button>`;
+  }).join('');
+
+  document.getElementById('screenHint').textContent = (defs.find(d => d.id === curScreen) || defs[0]).hint;
+
+  const stage = document.getElementById('stage');
+  stage.setAttribute('data-rd-theme', state.theme);
+  if (state.platform === 'desktop') stage.innerHTML = renderDesktopShell();
+  else if (state.platform === 'ios') stage.innerHTML = renderIOSView();
+  else if (state.platform === 'android') stage.innerHTML = renderAndroidView();
+  else stage.innerHTML = renderTokensView();
+
+  bindDraggables();
+}
+
+render();
+</script>
+</body>
+</html>
