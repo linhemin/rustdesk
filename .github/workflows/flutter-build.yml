@@ -38,8 +38,9 @@ env:
   FLUTTER_WINDOWS_ARM_VERSION: "3.44.9"
   # macOS arm64 only: 3.24.5's engine crashes in attributedSubstringForProposedRange
   # (https://github.com/rustdesk/rustdesk/issues/16817, https://github.com/flutter/flutter/issues/153157).
-  # x86_64 stays on FLUTTER_VERSION: 3.44's FlutterMacOS needs macOS 10.15 there, and it targets 10.14.
-  FLUTTER_MACOS_ARM_VERSION: "3.44.9"
+  # 3.47 also resumes rendering when a visible window is reactivated (flutter/flutter#155977).
+  # x86_64 stays on FLUTTER_VERSION to keep its macOS 10.14 target.
+  FLUTTER_MACOS_ARM_VERSION: "3.47.5"
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
   TAG_NAME: "${{ inputs.upload-tag }}"
@@ -1035,7 +1036,8 @@ jobs:
             git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
           fi
 
-      - name: Workaround for flutter issue
+      - name: Keep the legacy Flutter scheduler workaround on macOS x86_64
+        if: ${{ matrix.job.arch == 'x86_64' }}
         shell: bash
         run: |
           cd "$(dirname "$(which flutter)")"
