@@ -203,7 +203,6 @@ impl VideoFrameController {
         }
     }
 
-    #[tokio::main(flavor = "current_thread")]
     async fn try_wait_next(&mut self, fetched_conn_ids: &mut HashSet<i32>, timeout_millis: u64) {
         if self.send_conn_ids.is_empty() {
             return;
@@ -711,6 +710,9 @@ fn run(vs: VideoService) -> ResultType<()> {
     }
 
     let mut frame_controller = VideoFrameController::new(display_idx);
+    let frame_ack_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()?;
 
     let start = time::Instant::now();
     let mut last_check_displays = time::Instant::now();
@@ -1021,7 +1023,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                 check_privacy_mode_changed(&sp, display_idx, &c)?;
             }
             let wait = if fixed_pacing { timeout_millis } else { 300 };
-            frame_controller.try_wait_next(&mut fetched_conn_ids, wait);
+            frame_ack_runtime.block_on(frame_controller.try_wait_next(&mut fetched_conn_ids, wait));
             // break if all connections have received current frame
             if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
                 break;
@@ -1586,7 +1588,34 @@ fn handle_screenshot(screenshot: Screenshot, msg: String, w: usize, h: usize, da
 
 #[cfg(test)]
 mod tests {
-    use super::refresh_allowed;
+    use super::{
+        refresh_allowed, unbounded_channel, Arc, HashSet, TokioMutex, VideoFrameController,
+        FRAME_FETCHED_NOTIFIERS,
+    };
+
+    #[tokio::test(start_paused = true)]
+    async fn frame_ack_waits_share_the_video_thread_timer() {
+        let display_idx = usize::MAX;
+        let (tx, rx) = unbounded_channel();
+        FRAME_FETCHED_NOTIFIERS
+            .lock()
+            .unwrap()
+            .insert(display_idx, (tx.clone(), Arc::new(TokioMutex::new(rx))));
+        let mut controller = VideoFrameController::new(display_idx);
+        controller.send_conn_ids = HashSet::from([1, 2]);
+        let mut fetched = HashSet::new();
+
+        controller.try_wait_next(&mut fetched, 1).await;
+        let timed_out = fetched.is_empty();
+        tx.send((1, None)).unwrap();
+        controller.try_wait_next(&mut fetched, 1).await;
+        tx.send((2, None)).unwrap();
+        controller.try_wait_next(&mut fetched, 1).await;
+
+        FRAME_FETCHED_NOTIFIERS.lock().unwrap().remove(&display_idx);
+        assert!(timed_out);
+        assert_eq!(fetched, HashSet::from([1, 2]));
+    }
 
     #[test]
     fn refresh_waits_for_hw_encoder_warmup() {
