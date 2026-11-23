@@ -870,5 +870,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Accessibility", "輔助使用"),
         ("Input monitoring", "輸入監控"),
         ("Permission granted", "已授權"),
+        ("Home and devices", "首頁與裝置"),
+        ("Remote sessions", "遠端工作階段"),
     ].iter().cloned().collect();
 }
