@@ -2078,6 +2078,8 @@ mod tests {
                 host,
                 &[],
                 Vec::new(),
+                None,
+                0,
                 crate::server::new_for_test(),
                 msg_punch,
                 connection_meta(None, None),
