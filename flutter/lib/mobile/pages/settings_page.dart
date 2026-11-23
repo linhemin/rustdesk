@@ -27,9 +27,9 @@ import 'scan_page.dart';
 
 Widget _mobileSettingsList(BuildContext context,
         {required List<AbstractSettingsSection> sections}) =>
-    Theme.of(context).platform == TargetPlatform.iOS
-        ? AppleSettingsList(sections: sections)
-        : SettingsList(sections: sections);
+    isWeb
+        ? SettingsList(sections: sections)
+        : AppleSettingsList(sections: sections);
 
 class SettingsPage extends StatefulWidget implements PageShape {
   SettingsPage() : _networkOnly = false;

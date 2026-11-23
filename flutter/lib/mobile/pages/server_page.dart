@@ -863,21 +863,22 @@ class PaddingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final children = [child];
     if (title != null) {
       children.insert(
           0,
           Padding(
-              padding: const EdgeInsets.fromLTRB(0, 5, 0, 8),
+              padding: const EdgeInsets.fromLTRB(0, 2, 0, 10),
               child: Row(
                 children: [
                   titleIcon?.marginOnly(right: 10) ?? const SizedBox.shrink(),
                   Expanded(
                     child: Text(title!,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleLarge
-                            ?.merge(TextStyle(fontWeight: FontWeight.bold))),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        )),
                   )
                 ],
               )));
@@ -885,13 +886,16 @@ class PaddingCard extends StatelessWidget {
     return SizedBox(
         width: double.maxFinite,
         child: Card(
+          elevation: 0,
+          color: theme.cardColor,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(13),
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: theme.dividerColor),
           ),
-          margin: const EdgeInsets.fromLTRB(12.0, 10.0, 12.0, 0),
+          margin: const EdgeInsets.fromLTRB(14.0, 10.0, 14.0, 0),
           child: Padding(
             padding:
-                const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
+                const EdgeInsets.symmetric(vertical: 16.0, horizontal: 18.0),
             child: Column(
               children: children,
             ),

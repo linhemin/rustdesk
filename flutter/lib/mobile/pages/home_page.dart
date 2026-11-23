@@ -110,29 +110,38 @@ class HomePageState extends State<HomePage> {
                       onSelect: (index) =>
                           setState(() => _selectedIndex = index),
                     )
-                  : BottomNavigationBar(
-                      key: navigationBarKey,
-                      backgroundColor: Theme.of(context).cardColor,
-                      items: _pages
-                          .map((page) => BottomNavigationBarItem(
-                              icon: page.icon, label: page.title))
-                          .toList(),
-                      currentIndex: _selectedIndex,
-                      type: BottomNavigationBarType.fixed,
-                      selectedItemColor: Theme.of(context).colorScheme.primary,
-                      unselectedItemColor: Theme.of(context).hintColor,
-                      onTap: (index) => setState(() {
-                        // close chat overlay when go chat page
-                        if (_selectedIndex != index) {
-                          _selectedIndex = index;
-                          if (isChatPageCurrentTab) {
-                            gFFI.chatModel.hideChatIconOverlay();
-                            gFFI.chatModel.hideChatWindowOverlay();
-                            gFFI.chatModel.mobileClearClientUnread(
-                                gFFI.chatModel.currentKey.connId);
+                  : DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border(
+                          top: BorderSide(color: Theme.of(context).dividerColor),
+                        ),
+                      ),
+                      child: BottomNavigationBar(
+                        key: navigationBarKey,
+                        backgroundColor: Theme.of(context).cardColor,
+                        elevation: 0,
+                        items: _pages
+                            .map((page) => BottomNavigationBarItem(
+                                icon: page.icon, label: page.title))
+                            .toList(),
+                        currentIndex: _selectedIndex,
+                        type: BottomNavigationBarType.fixed,
+                        selectedItemColor:
+                            Theme.of(context).colorScheme.primary,
+                        unselectedItemColor: Theme.of(context).hintColor,
+                        onTap: (index) => setState(() {
+                          // close chat overlay when go chat page
+                          if (_selectedIndex != index) {
+                            _selectedIndex = index;
+                            if (isChatPageCurrentTab) {
+                              gFFI.chatModel.hideChatIconOverlay();
+                              gFFI.chatModel.hideChatWindowOverlay();
+                              gFFI.chatModel.mobileClearClientUnread(
+                                  gFFI.chatModel.currentKey.connId);
+                            }
                           }
-                        }
-                      }),
+                        }),
+                      ),
                     ),
           body: _pages.elementAt(_selectedIndex),
         ));
