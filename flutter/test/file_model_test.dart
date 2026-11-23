@@ -149,19 +149,29 @@ void main() {
       ..path = '/home/report.pdf'
       ..size = 42;
     controller.homePath = '/home';
-    controller.directory.value = _directory('/home')..entries = [entry];
+    final other = Entry()..name = 'notes.txt'..path = '/home/notes.txt';
+    controller.directory.value = _directory('/home')..entries = [entry, other];
     final selection = mobile.SelectMode.none.obs;
-    await tester.pumpWidget(MaterialApp(
+    Widget page() => MaterialApp(
         home: Scaffold(
             body: mobile.FileManagerView(
-                controller: controller, selectMode: selection))));
-    await tester.tap(find.byType(Checkbox));
+                controller: controller, selectMode: selection)));
+    await tester.pumpWidget(page());
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pump();
     expect(selection.value, mobile.SelectMode.remote);
     expect(controller.selectedItems.items, [entry]);
-    await tester.tap(find.byType(Checkbox));
+    await tester.tap(find.byType(Checkbox).first);
     await tester.pump();
     expect(controller.selectedItems.items, isEmpty);
+    await tester.tap(find.byType(Checkbox).first);
+    await tester.pump();
+    // Android Back exits selection and rebuilds the page.
+    selection.value = mobile.SelectMode.none;
+    await tester.pumpWidget(page());
+    await tester.tap(find.text('notes.txt'));
+    await tester.pump();
+    expect(controller.selectedItems.items, [other]);
     expect(tester.takeException(), isNull);
   });
 

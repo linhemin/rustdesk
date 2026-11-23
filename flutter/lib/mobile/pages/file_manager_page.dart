@@ -994,6 +994,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                                     if (!showCheckBox) {
                                       if (widget.selectMode.value !=
                                           SelectMode.none) return;
+                                      _selectedItems.clear();
                                       widget.selectMode.toggle(isLocal);
                                     }
                                     if (v && !selected) {
@@ -1023,6 +1024,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                     } else if (!widget.sessionActions) {
                       widget.onFile?.call();
                     } else if (widget.selectMode.value == SelectMode.none) {
+                      _selectedItems.clear();
                       widget.selectMode.toggle(isLocal);
                       _selectedItems.add(entry);
                       setState(() {});
