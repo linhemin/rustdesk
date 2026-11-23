@@ -21,6 +21,7 @@ class AppleWorkspaceNavigation extends StatefulWidget {
     this.onSettings,
     this.onQuickConnect,
     this.quickConnectLabel,
+    this.navigationOnly = false,
   }) : assert(labels.length == symbols.length);
 
   final List<String> labels;
@@ -33,6 +34,7 @@ class AppleWorkspaceNavigation extends StatefulWidget {
   final VoidCallback? onSettings;
   final VoidCallback? onQuickConnect;
   final String? quickConnectLabel;
+  final bool navigationOnly;
 
   @override
   State<AppleWorkspaceNavigation> createState() =>
@@ -54,6 +56,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
         'symbols': widget.symbols,
         'selected': widget.selected,
         'compact': widget.compact,
+        if (widget.navigationOnly) 'navigationOnly': true,
         if (widget.brand != null) 'brand': widget.brand!,
         if (widget.settingsLabel != null) 'settings': widget.settingsLabel!,
         'dark': _brightness == Brightness.dark,
@@ -113,6 +116,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     super.didUpdateWidget(oldWidget);
     if (widget.selected != oldWidget.selected ||
         widget.compact != oldWidget.compact ||
+        widget.navigationOnly != oldWidget.navigationOnly ||
         widget.brand != oldWidget.brand ||
         widget.settingsLabel != oldWidget.settingsLabel ||
         widget.quickConnectLabel != oldWidget.quickConnectLabel ||
@@ -274,6 +278,7 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
     }
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
       return AppKitView(
+        key: ValueKey(widget.navigationOnly),
         viewType: _viewType,
         creationParams: _configuration,
         creationParamsCodec: const StandardMessageCodec(),
