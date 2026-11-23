@@ -17,10 +17,13 @@ class AndroidSlidingNavigationBar extends StatelessWidget {
                     !(Offset.zero & box.size).contains(details.localPosition)) {
                   return;
                 }
-                final index = (details.localPosition.dx /
+                final column = (details.localPosition.dx /
                         box.size.width *
                         child.items.length)
                     .floor();
+                final index = Directionality.of(context) == TextDirection.rtl
+                    ? child.items.length - 1 - column
+                    : column;
                 child.onTap?.call(index);
               },
               child: child,
