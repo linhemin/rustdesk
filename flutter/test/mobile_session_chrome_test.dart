@@ -1,3 +1,5 @@
+import 'dart:ui' show PointerDeviceKind;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -6,6 +8,35 @@ import 'package:flutter_test/flutter_test.dart';
 import '../lib/mobile/widgets/session_quality_monitor.dart';
 
 void main() {
+  testWidgets('HUD consumes touch and mouse drags without blocking the canvas',
+      (tester) async {
+    var canvasPresses = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: Stack(fit: StackFit.expand, children: [
+          Listener(
+            onPointerDown: (_) => canvasPresses++,
+            child: GestureDetector(
+              onLongPressDown: (_) => canvasPresses++,
+              child: const ColoredBox(color: Colors.black),
+            ),
+          ),
+          const MobileSessionQualityMonitor(
+              connection: 'Direct · TCP', direct: true, metrics: []),
+        ]),
+      ),
+    ));
+    for (final kind in [PointerDeviceKind.touch, PointerDeviceKind.mouse]) {
+      await tester.drag(find.text('Direct · TCP'), const Offset(40, 30),
+          kind: kind);
+      await tester.pump();
+      expect(canvasPresses, 0);
+    }
+    await tester.tapAt(const Offset(500, 500));
+    expect(canvasPresses, greaterThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('mobile quality card moves and stays within the viewport',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 760));
