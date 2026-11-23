@@ -385,7 +385,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                                                               'key'),
                                                                     )),
                                                           ),
-                                                          if (!bind
+                                                          if (!isChangeIdDisabled() &&
+                                                              !bind
                                                                   .isDisableSettings() &&
                                                               bind.mainGetBuildinOption(
                                                                       key:
