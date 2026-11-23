@@ -202,16 +202,23 @@ class _FileManagerPageState extends State<FileManagerPage>
   }
 
   Widget dropArea(FileManagerView fileView) {
-    return DropTarget(
-        onDragDone: (detail) =>
-            handleDragDone(detail, fileView.controller.isLocal),
-        onDragEntered: (enter) {
-          _dropMaskVisible.value = true;
-        },
-        onDragExited: (exit) {
-          _dropMaskVisible.value = false;
-        },
-        child: fileView);
+    return Builder(
+        builder: (context) => DropTarget(
+            onDragDone: (detail) {
+              // Native drop events bypass Flutter's Offstage hit testing.
+              if (context.findAncestorWidgetOfExactType<Offstage>()?.offstage ==
+                  true) {
+                return;
+              }
+              handleDragDone(detail, fileView.controller.isLocal);
+            },
+            onDragEntered: (enter) {
+              _dropMaskVisible.value = true;
+            },
+            onDragExited: (exit) {
+              _dropMaskVisible.value = false;
+            },
+            child: fileView));
   }
 
   Widget generateCard(Widget child) {
