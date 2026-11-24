@@ -4688,6 +4688,8 @@ pub fn start_video_thread<F, T>(
         sync_cpu_usage();
         get_hwcodec_config();
         let mut video_handler = None;
+        #[cfg(all(target_os = "ios", feature = "flutter"))]
+        let mut native_video_active = false;
         let mut count = 0;
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
@@ -4725,6 +4727,7 @@ pub fn start_video_thread<F, T>(
                         {
                             match ios_texture::decode(&vf) {
                                 ios_texture::DecodeStatus::Frame => {
+                                    native_video_active = true;
                                     *chroma.write().unwrap() = Some(Chroma::I420);
                                     let mut rgb = ImageRgb::new(ImageFormat::ARGB, crate::get_dst_align_rgba());
                                     video_callback(display, &mut rgb, std::ptr::null_mut(), false);
@@ -4769,6 +4772,11 @@ pub fn start_video_thread<F, T>(
                             );
                             match decoded {
                                 Ok(true) => {
+                                    #[cfg(all(target_os = "ios", feature = "flutter"))]
+                                    if native_video_active {
+                                        ios_texture::clear_frame(display);
+                                        native_video_active = false;
+                                    }
                                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                                     video_diagnostic.decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     if freshness.show(

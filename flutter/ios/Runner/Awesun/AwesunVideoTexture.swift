@@ -332,6 +332,12 @@ final class AwesunVideoTexture: NSObject, FlutterTexture {
         }
     }
 
+    fileprivate func clearFrame(display screen: Int32) {
+        decoderLock.lock()
+        defer { decoderLock.unlock() }
+        if screen == display { _ = fail() }
+    }
+
     private func fail() -> Int32 {
         resetDecoder()
         state.lock()
@@ -363,4 +369,9 @@ func rustdesk_ios_texture_decode(_ codec: UInt32, _ display: Int32,
     guard let bytes = bytes, (1...(16 * 1024 * 1024)).contains(length) else { return -1 }
     return AwesunVideoTexture.shared.decode(codec: codec, display: display,
                                            data: Data(bytes: bytes, count: length), pts: pts, key: key)
+}
+
+@_cdecl("rustdesk_ios_texture_clear_frame")
+func rustdesk_ios_texture_clear_frame(_ display: Int32) {
+    AwesunVideoTexture.shared.clearFrame(display: display)
 }

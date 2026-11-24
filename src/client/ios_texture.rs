@@ -3,6 +3,7 @@ use scrap::CodecFormat;
 
 extern "C" {
     fn rustdesk_ios_texture_capabilities() -> u32;
+    fn rustdesk_ios_texture_clear_frame(display: i32);
     fn rustdesk_ios_texture_decode(codec: u32, display: i32, bytes: *const u8, length: usize, pts: i64, key: bool) -> i32;
 }
 
@@ -10,6 +11,10 @@ pub(super) enum DecodeStatus {
     Frame,
     Pending,
     Failed,
+}
+
+pub(super) fn clear_frame(display: usize) {
+    unsafe { rustdesk_ios_texture_clear_frame(display as i32) }
 }
 
 pub(super) fn prefer_native(
@@ -22,10 +27,12 @@ pub(super) fn prefer_native(
     let h265 = native & 2 != 0 && !unsupported.contains(&CodecFormat::H265);
     if h264 { decoding.ability_h264 = 1; }
     if h265 { decoding.ability_h265 = 1; }
-    if h265 && host.h265 {
-        decoding.prefer = PreferCodec::H265.into();
-    } else if h264 && host.h264 {
-        decoding.prefer = PreferCodec::H264.into();
+    if decoding.prefer == PreferCodec::Auto.into() {
+        if h265 && host.h265 {
+            decoding.prefer = PreferCodec::H265.into();
+        } else if h264 && host.h264 {
+            decoding.prefer = PreferCodec::H264.into();
+        }
     }
     decoding
 }
