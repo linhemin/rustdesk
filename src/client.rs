@@ -4302,6 +4302,9 @@ impl LoginConfigHandler {
     }
 
     pub fn get_option(&self, k: &str) -> String {
+        if k == keys::OPTION_FIXED_SCREEN_FPS {
+            return self.fixed_screen_fps.map_or_else(String::new, |fps| fps.to_string());
+        }
         if let Some(v) = self.config.options.get(k) {
             v.clone()
         } else {

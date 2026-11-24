@@ -876,5 +876,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Invalid QR code", ""),
         ("Connection quality", ""),
         ("UDP diagnostics", ""),
+        ("No bitrate cap", ""),
+        ("Prefer hardware encoding", ""),
+        ("Software encoding", ""),
+        ("Target bitrate", ""),
+        ("High performance mode", ""),
+        ("Video settings", ""),
+        ("Bitrate limit", ""),
+        ("Target frame rate", ""),
     ].iter().cloned().collect();
 }

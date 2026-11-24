@@ -293,6 +293,7 @@ const double kMinQuality = 10;
 const double kDefaultQuality = 50;
 const double kMaxQuality = 100;
 const double kMaxMoreQuality = 2000;
+const double kAutoBitrate = 2001;
 
 // trackpad speed
 const String kKeyTrackpadSpeed = 'trackpad-speed';

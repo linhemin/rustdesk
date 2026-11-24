@@ -293,12 +293,9 @@ final class AwesunSessionModel: ObservableObject {
         )
     }
 
-    func setPerformance(_ enabled: Bool) {
-        AwesunBridge.shared.command("performance", ["enabled": enabled])
-    }
-
-    func setPerformanceTarget(_ fps: Int) {
-        AwesunBridge.shared.command("performanceTarget", ["fps": fps])
+    func openVideoSettings() {
+        closeSheet()
+        AwesunBridge.shared.command("videoSettings")
     }
 
     private func takeScreenshot() {

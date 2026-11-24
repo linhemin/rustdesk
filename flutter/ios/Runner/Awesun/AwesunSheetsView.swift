@@ -545,7 +545,6 @@ struct AwesunDisplayPanel: View {
                     if advanced {
                         optionGroup("远端分辨率", columns: 2)
                         optionGroup("自定义缩放")
-                        optionGroup("自定义画质")
                         optionGroup("显示选项", toggleRows: true)
                         optionGroup("虚拟显示器", columns: 2)
                     } else {
@@ -581,38 +580,24 @@ struct AwesunDisplayPanel: View {
     private var performanceCard: some View {
         let status = model.performance
         return VStack(alignment: .leading, spacing: 9) {
-            Toggle(isOn: Binding(get: { status.enabled }, set: model.setPerformance)) {
+            Button(action: model.openVideoSettings) {
                 HStack(spacing: 8) {
-                    Image(systemName: "bolt.fill")
+                    Image(systemName: "slider.horizontal.3")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(AwesunPalette.mint)
-                    Text("高性能模式").font(.system(size: 13, weight: .semibold))
+                    Text("视频设置").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 11))
                 }
             }
-            .tint(AwesunPalette.brandBlue)
-            .disabled(!status.supported)
-            if !status.supported {
-                Text("需要支持固定帧率的 Windows 主机")
-                    .font(.system(size: 11)).foregroundColor(AwesunPalette.textSecondary)
-            } else {
-                HStack(spacing: 5) {
-                    Text("目标帧率").font(.system(size: 11)).foregroundColor(AwesunPalette.textSecondary)
-                    ForEach([30, 60, 90, 120], id: \.self) { fps in
-                        Button { model.setPerformanceTarget(fps) } label: {
-                            chip(fps == status.target, String(fps))
-                        }
-                        .accessibilityLabel("目标帧率 \(fps)")
-                    }
-                }
-                if status.enabled {
-                    Text(status.effective.map { $0 > 0 ? "主机锁定 \($0) FPS" : "主机暂用自适应" }
-                         ?? "正在确认主机设置")
-                        .font(.system(size: 11, weight: .medium))
-                    HStack(spacing: 11) {
-                        metric("实测", status.measuredFps.map { "\($0) FPS" } ?? "—")
-                        metric("Windows", status.gpuEncode.map { $0 ? "GPU 纹理" : "兼容路径" } ?? "检测中")
-                        metric("iPhone", status.gpuDecode ? "GPU 纹理" : "兼容路径")
-                    }
+            if status.enabled {
+                Text(status.effective.map { $0 > 0 ? "主机锁定 \($0) FPS" : "主机暂用自适应" }
+                     ?? "正在确认主机设置")
+                    .font(.system(size: 11, weight: .medium))
+                HStack(spacing: 11) {
+                    metric("实测", status.measuredFps.map { "\($0) FPS" } ?? "—")
+                    metric("Windows", status.gpuEncode.map { $0 ? "GPU 纹理" : "兼容路径" } ?? "检测中")
+                    metric("iPhone", status.gpuDecode ? "GPU 纹理" : "兼容路径")
                 }
             }
         }

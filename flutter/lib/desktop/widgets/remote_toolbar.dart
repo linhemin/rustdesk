@@ -1873,6 +1873,11 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         scrollStyle(state, colorScheme),
         imageQuality(),
         codec(),
+        MenuButton(
+          ffi: ffi,
+          child: Text(translate('Video settings')),
+          onPressed: () => customImageQualityDialog(ffi.sessionId, id, ffi),
+        ),
         if (ffi.connType == ConnType.defaultConn)
           _ResolutionsMenu(
             id: widget.id,

@@ -13,7 +13,8 @@ customImageQualityWidget(
     required Function(double)? setFps,
     required bool showFps,
     required bool showMoreQuality}) {
-  if (initQuality < kMinQuality ||
+  final autoBitrate = (!isWeb && initQuality == kAutoBitrate).obs;
+  if (autoBitrate.value || initQuality < kMinQuality ||
       initQuality > (showMoreQuality ? kMaxMoreQuality : kMaxQuality)) {
     initQuality = kDefaultQuality;
   }
@@ -26,7 +27,11 @@ customImageQualityWidget(
   final RxBool moreQualityChecked = RxBool(qualityValue.value > kMaxQuality);
   final debouncerQuality = Debouncer<double>(
     Duration(milliseconds: 1000),
-    onChanged: setQuality,
+    onChanged: (value) {
+      if (!autoBitrate.value && value == qualityValue.value) {
+        setQuality?.call(value);
+      }
+    },
     initialValue: qualityValue.value,
   );
   final debouncerFps = Debouncer<double>(
@@ -57,7 +62,7 @@ customImageQualityWidget(
                   divisions: moreQualityChecked.value
                       ? ((kMaxMoreQuality - kMinQuality) / 10).round()
                       : ((kMaxQuality - kMinQuality) / 5).round(),
-                  onChanged: setQuality == null
+                  onChanged: setQuality == null || autoBitrate.value
                       ? null
                       : (double value) async {
                           qualityValue.value = value;
@@ -85,7 +90,7 @@ customImageQualityWidget(
                       children: [
                         Checkbox(
                           value: moreQualityChecked.value,
-                          onChanged: onMoreChanged,
+                          onChanged: autoBitrate.value ? null : onMoreChanged,
                         ),
                         Expanded(
                           child: Text(translate('More')),
@@ -102,7 +107,7 @@ customImageQualityWidget(
                     alignment: Alignment.centerRight,
                     child: Checkbox(
                       value: moreQualityChecked.value,
-                      onChanged: onMoreChanged,
+                      onChanged: autoBitrate.value ? null : onMoreChanged,
                     ),
                   ),
                 ),
@@ -110,6 +115,19 @@ customImageQualityWidget(
                   child: Text(translate('More')),
                 )
               ],
+            )),
+      if (!isWeb)
+        Obx(() => CheckboxListTile(
+              title: Text(translate('No bitrate cap')),
+              value: autoBitrate.value,
+              onChanged: setQuality == null
+                  ? null
+                  : (value) {
+                      if (value == null) return;
+                      autoBitrate.value = value;
+                      setQuality(value ? kAutoBitrate : qualityValue.value);
+                    },
+              controlAffinity: ListTileControlAffinity.leading,
             )),
       if (showFps)
         Obx(() => Row(

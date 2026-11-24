@@ -875,5 +875,13 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Invalid QR code", "無效的 QR 碼"),
         ("Connection quality", ""),
         ("UDP diagnostics", ""),
+        ("No bitrate cap", "不設位元率上限"),
+        ("Prefer hardware encoding", "優先硬體編碼"),
+        ("Software encoding", "軟體編碼"),
+        ("Target bitrate", "目標位元率"),
+        ("High performance mode", "高效能模式"),
+        ("Video settings", "視訊設定"),
+        ("Bitrate limit", "碼率上限"),
+        ("Target frame rate", "目標幀率"),
     ].iter().cloned().collect();
 }

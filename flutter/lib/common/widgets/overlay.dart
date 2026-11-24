@@ -636,7 +636,7 @@ class QualityMonitor extends StatelessWidget {
                             "${qualityMonitorModel.data.delay == null ? '-' : (qualityMonitorModel.data.fps ?? "").replaceAll(' ', '').replaceAll('0', '').isEmpty ? 0 : qualityMonitorModel.data.delay}ms"),
                       ]),
                       const Divider(color: Colors.white24, height: 10),
-                      _row("Target Bitrate",
+                      _row(translate("Target bitrate"),
                           "${qualityMonitorModel.data.targetBitrate ?? '-'}kb"),
                       _row(
                           translate("Codec"), qualityMonitorModel.data.codecFormat ?? '-'),

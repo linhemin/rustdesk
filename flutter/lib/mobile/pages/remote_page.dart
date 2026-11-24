@@ -1088,6 +1088,9 @@ class _RemotePageState extends State<RemotePage>
         }
       case 'display':
         return _nativeDisplayMenu();
+      case 'videoSettings':
+        await customImageQualityDialog(sessionId, widget.id, gFFI,
+            setFixedFps: _applyNativeFixedFps);
       case 'performance':
         await _setNativePerformance(arguments['enabled'] == true);
       case 'performanceTarget':
@@ -1306,6 +1309,17 @@ class _RemotePageState extends State<RemotePage>
     }
   }
 
+  Future<void> _applyNativeFixedFps(int target) async {
+    final enabled = target > 0;
+    if (enabled) _nativePerformanceTarget = target;
+    if (enabled != _nativeFixedFps) {
+      await _setNativePerformance(enabled);
+    } else if (enabled) {
+      await bind.sessionSetCustomFps(sessionId: sessionId, fps: target);
+      _syncNativePerformance();
+    }
+  }
+
   Future<List<Map<String, Object?>>> _nativeDisplayMenu() async {
     final choices = <Map<String, Object?>>[];
     final commands = <Future<void> Function()>[];
@@ -1376,17 +1390,6 @@ class _RemotePageState extends State<RemotePage>
             k: kCustomScalePercentKey, v: percent.toString());
         await bind.sessionSetViewStyle(sessionId: sessionId, value: kRemoteViewStyleCustom);
         await canvas.updateViewStyle();
-      });
-    }
-
-    final previousQuality = await bind.sessionGetOption(sessionId: sessionId, arg: 'custom-image-quality');
-    if (!mounted) return const [];
-    final currentQuality = qualities.isEmpty ? null : qualities.first.groupValue;
-    for (final percent in [40, 60, 80, 100]) {
-      add('自定义画质', '$percent%', currentQuality == kRemoteImageQualityCustom &&
-          int.tryParse(previousQuality ?? '') == percent, () async {
-        await bind.sessionSetImageQuality(sessionId: sessionId, value: kRemoteImageQualityCustom);
-        await bind.sessionSetCustomImageQuality(sessionId: sessionId, value: percent);
       });
     }
 
@@ -2092,7 +2095,7 @@ class _RemotePageState extends State<RemotePage>
                   (translate('Speed'), data.speed ?? '—'),
                   ('FPS', data.fps ?? '—'),
                   (translate('Delay'), delay),
-                  (translate('Bitrate'), bitrate),
+                  (translate('Target bitrate'), bitrate),
                   (translate('Codec'), data.codecFormat ?? '—'),
                   (translate('Chroma'), data.chroma ?? '—'),
                 ],
@@ -2857,6 +2860,11 @@ void showOptions(
             imageQuality.value,
             e.onChanged != null
                 ? (v) {
+                    if (v == kRemoteImageQualityCustom) {
+                      close();
+                      e.onChanged?.call(v);
+                      return;
+                    }
                     e.onChanged?.call(v);
                     if (v != null) imageQuality.value = v;
                   }
@@ -2874,6 +2882,15 @@ void showOptions(
                   }
                 : null)),
       if (codecRadios.isNotEmpty) const Divider(color: MyTheme.border),
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        title: Text(translate('Video settings')),
+        onTap: () {
+          close();
+          customImageQualityDialog(gFFI.sessionId, id, gFFI);
+        },
+      ),
     ];
     final rxCursorToggleValues = cursorToggles.map((e) => e.value.obs).toList();
     final cursorTogglesList = cursorToggles

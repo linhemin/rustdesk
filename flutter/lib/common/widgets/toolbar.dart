@@ -865,10 +865,8 @@ Future<List<TRadioMenu<String>>> toolbarImageQuality(
       child: Text(translate('Custom')),
       value: kRemoteImageQualityCustom,
       groupValue: groupValue,
-      onChanged: (value) {
-        onChanged(value);
-        customImageQualityDialog(ffi.sessionId, id, ffi);
-      },
+      onChanged: (value) => customImageQualityDialog(ffi.sessionId, id, ffi,
+          fromCustomPreset: true),
     ),
   ], ownedActionIds: _kToolbarImageQualityActionIds);
 }
@@ -880,7 +878,7 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
       await bind.sessionAlternativeCodecs(sessionId: sessionId);
   final groupValue = await bind.sessionGetOption(
           sessionId: sessionId, arg: kOptionCodecPreference) ??
-      '';
+      'auto';
   final List<bool> codecs = [];
   try {
     final Map codecsJson = jsonDecode(alternativeCodecs);
@@ -909,7 +907,7 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
   }
 
   TRadioMenu<String> radio(
-      String label, String value, bool enabled, String actionId) {
+      String label, String value, bool enabled, [String? actionId]) {
     return TRadioMenu<String>(
         child: Text(label),
         value: value,
@@ -925,6 +923,10 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
   }
   return _registerRadioMenuShortcuts(ffi, [
     radio(autoLabel, 'auto', true, kShortcutActionCodecAuto),
+    if (!isWeb) ...[
+      radio(translate('Prefer hardware encoding'), 'prefer-hardware', true),
+      radio(translate('Software encoding'), 'software', true),
+    ],
     if (codecs[0]) radio('VP8', 'vp8', codecs[0], kShortcutActionCodecVp8),
     radio('VP9', 'vp9', true, kShortcutActionCodecVp9),
     if (codecs[1]) radio('AV1', 'av1', codecs[1], kShortcutActionCodecAv1),
@@ -1186,8 +1188,18 @@ Future<List<TToggleMenu>> toolbarDisplayToggle(
 
   // 444
   final codec_format = ffi.qualityMonitorModel.data.codecFormat;
-  if (versionCmp(pi.version, "1.2.4") >= 0 &&
-      (codec_format == "AV1" || codec_format == "VP9")) {
+  var supportsTrueColor = codec_format == 'AV1' || codec_format == 'VP9';
+  if (!isWeb && (codec_format == 'H264' || codec_format == 'H265')) {
+    final capabilities = await bind.sessionAlternativeCodecs(sessionId: sessionId);
+    try {
+      final decoded = jsonDecode(capabilities);
+      supportsTrueColor =
+          decoded is Map && decoded['${codec_format!.toLowerCase()}_i444'] == true;
+    } on FormatException {
+      supportsTrueColor = false;
+    }
+  }
+  if (versionCmp(pi.version, "1.2.4") >= 0 && supportsTrueColor) {
     final option = 'i444';
     final value =
         bind.sessionGetToggleOptionSync(sessionId: sessionId, arg: option);

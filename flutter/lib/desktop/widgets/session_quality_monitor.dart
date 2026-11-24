@@ -130,7 +130,7 @@ class DesktopQualityMonitor extends StatelessWidget {
                     const SizedBox(width: 6),
                     Expanded(child: reading(translate('Delay'), delay)),
                     const SizedBox(width: 6),
-                    Expanded(child: reading(translate('Bitrate'), bitrate)),
+                    Expanded(child: reading(translate('Target bitrate'), bitrate)),
                   ]),
                   const Divider(height: 14),
                   detail(translate('Codec'), data.codecFormat ?? '—'),

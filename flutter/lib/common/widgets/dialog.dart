@@ -5,7 +5,6 @@ import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
-import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -19,6 +18,7 @@ import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'address_book.dart';
+import 'setting_widgets.dart' show TrackpadSpeedWidget;
 
 void clientClose(SessionID sessionId, FFI ffi) async {
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
@@ -1837,78 +1837,178 @@ void showConfirmSwitchSidesDialog(
   });
 }
 
-customImageQualityDialog(SessionID sessionId, String id, FFI ffi) async {
-  double initQuality = kDefaultQuality;
-  double initFps = kDefaultFps;
-  bool qualitySet = false;
-  bool fpsSet = false;
-
+Future<void> customImageQualityDialog(
+  SessionID sessionId,
+  String id,
+  FFI ffi, {
+  bool fromCustomPreset = false,
+  Future<void> Function(int target)? setFixedFps,
+}) async {
   bool? direct;
   try {
     direct =
         ConnectionTypeState.find(id).direct.value == ConnectionType.strDirect;
   } catch (_) {}
-  bool hideFps = (await bind.mainIsUsingPublicServer() && direct != true) ||
-      versionCmp(ffi.ffiModel.pi.version, '1.2.0') < 0;
-  bool hideMoreQuality =
-      (await bind.mainIsUsingPublicServer() && direct != true) ||
-          versionCmp(ffi.ffiModel.pi.version, '1.2.2') < 0;
-
-  setCustomValues({double? quality, double? fps}) async {
-    debugPrint("setCustomValues quality:$quality, fps:$fps");
-    if (quality != null) {
-      qualitySet = true;
-      await bind.sessionSetCustomImageQuality(
-          sessionId: sessionId, value: quality.toInt());
-    }
-    if (fps != null) {
-      fpsSet = true;
-      await bind.sessionSetCustomFps(sessionId: sessionId, fps: fps.toInt());
-    }
-    if (!qualitySet) {
-      qualitySet = true;
-      await bind.sessionSetCustomImageQuality(
-          sessionId: sessionId, value: initQuality.toInt());
-    }
-    if (!hideFps && !fpsSet) {
-      fpsSet = true;
-      await bind.sessionSetCustomFps(
-          sessionId: sessionId, fps: initFps.toInt());
-    }
-  }
-
-  final btnClose = dialogButton('Close', onPressed: () async {
-    await setCustomValues();
-    ffi.dialogManager.dismissAll();
-  });
-
-  // quality
-  final quality = await bind.sessionGetCustomImageQuality(sessionId: sessionId);
-  initQuality = quality != null && quality.isNotEmpty
-      ? quality[0].toDouble()
+  final peer = ffi.ffiModel.pi;
+  final publicRelay = await bind.mainIsUsingPublicServer() && direct != true;
+  final showFps = !publicRelay && versionCmp(peer.version, '1.2.0') >= 0;
+  final showMore = !publicRelay && versionCmp(peer.version, '1.2.2') >= 0;
+  final canFixFps = !isWeb &&
+      ffi.connType == ConnType.defaultConn &&
+      peer.features.fixedScreenFps;
+  const fixedOption = 'fixed-screen-fps';
+  final savedQuality =
+      (await bind.sessionGetCustomImageQuality(sessionId: sessionId))
+          ?.firstOrNull;
+  final initialQuality = savedQuality?.toDouble() ?? kDefaultQuality;
+  final initialUnlimited = !isWeb && initialQuality == kAutoBitrate;
+  final maxAllowed = showMore ? kMaxMoreQuality : kMaxQuality;
+  var bitrate = initialQuality >= kMinQuality && initialQuality <= maxAllowed
+      ? initialQuality
       : kDefaultQuality;
-  if (initQuality < kMinQuality ||
-      initQuality > (!hideMoreQuality ? kMaxMoreQuality : kMaxQuality)) {
-    initQuality = kDefaultQuality;
-  }
-  // fps
-  final fpsOption =
+  var unlimited = initialUnlimited;
+  var more = showMore && bitrate > kMaxQuality;
+  final initialBitrate = bitrate;
+  final normalFpsOption =
       await bind.sessionGetOption(sessionId: sessionId, arg: 'custom-fps');
-  initFps = fpsOption == null
-      ? kDefaultFps
-      : double.tryParse(fpsOption) ?? kDefaultFps;
-  if (initFps < kMinFps || initFps > kMaxFps) {
-    initFps = kDefaultFps;
-  }
+  final initialFps = (double.tryParse(normalFpsOption ?? '') ?? kDefaultFps)
+      .clamp(kMinFps, kMaxFps)
+      .toDouble();
+  var fps = initialFps;
+  final initialFixed = canFixFps
+      ? int.tryParse(await bind.sessionGetOption(
+                  sessionId: sessionId, arg: fixedOption) ??
+              '') ??
+          0
+      : 0;
+  var fixed = initialFixed > 0;
+  var fixedFps = fixed ? initialFixed : 60;
+  var busy = false;
 
-  final content = customImageQualityWidget(
-      initQuality: initQuality,
-      initFps: initFps,
-      setQuality: (v) => setCustomValues(quality: v),
-      setFps: (v) => setCustomValues(fps: v),
-      showFps: !hideFps,
-      showMoreQuality: !hideMoreQuality);
-  msgBoxCommon(ffi.dialogManager, 'Custom Image Quality', content, [btnClose]);
+  ffi.dialogManager.show((setState, close, context) {
+    Future<void> apply() async {
+      if (busy) return;
+      setState(() => busy = true);
+      try {
+        final nextFixed = fixed ? fixedFps : 0;
+        if (canFixFps && nextFixed != initialFixed) {
+          if (setFixedFps != null) {
+            await setFixedFps(nextFixed);
+          } else {
+            final enabled = bind.sessionGetToggleOptionSync(
+                sessionId: sessionId, arg: fixedOption);
+            if (enabled != fixed) {
+              await bind.sessionToggleOption(
+                  sessionId: sessionId, value: fixedOption);
+            }
+            if (fixed &&
+                bind.sessionGetToggleOptionSync(
+                    sessionId: sessionId, arg: fixedOption)) {
+              await bind.sessionSetCustomFps(
+                  sessionId: sessionId, fps: nextFixed);
+            }
+          }
+        }
+        if (canFixFps &&
+            bind.sessionGetToggleOptionSync(
+                    sessionId: sessionId, arg: fixedOption) !=
+                fixed) {
+          throw StateError('Could not change the session frame rate mode');
+        }
+        final changeFps =
+            !fixed && showFps && (fps != initialFps || fromCustomPreset);
+        if (fromCustomPreset ||
+            unlimited != initialUnlimited ||
+            (!unlimited && bitrate != initialBitrate) ||
+            changeFps) {
+          await bind.sessionSetCustomImageQuality(
+              sessionId: sessionId,
+              value: (unlimited ? kAutoBitrate : bitrate).round());
+        }
+        if (changeFps) {
+          await bind.sessionSetCustomFps(
+              sessionId: sessionId, fps: fps.round());
+        }
+        close();
+      } catch (error) {
+        debugPrint('Failed to apply video settings: $error');
+        if (context.mounted) {
+          showToast(translate('Failed'));
+          setState(() => busy = false);
+        }
+      }
+    }
+
+    return CustomAlertDialog(
+      title: Text(translate('Video settings')),
+      content: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+              title: Text(translate('Bitrate limit')),
+              trailing: unlimited ? null : Text('${bitrate.round()}%')),
+          Slider(
+              value: bitrate,
+              min: kMinQuality,
+              max: more ? kMaxMoreQuality : kMaxQuality,
+              divisions: more ? 199 : 18,
+              onChanged: busy || unlimited
+                  ? null
+                  : (value) => setState(() => bitrate = value)),
+          if (!isWeb)
+            CheckboxListTile(
+                title: Text(translate('No bitrate cap')),
+                value: unlimited,
+                onChanged: busy
+                    ? null
+                    : (value) => setState(() => unlimited = value == true)),
+          if (showMore)
+            CheckboxListTile(
+                title: Text(translate('More')),
+                value: more,
+                onChanged: busy || unlimited
+                    ? null
+                    : (value) => setState(() {
+                          more = value == true;
+                          if (!more && bitrate > kMaxQuality)
+                            bitrate = kMaxQuality;
+                        })),
+          if (canFixFps)
+            SwitchListTile(
+                title: Text(translate('High performance mode')),
+                value: fixed,
+                onChanged:
+                    busy ? null : (value) => setState(() => fixed = value)),
+          if (fixed || showFps)
+            ListTile(
+                title: Text(translate('Target frame rate')),
+                trailing: Text(fixed ? '$fixedFps FPS' : '${fps.round()} FPS')),
+          if (fixed)
+            Wrap(spacing: 6, children: [
+              for (final rate in [30, 60, 90, 120])
+                ChoiceChip(
+                    label: Text('$rate'),
+                    selected: rate == fixedFps,
+                    onSelected:
+                        busy ? null : (_) => setState(() => fixedFps = rate)),
+            ])
+          else if (showFps)
+            Slider(
+                value: fps,
+                min: kMinFps,
+                max: kMaxFps,
+                divisions: ((kMaxFps - kMinFps) / 5).round(),
+                onChanged:
+                    busy ? null : (value) => setState(() => fps = value)),
+        ]),
+      ),
+      actions: [
+        dialogButton('Cancel', onPressed: busy ? null : close),
+        dialogButton('OK', onPressed: busy ? null : apply),
+      ],
+      onSubmit: busy ? null : apply,
+      onCancel: busy ? null : close,
+    );
+  });
 }
 
 int? _validateTrackpadSpeed(String text) {
