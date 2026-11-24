@@ -3134,6 +3134,20 @@ pub fn current_resolution(name: &str) -> ResultType<Resolution> {
     }
 }
 
+pub(crate) fn display_refresh_period(name: &str) -> Option<std::time::Duration> {
+    let device_name = str_to_device_name(name);
+    unsafe {
+        let mut mode: DEVMODEW = std::mem::zeroed();
+        mode.dmSize = std::mem::size_of::<DEVMODEW>() as _;
+        if EnumDisplaySettingsW(device_name.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) == 0
+            || mode.dmDisplayFrequency <= 1
+        {
+            return None;
+        }
+        Some(std::time::Duration::from_secs(1) / mode.dmDisplayFrequency)
+    }
+}
+
 pub(super) fn change_resolution_directly(
     name: &str,
     width: usize,

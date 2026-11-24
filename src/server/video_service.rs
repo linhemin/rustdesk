@@ -48,7 +48,7 @@ use scrap::vram::{VRamEncoder, VRamEncoderConfig};
 use scrap::Capturer;
 use scrap::{
     aom::AomEncoderConfig,
-    codec::{Encoder, EncoderCfg},
+    codec::{Encoder, EncoderCfg, Quality},
     record::{Recorder, RecorderContext},
     vpxcodec::{VpxEncoderConfig, VpxVideoCodecId},
     CodecFormat, Display, EncodeInput, TraitCapturer, TraitPixelBuffer,
@@ -66,7 +66,9 @@ use std::{
 
 pub const OPTION_REFRESH: &'static str = "refresh";
 
-mod static_refresh;
+mod encode_budget;
+mod pending_frame;
+mod settled_quality;
 
 #[cfg(windows)]
 const DXGI_RECOVERY_LIMIT: usize = 3;
@@ -184,8 +186,6 @@ struct VideoFrameController {
     display_idx: usize,
     cur: Instant,
     send_conn_ids: HashSet<i32>,
-    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-    diagnostic_repeat_frames: usize,
 }
 
 impl VideoFrameController {
@@ -194,8 +194,6 @@ impl VideoFrameController {
             display_idx,
             cur: Instant::now(),
             send_conn_ids: HashSet::new(),
-            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-            diagnostic_repeat_frames: 0,
         }
     }
 
@@ -726,6 +724,11 @@ fn run(vs: VideoService) -> ResultType<()> {
     let start = time::Instant::now();
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     let (mut diagnostic, mut diagnostic_since) = (video_diagnostics::CaptureStats::default(), start);
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    {
+        scrap::dxgi::take_desktop_updates();
+        scrap::dxgi::take_prefetched_frames();
+    }
     let mut last_check_displays = time::Instant::now();
     #[cfg(windows)]
     let mut dxgi_first_frame_started = vs.source.is_monitor().then_some(dxgi_recovery_started.unwrap_or(start));
@@ -746,22 +749,45 @@ fn run(vs: VideoService) -> ResultType<()> {
     let mut encoder_warmed_up = false;
     let capture_width = c.width;
     let capture_height = c.height;
-    let mut static_refresh = static_refresh::StaticRefresh::new(
-        vs.source,
-        codec_format,
-        &encoder_cfg,
-        &sp,
-        &recorder,
-        display_idx,
-        capture_width,
-        capture_height,
-    );
+    let mut pending_vpx = pending_frame::PendingVpxFrame::default();
+    let mut settled_quality = settled_quality::SettledQuality::default();
     let (mut second_instant, mut send_counter) = (Instant::now(), 0);
+    let dxgi_encode_budget = {
+        #[cfg(all(windows, feature = "vram"))]
+        {
+            vs.source.is_monitor() && encoder.input_texture()
+        }
+        #[cfg(not(all(windows, feature = "vram")))]
+        {
+            false
+        }
+    };
+    let mut observe_auto_bitrate = false;
+    let mut encode_budget = encode_budget::EncodeBudget::default();
 
     while sp.ok() {
         #[cfg(windows)]
         check_uac_switch(c.privacy_mode_id, c._capturer_privacy_mode_id)?;
-        let fixed_pacing = check_qos(
+        if dxgi_encode_budget || observe_auto_bitrate {
+            let elapsed = second_instant.elapsed();
+            if elapsed > Duration::from_secs(1) {
+                let sample = std::mem::take(&mut encode_budget);
+                #[cfg(windows)]
+                let refresh_period = display_service::get_display_info(display_idx).and_then(
+                    |display| crate::platform::windows::display_refresh_period(&display.name),
+                );
+                #[cfg(not(windows))]
+                let refresh_period: Option<Duration> = None;
+                let frame_period = refresh_period.map(|refresh| refresh.max(spf));
+                if frame_period
+                    .or(observe_auto_bitrate.then_some(spf))
+                    .is_some_and(|period| sample.misses_target(elapsed, period))
+                {
+                    VIDEO_QOS.lock().unwrap().back_off_encoder_bitrate();
+                }
+            }
+        }
+        let (fixed_pacing, uncapped) = check_qos(
             &mut encoder,
             &mut quality,
             &mut spf,
@@ -769,11 +795,25 @@ fn run(vs: VideoService) -> ResultType<()> {
             &mut send_counter,
             &mut second_instant,
             &sp.name(),
-        )? && vs.source.is_monitor();
+        )?;
+        let fixed_pacing = fixed_pacing && vs.source.is_monitor();
+        let observe = uncapped && vs.source.is_monitor();
+        if observe_auto_bitrate != observe {
+            encode_budget = Default::default();
+            observe_auto_bitrate = observe;
+        }
         #[cfg(all(windows, feature = "windows-video-diagnostics"))]
         if vs.source.is_monitor() && diagnostic_since.elapsed() >= Duration::from_secs(1) {
-            diagnostic.repeat_encoded += std::mem::take(&mut frame_controller.diagnostic_repeat_frames);
-            diagnostic.report(display_idx, c.is_gdi(), spf, diagnostic_since.elapsed());
+            diagnostic.report(
+                display_idx,
+                c.is_gdi(),
+                codec_format,
+                encoder.is_hardware(),
+                encoder.bitrate(),
+                (capture_width, capture_height),
+                spf,
+                diagnostic_since.elapsed(),
+            );
             diagnostic_since = Instant::now();
         }
         // On macOS, a refresh here would destroy a hardware encoder that has been fed a frame but
@@ -901,10 +941,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                     let convert_started = Instant::now();
                     let frame = frame.to(encoder.yuvfmt(), &mut yuv, &mut mid_data)?;
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-                    {
-                        diagnostic.convert_max_us = diagnostic.convert_max_us.max(convert_started.elapsed().as_micros() as u64);
-                    }
-                    static_refresh.on_frame(&frame);
+                    diagnostic.conversion(convert_started.elapsed());
                     let result = handle_one_frame(
                         display_idx,
                         &sp,
@@ -919,8 +956,16 @@ fn run(vs: VideoService) -> ResultType<()> {
                         capture_height,
                     )?;
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-                    diagnostic.encoded(result.encoded_frames, result.encode_us);
-                    static_refresh.on_frame_encoded(&result);
+                    diagnostic.encode.record(result.encode_outcome, result.encode_us);
+                    if observe_auto_bitrate
+                        || (dxgi_encode_budget && !result.send_conn_ids.is_empty())
+                    {
+                        encode_budget.record(result.encode_us);
+                    }
+                    pending_vpx.on_capture(result.vpx_no_output);
+                    if vs.source.is_monitor() {
+                        settled_quality.on_capture(now, !result.send_conn_ids.is_empty());
+                    }
                     frame_controller.set_send(now, result.send_conn_ids);
                     send_counter += 1;
                 }
@@ -963,45 +1008,56 @@ fn run(vs: VideoService) -> ResultType<()> {
                         }
                     }
                 }
-                if fixed_pacing {
-                    static_refresh.try_encode_fixed(
-                        &yuv, now, ms, &mut encoder, &mut frame_controller,
-                    )?;
-                } else if !encoder.latency_free() && !yuv.is_empty() {
-                    // yun.len() > 0 means the frame is not texture.
-                    if repeat_encode_counter < repeat_encode_max {
+                let retry_vpx = !yuv.is_empty() && pending_vpx.take_retry();
+                let drain_encoder = !fixed_pacing
+                    && !encoder.latency_free()
+                    && !yuv.is_empty()
+                    && repeat_encode_counter < repeat_encode_max;
+                if retry_vpx || drain_encoder {
+                    if drain_encoder {
                         repeat_encode_counter += 1;
-                        let result = handle_one_frame(
-                            display_idx,
-                            &sp,
-                            EncodeInput::YUV(&yuv),
-                            ms,
-                            &mut encoder,
-                            recorder.clone(),
-                            &mut encode_fail_counter,
-                            &mut first_frame,
-                            &mut encoder_warmed_up,
-                            capture_width,
-                            capture_height,
-                        )?;
-                        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-                        diagnostic.encoded(result.encoded_frames, result.encode_us);
-                        let send_conn_ids = result.send_conn_ids;
-                        static_refresh.on_encoded(!send_conn_ids.is_empty());
-                        frame_controller.set_send(now, send_conn_ids);
-                        send_counter += 1;
                     }
-                }
-                if !fixed_pacing {
-                    static_refresh.try_encode(
-                        &yuv,
-                        spf,
-                        quality,
-                        now,
+                    let result = handle_one_frame(
+                        display_idx,
+                        &sp,
+                        EncodeInput::YUV(&yuv),
                         ms,
                         &mut encoder,
+                        recorder.clone(),
+                        &mut encode_fail_counter,
+                        &mut first_frame,
+                        &mut encoder_warmed_up,
+                        capture_width,
+                        capture_height,
+                    )?;
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    diagnostic.encode.record(result.encode_outcome, result.encode_us);
+                    pending_vpx.on_retry(result.vpx_no_output);
+                    if vs.source.is_monitor() && !result.send_conn_ids.is_empty() {
+                        settled_quality.on_pending_output();
+                    }
+                    frame_controller.set_send(now, result.send_conn_ids);
+                    send_counter += 1;
+                } else if vs.source.is_monitor()
+                    && settled_quality.waiting(now).is_some_and(|waiting| {
+                        VIDEO_QOS.lock().unwrap().settled_quality_ready(waiting)
+                    })
+                {
+                    let sent = settled_quality::send(
+                        &sp,
+                        &mut encoder,
+                        &yuv,
+                        now,
+                        ms,
+                        &recorder,
+                        (capture_width, capture_height),
                         &mut frame_controller,
                     )?;
+                    settled_quality.on_attempt(now, sent);
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    if sent {
+                        diagnostic.settled_quality_refresh();
+                    }
                 }
             }
             Err(err) => {
@@ -1063,8 +1119,10 @@ fn run(vs: VideoService) -> ResultType<()> {
         }
         #[cfg(all(windows, feature = "windows-video-diagnostics"))]
         if !frame_controller.send_conn_ids.is_empty() {
-            diagnostic.ack_wait_max_us = diagnostic.ack_wait_max_us.max(wait_begin.elapsed().as_micros() as u64);
-            diagnostic.ack_missed += frame_controller.send_conn_ids.len().saturating_sub(fetched_conn_ids.len());
+            diagnostic.ack_wait(
+                wait_begin.elapsed(),
+                frame_controller.send_conn_ids.len().saturating_sub(fetched_conn_ids.len()),
+            );
         }
         DISPLAY_CONN_IDS.lock().unwrap().remove(&display_idx);
 
@@ -1099,6 +1157,10 @@ impl Raii {
 
 impl Drop for Raii {
     fn drop(&mut self) {
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        if self.name.starts_with(VideoSource::Monitor.service_name_prefix()) {
+            video_diagnostics::clear_capture(self.display_idx);
+        }
         log::info!("stop video service: {}", self.name);
         #[cfg(feature = "vram")]
         if self.try_vram {
@@ -1358,7 +1420,7 @@ fn handle_one_frame(
     encoder_warmed_up: &mut bool,
     width: usize,
     height: usize,
-) -> ResultType<static_refresh::FrameEncodeResult> {
+) -> ResultType<pending_frame::FrameEncodeResult> {
     sp.snapshot(|sps| {
         // so that new sub and old sub share the same encoder after switch
         if sps.has_subscribes() {
@@ -1372,13 +1434,11 @@ fn handle_one_frame(
     let mut vpx_no_output = false;
     let first = *first_frame;
     *first_frame = false;
-    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     let encode_started = Instant::now();
     let encoded = encoder.encode_to_message(frame, ms);
-    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     let encode_us = encode_started.elapsed().as_micros() as u64;
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-    let encoded_frames = encoded.as_ref().map(video_diagnostics::frame_count).unwrap_or(0);
+    let encode_outcome = video_diagnostics::EncodeOutcome::from_result(&encoded);
     match encoded {
         Ok(mut vf) => {
             *encode_fail_counter = 0;
@@ -1393,23 +1453,25 @@ fn handle_one_frame(
                 .map(|r| r.write_message(&msg, width, height));
             send_conn_ids = sp.send_video_frame(msg);
         }
+        Err(e) if e.is::<scrap::VpxNoOutput>() => vpx_no_output = true,
         Err(e) => {
-            vpx_no_output = e.is::<scrap::VpxNoOutput>();
             *encode_fail_counter += 1;
             // Encoding errors are not frequent except on Android
             if !cfg!(target_os = "android") {
                 log::error!("encode fail: {e:?}, times: {}", *encode_fail_counter,);
             }
+            let repeat = !encoder.latency_free();
             let max_fail_times = if cfg!(target_os = "android") && encoder.is_hardware() {
                 9
+            } else if cfg!(target_os = "macos") && repeat && !*encoder_warmed_up {
+                4
             } else {
                 3
             };
-            let repeat = !encoder.latency_free();
             // repeat encoders can reach max_fail_times on the first frame
             if (first && !repeat) || *encode_fail_counter >= max_fail_times {
                 *encode_fail_counter = 0;
-                if encoder.is_hardware() {
+                if encoder.is_hardware() || repeat {
                     encoder.disable();
                     log::error!("switch due to encoding fails, first frame: {first}, error: {e:?}");
                     bail!("SWITCH");
@@ -1425,12 +1487,11 @@ fn handle_one_frame(
             }
         }
     }
-    Ok(static_refresh::FrameEncodeResult {
+    Ok(pending_frame::FrameEncodeResult {
         send_conn_ids,
         vpx_no_output,
         #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-        encoded_frames,
-        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        encode_outcome,
         encode_us,
     })
 }
@@ -1553,9 +1614,11 @@ fn check_qos(
     send_counter: &mut usize,
     second_instant: &mut Instant,
     name: &str,
-) -> ResultType<bool> {
+) -> ResultType<(bool, bool)> {
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let fixed_pacing = video_qos.fixed_target().is_some();
+    let observe_auto_bitrate =
+        video_qos.latest_quality() == Quality::Auto && video_qos.in_vbr_state();
     #[cfg(feature = "vram")]
     video_qos.set_gpu_texture_encode(name, encoder.input_texture());
     *spf = video_qos.spf();
@@ -1566,7 +1629,9 @@ fn check_qos(
             video_qos.store_bitrate(encoder.bitrate());
         } else {
             // Now only vaapi doesn't support changing quality
-            if !video_qos.in_vbr_state() && !video_qos.latest_quality().is_custom() {
+            if observe_auto_bitrate
+                || (!video_qos.in_vbr_state() && !video_qos.latest_quality().is_custom())
+            {
                 log::info!("switch to change quality");
                 bail!("SWITCH");
             }
@@ -1582,7 +1647,7 @@ fn check_qos(
         *send_counter = 0;
     }
     drop(video_qos);
-    Ok(fixed_pacing)
+    Ok((fixed_pacing, observe_auto_bitrate))
 }
 
 pub fn set_take_screenshot(source: VideoSource, display_idx: usize, sid: String, tx: Sender) {

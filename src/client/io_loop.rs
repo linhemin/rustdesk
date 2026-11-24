@@ -2652,6 +2652,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     _ => {}
                 },
                 Some(message::Union::TestDelay(mut t)) => {
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    crate::video_diagnostics::receive_peer_report(
+                        &mut t,
+                        self.is_connected && peer.is_secured()
+                            && self.handler.lc.read().unwrap().conn_type == ConnType::DEFAULT_CONN,
+                    );
                     if !t.from_client {
                         let (kbps, fps, queued) = self.video_delivery.finish(std::time::Instant::now()).unwrap_or_default();
                         t.delivered_video_kbps = kbps;

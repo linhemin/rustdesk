@@ -413,6 +413,8 @@ pub struct Connection {
     tx_input: std_mpsc::Sender<MessageInput>,
     // handle input messages
     video_ack_required: bool,
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    video_diagnostics_requested: bool,
     server_audit_conn: String,
     server_audit_file: String,
     controlled_context: Option<ControlledContext>,
@@ -629,6 +631,8 @@ impl Connection {
             show_my_cursor: false,
             tx_input,
             video_ack_required: false,
+            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+            video_diagnostics_requested: false,
             server_audit_conn: "".to_owned(),
             server_audit_file: "".to_owned(),
             controlled_context,
@@ -1236,7 +1240,10 @@ impl Connection {
                 }
                 _ = second_timer.tick() => {
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-                    video_diagnostic.report(id, conn.video_ack_required);
+                    {
+                        video_diagnostic.discarded(video_queue.take_discarded_frames());
+                        video_diagnostic.report(id, conn.video_ack_required);
+                    }
                     #[cfg(windows)]
                     conn.portable_check();
                     raii::AuthedConnID::check_wake_lock_on_setting_changed();
@@ -1269,6 +1276,14 @@ impl Connection {
                             target_bitrate,
                             fixed_screen_fps,
                             gpu_texture_encode,
+                            #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                            video_diagnostics: if conn.video_diagnostics_requested
+                                && conn.is_authed_remote_conn() && conn.stream.is_secured()
+                            {
+                                crate::video_diagnostics::peer_report(conn.display_idx, &video_diagnostic)
+                            } else {
+                                None
+                            }.into(),
                             ..Default::default()
                         });
                         conn.send(msg_out.into()).await;
@@ -3227,6 +3242,11 @@ impl Connection {
             } else {
                 if let Some(tm) = self.last_test_delay {
                     self.last_test_delay = None;
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    {
+                        self.video_diagnostics_requested = t.request_video_diagnostics
+                            && self.is_authed_remote_conn() && self.stream.is_secured();
+                    }
                     let new_delay = tm.elapsed().as_millis() as u32;
                     let mut qos = video_service::VIDEO_QOS.lock().unwrap();
                     qos.user_video_delivery(self.inner.id(), t.delivered_video_kbps, t.delivered_video_fps, t.queued_video_percent);

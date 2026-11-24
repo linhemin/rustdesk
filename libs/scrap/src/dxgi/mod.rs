@@ -3,6 +3,7 @@ pub mod gdi;
 pub use gdi::CapturerGDI;
 pub mod hdr;
 pub mod mag;
+mod latest_frame;
 
 use winapi::{
     shared::{
@@ -26,6 +27,27 @@ use crate::RotationMode::*;
 
 use crate::{AdapterDevice, Frame, PixelBuffer};
 use std::ffi::c_void;
+
+#[cfg(feature = "dxgi-diagnostics")]
+thread_local! {
+    static DESKTOP_UPDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PREFETCHED_FRAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(feature = "dxgi-diagnostics")]
+pub fn take_desktop_updates() -> usize {
+    DESKTOP_UPDATES.with(std::cell::Cell::take)
+}
+
+#[cfg(feature = "dxgi-diagnostics")]
+pub fn take_prefetched_frames() -> usize {
+    PREFETCHED_FRAMES.with(std::cell::Cell::take)
+}
+
+#[cfg(feature = "dxgi-diagnostics")]
+fn record_desktop_updates(count: usize) {
+    DESKTOP_UPDATES.with(|updates| updates.set(updates.get() + count));
+}
 
 pub struct ComPtr<T>(*mut T);
 impl<T> ComPtr<T> {
@@ -69,6 +91,8 @@ pub struct Capturer {
     rotate: Rotate,
     frame_state: FrameState,
     hdr: Option<hdr::HdrToSdr>,
+    latest_capture: Option<latest_frame::LatestFrameCapture>,
+    latest_capture_unsupported: bool,
 }
 
 impl Capturer {
@@ -76,10 +100,9 @@ impl Capturer {
         let mut device = ptr::null_mut();
         let mut context = ptr::null_mut();
         let mut duplication = ptr::null_mut();
-        #[allow(invalid_value)]
-        let mut desc = unsafe { mem::MaybeUninit::uninit().assume_init() };
-        #[allow(invalid_value)]
-        let mut adapter_desc1 = unsafe { mem::MaybeUninit::uninit().assume_init() };
+        let mut desc: DXGI_OUTDUPL_DESC = unsafe { mem::zeroed() };
+        let mut adapter_desc1: DXGI_ADAPTER_DESC1 = unsafe { mem::zeroed() };
+        let mut feature_level = 0;
         let mut gdi_capturer = None;
 
         let mut res = if display.gdi {
@@ -95,7 +118,7 @@ impl Capturer {
                     0,               // Feature levels' length.
                     D3D11_SDK_VERSION,
                     &mut device,
-                    ptr::null_mut(),
+                    &mut feature_level,
                     &mut context,
                 )
             });
@@ -162,6 +185,12 @@ impl Capturer {
         res?;
 
         if !duplication.is_null() {
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(2),
+                info,
+                "DXGI capture feature level {feature_level:#06x}, vendor {:#06x}",
+                adapter_desc1.VendorId
+            );
             unsafe {
                 (*duplication).GetDesc(&mut desc);
             }
@@ -188,6 +217,8 @@ impl Capturer {
             rotate,
             frame_state: FrameState::Idle,
             hdr: None,
+            latest_capture: None,
+            latest_capture_unsupported: false,
         })
     }
 
@@ -423,6 +454,7 @@ impl Capturer {
     }
 
     pub fn set_gdi(&mut self) -> bool {
+        drop(self.latest_capture.take());
         self.gdi_capturer = self.display.create_gdi();
         self.is_gdi()
     }
@@ -434,6 +466,9 @@ impl Capturer {
 
     #[cfg(feature = "vram")]
     pub fn set_output_texture(&mut self, texture: bool) {
+        if !texture {
+            self.latest_capture = None;
+        }
         self.output_texture = texture;
     }
 
@@ -452,6 +487,8 @@ impl Capturer {
         if *info.LastPresentTime.QuadPart() == 0 {
             return Err(std::io::ErrorKind::WouldBlock.into());
         }
+        #[cfg(feature = "dxgi-diagnostics")]
+        record_desktop_updates(info.AccumulatedFrames as usize);
 
         #[allow(invalid_value)]
         let mut rect = mem::MaybeUninit::uninit().assume_init();
@@ -512,6 +549,9 @@ impl Capturer {
 
     pub fn frame<'a>(&'a mut self, timeout: UINT) -> io::Result<Frame<'a>> {
         if self.output_texture {
+            #[cfg(feature = "vram")]
+            return Ok(Frame::Texture(self.get_stream_texture(timeout)?));
+            #[cfg(not(feature = "vram"))]
             Ok(Frame::Texture(self.get_texture(timeout)?))
         } else {
             let width = self.width;
@@ -545,7 +585,13 @@ impl Capturer {
                     }
                 } else {
                     self.release_frame()?;
-                    let r = self.load_frame(timeout)?;
+                    let size = (self.width, self.height);
+                    let r = match self.get_latest_frame(timeout, |capture, timeout| {
+                        capture.pixel_frame(timeout, size)
+                    })? {
+                        Some(pixels) => pixels,
+                        None => self.load_frame(timeout)?,
+                    };
                     let rotate = match self.display.rotation() {
                         DXGI_MODE_ROTATION_IDENTITY | DXGI_MODE_ROTATION_UNSPECIFIED => kRotate0,
                         DXGI_MODE_ROTATION_ROTATE90 => kRotate90,
@@ -587,6 +633,60 @@ impl Capturer {
         }
     }
 
+    #[cfg(feature = "vram")]
+    fn get_stream_texture(&mut self, timeout: UINT) -> io::Result<(*mut c_void, usize)> {
+        match self.get_latest_frame(timeout, latest_frame::LatestFrameCapture::frame)? {
+            Some(texture) => Ok(texture),
+            None => self.get_texture(timeout),
+        }
+    }
+
+    fn get_latest_frame<T>(
+        &mut self,
+        timeout: UINT,
+        grab: impl FnOnce(&mut latest_frame::LatestFrameCapture, UINT) -> io::Result<T>,
+    ) -> io::Result<Option<T>> {
+        if timeout >= 34 {
+            self.latest_capture = None;
+        } else if timeout <= 20
+            && self.latest_capture.is_none()
+            && !self.latest_capture_unsupported
+            && !self.is_gdi()
+        {
+            self.release_frame()?;
+            match unsafe {
+                latest_frame::LatestFrameCapture::start(&self.duplication, &self.device, &self.context)
+            } {
+                Ok(capture) => {
+                    hbb_common::throttled_log!(
+                        std::time::Duration::from_secs(5),
+                        debug,
+                        "DXGI uses newest-frame capture"
+                    );
+                    self.latest_capture = Some(capture);
+                }
+                Err(error) => {
+                    self.latest_capture_unsupported = true;
+                    hbb_common::throttled_log!(
+                        std::time::Duration::from_secs(5),
+                        debug,
+                        "DXGI prefetch unavailable: {error}"
+                    );
+                }
+            }
+        }
+        if let Some(capture) = self.latest_capture.as_mut() {
+            match grab(capture, timeout) {
+                Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+                    self.latest_capture_unsupported = true;
+                    self.latest_capture = None;
+                }
+                result => return result.map(Some),
+            }
+        }
+        Ok(None)
+    }
+
     fn get_texture(&mut self, timeout: UINT) -> io::Result<(*mut c_void, usize)> {
         unsafe {
             if self.duplication.0.is_null() {
@@ -604,6 +704,8 @@ impl Capturer {
             if info.AccumulatedFrames == 0 || *info.LastPresentTime.QuadPart() == 0 {
                 return Err(std::io::ErrorKind::WouldBlock.into());
             }
+            #[cfg(feature = "dxgi-diagnostics")]
+            record_desktop_updates(info.AccumulatedFrames as usize);
 
             let mut texture: *mut ID3D11Texture2D = ptr::null_mut();
             (*frame.0).QueryInterface(
@@ -777,6 +879,7 @@ pub(crate) fn physical_adapter_vendors() -> io::Result<Vec<u32>> {
 
 impl Drop for Capturer {
     fn drop(&mut self) {
+        drop(self.latest_capture.take());
         if let Err(err) = self.release_frame() {
             eprintln!("DXGI frame cleanup failed: {err}");
         }

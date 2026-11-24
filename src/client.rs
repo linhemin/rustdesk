@@ -4051,12 +4051,12 @@ impl LoginConfigHandler {
                 50
             } else {
                 let mut quality = config.custom_image_quality[0];
-                if !allow_more && quality > 100 {
+                if !allow_more && quality > 100 && quality != keys::CUSTOM_BITRATE_AUTO {
                     quality = 50;
                 }
                 quality
             };
-            msg.custom_image_quality = quality << 8;
+            msg.custom_image_quality = Self::custom_bitrate_wire_value(quality);
             #[cfg(feature = "flutter")]
             if let Some(custom_fps) = self.options.get("custom-fps") {
                 let mut custom_fps = custom_fps.parse().unwrap_or(30);
@@ -4212,16 +4212,19 @@ impl LoginConfigHandler {
         msg_out
     }
 
+    fn custom_bitrate_wire_value(image_quality: i32) -> i32 {
+        if image_quality == keys::CUSTOM_BITRATE_AUTO {
+            keys::CUSTOM_BITRATE_AUTO_FLAG | (50 << 8)
+        } else {
+            image_quality << 8
+        }
+    }
+
     /// Create a [`Message`] for saving custom image quality.
-    ///
-    /// # Arguments
-    ///
-    /// * `bitrate` - The given bitrate.
-    /// * `quantizer` - The given quantizer.
     pub fn save_custom_image_quality(&mut self, image_quality: i32) -> Message {
         let mut misc = Misc::new();
         misc.set_option(OptionMessage {
-            custom_image_quality: image_quality << 8,
+            custom_image_quality: Self::custom_bitrate_wire_value(image_quality),
             ..Default::default()
         });
         let mut msg_out = Message::new();

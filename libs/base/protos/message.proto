@@ -721,6 +721,19 @@ message TestDelay {
   uint32 queued_video_percent = 7;
   uint32 fixed_screen_fps = 8;
   bool gpu_texture_encode = 9;
+  // Windows diagnostic builds exchange samples on an authenticated desktop session.
+  bool request_video_diagnostics = 10;
+  VideoDiagnostics video_diagnostics = 11;
+}
+
+message VideoDiagnostics {
+  VideoDiagnosticSample capture = 1;
+  VideoDiagnosticSample send = 2;
+}
+
+message VideoDiagnosticSample {
+  int64 time_unix_ms = 1;
+  string metrics = 2;
 }
 
 message PublicKey {
