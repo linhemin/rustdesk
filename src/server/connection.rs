@@ -76,6 +76,7 @@ use crate::virtual_display_manager;
 pub type Sender = mpsc::UnboundedSender<(Instant, Arc<Message>)>;
 
 mod trusted_devices;
+mod video_queue;
 
 const FAILURE_IDX_ID_WHITELIST: usize = 2;
 // How long a rejection counts, so also how long a blocked address stays blocked. Longer
@@ -244,6 +245,7 @@ pub struct ConnInner {
     id: i32,
     tx: Option<Sender>,
     tx_video: Option<Sender>,
+    video_queue: Option<Arc<video_queue::VideoQueue>>,
 }
 
 struct InputMouse {
@@ -470,7 +472,7 @@ pub struct Connection {
 
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
-        Self { id, tx, tx_video }
+        Self { id, tx, tx_video, video_queue: None }
     }
 }
 
@@ -492,6 +494,10 @@ impl Subscriber for ConnInner {
             _ => false,
         };
         let tx = if tx_by_video {
+            if let Some(queue) = &self.video_queue {
+                queue.push(self.id, msg);
+                return;
+            }
             self.tx_video.as_mut()
         } else {
             self.tx.as_mut()
@@ -556,7 +562,7 @@ impl Connection {
         let tx_from_cm = tx_from_cm_holder.clone();
         let (tx_to_cm, rx_to_cm) = mpsc::unbounded_channel::<ipc::Data>();
         let (tx, mut rx) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
-        let (tx_video, mut rx_video) = mpsc::unbounded_channel::<(Instant, Arc<Message>)>();
+        let video_queue = Arc::new(video_queue::VideoQueue::default());
         let (tx_input, _rx_input) = std_mpsc::channel();
         let (tx_from_authed, mut rx_from_authed) = mpsc::unbounded_channel::<ipc::Data>();
         let mut hbbs_rx = crate::hbbs_http::sync::signal_receiver();
@@ -572,7 +578,8 @@ impl Connection {
             inner: ConnInner {
                 id,
                 tx: Some(tx),
-                tx_video: Some(tx_video),
+                tx_video: None,
+                video_queue: Some(video_queue.clone()),
             },
             require_2fa: crate::auth_2fa::get_2fa(None),
             awaiting_2fa: false,
@@ -1112,7 +1119,14 @@ impl Connection {
                         break;
                     }
                 }
-                Some((instant, value)) = rx_video.recv() => {
+                event = video_queue.recv(id) => {
+                    let (instant, value) = match event {
+                        video_queue::Event::Send(instant, value) => (instant, value),
+                        video_queue::Event::Refresh(display) => {
+                            conn.refresh_video_display(Some(display as usize));
+                            continue;
+                        }
+                    };
                     if !conn.video_ack_required {
                         if let Some(message::Union::VideoFrame(vf)) = &value.union {
                             video_service::notify_video_frame_fetched(vf.display as usize, id, Some(instant.into()));
@@ -1120,7 +1134,7 @@ impl Connection {
                     }
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                     let (queue_age, queue_depth, write_started) =
-                        (instant.elapsed(), rx_video.len(), Instant::now());
+                        (instant.elapsed(), video_queue.len(), Instant::now());
                     let sent = conn.stream.send(&value as &Message).await;
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                     if sent.is_ok() {
