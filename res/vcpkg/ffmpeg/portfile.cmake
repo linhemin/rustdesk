@@ -1,3 +1,7 @@
+if(VCPKG_TARGET_IS_OSX)
+    set(RUSTDESK_VIDEOTOOLBOX_SOFTWARE_PATCH patch/0016-videotoolbox-software-encoders.patch)
+endif()
+
 # FFmpeg 7.1.1 includes the HEVC WPP slice-thread deadlock fix:
 # https://github.com/FFmpeg/FFmpeg/commit/79c47dfd25f101b6842bbec8c6ffef8d5077c3ae
 vcpkg_from_github(
@@ -33,6 +37,7 @@ vcpkg_from_github(
     patch/0013-fix-qsv-encode-timeouts.patch
     patch/0014-fix-qsv-encode-buffer.patch
     patch/0015-fix-hybrid-mp4-finalization.patch
+    ${RUSTDESK_VIDEOTOOLBOX_SOFTWARE_PATCH}
 )
 
 if(SOURCE_PATH MATCHES " ")
@@ -174,7 +179,7 @@ elseif(VCPKG_TARGET_IS_OSX)
     string(APPEND OPTIONS "\
 --disable-autodetect \
 --enable-videotoolbox \
---enable-encoder=h264_videotoolbox,hevc_videotoolbox \
+--enable-encoder=h264_videotoolbox,hevc_videotoolbox,h264_videotoolbox_sw,hevc_videotoolbox_sw \
 --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox \
 ")
 elseif(VCPKG_TARGET_IS_IOS)

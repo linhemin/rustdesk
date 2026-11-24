@@ -21,7 +21,7 @@ use hwcodec::{
     vram::{
         decode::{self, DecodeFrame, Decoder},
         encode::{self, EncodeFrame, Encoder},
-        Available, DecodeContext, DynamicContext, EncodeContext, FeatureContext,
+        DecodeContext, DynamicContext, EncodeContext, FeatureContext,
     },
 };
 
@@ -195,7 +195,7 @@ impl EncoderApi for VRamEncoder {
     }
 
     fn disable(&self) {
-        HwCodecConfig::clear(true, true);
+        HwCodecConfig::remove_texture_encoder(&self.ctx.f);
     }
 }
 
@@ -385,7 +385,7 @@ pub struct VRamDecoderImage<'a> {
 
 impl VRamDecoderImage<'_> {}
 
-pub(crate) fn check_available_vram() -> (Vec<FeatureContext>, Vec<DecodeContext>, String) {
+pub(crate) fn check_available_vram() -> (Vec<FeatureContext>, Vec<DecodeContext>) {
     let d = DynamicContext {
         device: None,
         width: 1280,
@@ -394,15 +394,5 @@ pub(crate) fn check_available_vram() -> (Vec<FeatureContext>, Vec<DecodeContext>
         framerate: 60,
         gop: MAX_GOP as _,
     };
-    let encoders = encode::available(d);
-    let decoders = decode::available();
-    let available = Available {
-        e: encoders.clone(),
-        d: decoders.clone(),
-    };
-    (
-        encoders,
-        decoders,
-        available.serialize().unwrap_or_default(),
-    )
+    (encode::available(d), decode::available())
 }

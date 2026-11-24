@@ -788,11 +788,12 @@ fn run(vs: VideoService) -> ResultType<()> {
             log::info!("switch to refresh");
             bail!("SWITCH");
         }
-        if codec_format != Encoder::negotiated_codec() {
+        let negotiated = Encoder::negotiated_encoder();
+        if (codec_format, encoder_cfg.is_software_h26x()) != negotiated {
             log::info!(
                 "switch due to codec changed, {:?} -> {:?}",
                 codec_format,
-                Encoder::negotiated_codec()
+                negotiated
             );
             bail!("SWITCH");
         }
@@ -1126,20 +1127,30 @@ fn setup_encoder(
     bool,
     Arc<Mutex<Option<Recorder>>>,
 )> {
-    let encoder_cfg = get_encoder_config(
-        &c,
-        name.to_string(),
-        quality,
-        client_record || record_incoming,
-        last_portable_service_running,
-        source,
-    );
-    Encoder::set_fallback(&encoder_cfg);
-    let codec_format = Encoder::negotiated_codec();
-    let recorder = get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
-    let use_i444 = Encoder::use_i444(&encoder_cfg);
-    let encoder = Encoder::new(encoder_cfg.clone(), use_i444)?;
-    Ok((encoder, encoder_cfg, codec_format, use_i444, recorder))
+    let mut retries = 8;
+    loop {
+        let encoder_cfg = get_encoder_config(
+            c,
+            name.clone(),
+            quality,
+            client_record || record_incoming,
+            last_portable_service_running,
+            source,
+        );
+        Encoder::set_fallback(&encoder_cfg);
+        let codec_format = Encoder::negotiated_codec();
+        let use_i444 = Encoder::use_i444(&encoder_cfg);
+        match Encoder::new(encoder_cfg.clone(), use_i444) {
+            Ok(encoder) => {
+                let recorder = get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
+                return Ok((encoder, encoder_cfg, codec_format, use_i444, recorder));
+            }
+            Err(_) if retries > 0 && matches!(codec_format, CodecFormat::H264 | CodecFormat::H265) => {
+                retries -= 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 fn get_encoder_config(
@@ -1159,7 +1170,7 @@ fn get_encoder_config(
     Encoder::update(scrap::codec::EncodingUpdate::Check);
     // https://www.wowza.com/community/t/the-correct-keyframe-interval-in-obs-studio/95162
     let keyframe_interval = if record { Some(240) } else { None };
-    let negotiated_codec = Encoder::negotiated_codec();
+    let (negotiated_codec, _software_h26x) = Encoder::negotiated_encoder();
     match negotiated_codec {
         CodecFormat::H264 | CodecFormat::H265 => {
             #[cfg(feature = "vram")]
@@ -1174,7 +1185,22 @@ fn get_encoder_config(
                 });
             }
             #[cfg(feature = "hwcodec")]
-            if let Some(hw) = HwRamEncoder::try_get(negotiated_codec) {
+            if let Some(hw) = {
+                #[cfg(target_os = "macos")]
+                {
+                    if _software_h26x {
+                        HwRamEncoder::try_get_software(negotiated_codec)
+                    } else {
+                        HwRamEncoder::try_get(negotiated_codec)
+                    }
+                }
+                #[cfg(all(windows, feature = "vram"))]
+                {
+                    HwRamEncoder::try_get_for_adapter(negotiated_codec, c.device().vendor_id)
+                }
+                #[cfg(not(any(target_os = "macos", all(windows, feature = "vram"))))]
+                HwRamEncoder::try_get(negotiated_codec)
+            } {
                 return EncoderCfg::HWRAM(HwRamEncoderConfig {
                     name: hw.name,
                     mc_name: hw.mc_name,

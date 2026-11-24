@@ -6,7 +6,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/aom_ffi.rs"));
 
-use crate::codec::{base_bitrate, codec_thread_num};
+use crate::codec::base_bitrate;
 use crate::{codec::EncoderApi, EncodeFrame, STRIDE_ALIGN};
 use crate::{common::GoogleImage, generate_call_macro, generate_call_ptr_macro, Error, Result};
 use crate::{EncodeInput, EncodeYuvFormat, Pixfmt};
@@ -56,6 +56,13 @@ pub struct AomEncoder {
     yuvfmt: EncodeYuvFormat,
 }
 
+fn aom_thread_num() -> usize {
+    #[cfg(windows)]
+    return crate::codec::windows_realtime_codec_thread_num();
+    #[cfg(not(windows))]
+    crate::codec::codec_thread_num(64)
+}
+
 // https://webrtc.googlesource.com/src/+/refs/heads/main/modules/video_coding/codecs/av1/libaom_av1_encoder.cc
 mod webrtc {
     use super::*;
@@ -103,7 +110,7 @@ mod webrtc {
         // Overwrite default config with input encoder settings & RTC-relevant values.
         c.g_w = cfg.width;
         c.g_h = cfg.height;
-        c.g_threads = codec_thread_num(64) as _;
+        c.g_threads = aom_thread_num() as _;
         c.g_timebase.num = 1;
         c.g_timebase.den = kTimeBaseDen as _;
         c.g_input_bit_depth = kBitDepth;
@@ -363,10 +370,16 @@ impl AomEncoder {
         let t = b as f32 / 200.0;
 
         let mut q_min: u32 = ((1.0 - t) * q_min1 as f32 + t * q_min2 as f32).round() as u32;
-        let mut q_max = ((1.0 - t) * q_max1 as f32 + t * q_max2 as f32).round() as u32;
+        let q_max = ((1.0 - t) * q_max1 as f32 + t * q_max2 as f32).round() as u32;
 
         q_min = q_min.clamp(q_min2, q_min1);
-        q_max = q_max.clamp(q_max2, q_max1);
+        // A tight quality floor makes software AV1 overshoot low CBR targets
+        // and spend the frame budget encoding detail during desktop motion.
+        let q_max = if cfg!(windows) {
+            63
+        } else {
+            q_max.clamp(q_max2, q_max1)
+        };
 
         (q_min, q_max)
     }
@@ -448,7 +461,7 @@ impl AomDecoder {
         let i = call_aom_ptr!(aom_codec_av1_dx());
         let mut ctx = Default::default();
         let cfg = aom_codec_dec_cfg_t {
-            threads: codec_thread_num(64) as _,
+            threads: aom_thread_num() as _,
             w: 0,
             h: 0,
             allow_lowbitdepth: 1,

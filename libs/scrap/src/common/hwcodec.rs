@@ -204,32 +204,60 @@ impl EncoderApi for HwRamEncoder {
     }
 
     fn is_hardware(&self) -> bool {
-        true
+        !Self::is_software_name(&self.config.name)
     }
 
     fn disable(&self) {
-        HwCodecConfig::clear(false, true);
+        Self::disable_candidate(&self.config.name);
     }
 }
 
 impl HwRamEncoder {
-    pub fn try_get(format: CodecFormat) -> Option<CodecInfo> {
-        let mut info = None;
-        let best = CodecInfo::prioritized(HwCodecConfig::get().ram_encode);
-        match format {
-            CodecFormat::H264 => {
-                if let Some(v) = best.h264 {
-                    info = Some(v);
-                }
-            }
-            CodecFormat::H265 => {
-                if let Some(v) = best.h265 {
-                    info = Some(v);
-                }
-            }
-            _ => {}
+    pub(crate) fn is_software_name(name: &str) -> bool {
+        cfg!(target_os = "macos") && name.ends_with("_videotoolbox_sw")
+    }
+
+    pub(crate) fn disable_candidate(name: &str) {
+        #[cfg(target_os = "android")]
+        {
+            let _ = name;
+            HwCodecConfig::clear(false, true);
         }
-        info
+        #[cfg(not(target_os = "android"))]
+        {
+            if let Some(config) = CONFIG.lock().unwrap().as_mut() {
+                config.ram_encode.retain(|entry| entry.name != name);
+            }
+            crate::codec::Encoder::update(crate::codec::EncodingUpdate::Check);
+        }
+    }
+
+    pub fn try_get(format: CodecFormat) -> Option<CodecInfo> {
+        Self::select(format, false, 0)
+    }
+
+    pub fn try_get_for_adapter(format: CodecFormat, vendor: u32) -> Option<CodecInfo> {
+        Self::select(format, false, vendor)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn try_get_software(format: CodecFormat) -> Option<CodecInfo> {
+        Self::select(format, true, 0)
+    }
+
+    fn select(format: CodecFormat, software: bool, vendor: u32) -> Option<CodecInfo> {
+        let format = match format {
+            CodecFormat::H264 => DataFormat::H264,
+            CodecFormat::H265 => DataFormat::H265,
+            _ => return None,
+        };
+        HwCodecConfig::get()
+            .ram_encode
+            .into_iter()
+            .filter(|entry| {
+                entry.format == format && Self::is_software_name(&entry.name) == software
+            })
+            .min_by_key(|entry| (!matches_vendor(&entry.name, vendor), entry.priority))
     }
 
     pub fn encode(&mut self, yuv: &[u8], ms: i64) -> ResultType<Vec<EncodeFrame>> {
@@ -304,6 +332,15 @@ impl HwRamEncoder {
             }
         }
         bitrate
+    }
+}
+
+fn matches_vendor(name: &str, vendor: u32) -> bool {
+    match vendor {
+        0x1002 => name.ends_with("_amf"),
+        0x10de => name.ends_with("_nvenc"),
+        0x8086 => name.ends_with("_qsv"),
+        _ => false,
     }
 }
 
@@ -520,6 +557,14 @@ struct HwCodecConfig2 {
 // portable: ui start check process, check process send to ui
 // sciter and unilink: get from ipc server
 impl HwCodecConfig {
+    #[cfg(feature = "vram")]
+    pub(crate) fn remove_texture_encoder(candidate: &hwcodec::vram::FeatureContext) {
+        if let Some(config) = CONFIG.lock().unwrap().as_mut() {
+            config.vram_encode.retain(|entry| entry != candidate);
+        }
+        crate::codec::Encoder::update(crate::codec::EncodingUpdate::Check);
+    }
+
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub fn set(config: String) {
         let config = serde_json::from_str(&config).unwrap_or_default();
@@ -534,6 +579,7 @@ impl HwCodecConfig {
         );
         *CONFIG.lock().unwrap() = Some(config);
         *CONFIG_SET_BY_IPC.lock().unwrap() = true;
+        crate::codec::Encoder::update(crate::codec::EncodingUpdate::Check);
     }
 
     pub fn get() -> HwCodecConfig {
@@ -680,6 +726,89 @@ impl HwCodecConfig {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+fn probe_ram_encoders(ctx: EncodeContext) -> Vec<CodecInfo> {
+    let Ok((_, offsets, length)) =
+        ffmpeg_linesize_offset_length(ctx.pixfmt, ctx.width as _, ctx.height as _, ctx.align as _)
+    else {
+        log::warn!("Cannot allocate an NV12 encoder probe frame");
+        return Vec::new();
+    };
+    let chroma_offset = offsets[0];
+    if chroma_offset <= 0 || chroma_offset >= length {
+        log::warn!("Invalid NV12 encoder probe frame layout");
+        return Vec::new();
+    }
+    let mut yuv = vec![128; length as usize];
+    yuv[..chroma_offset as usize].fill(16);
+
+    #[cfg(windows)]
+    let candidates = {
+        let vendors = crate::dxgi::physical_adapter_vendors()
+            .map_err(|err| {
+                log::warn!("Could not enumerate DXGI adapters for encoder probing: {err}");
+            })
+            .ok();
+        [
+            (0x8086, "h264_qsv", "hevc_qsv"),
+            (0x10de, "h264_nvenc", "hevc_nvenc"),
+            (0x1002, "h264_amf", "hevc_amf"),
+        ]
+        .iter()
+        .copied()
+        .filter(|(vendor, _, _)| {
+            vendors
+                .as_ref()
+                .map_or(true, |found| found.contains(vendor))
+        })
+        .flat_map(|(_, h264, h265)| [(h264, DataFormat::H264), (h265, DataFormat::H265)])
+        .collect::<Vec<_>>()
+    };
+    #[cfg(target_os = "macos")]
+    let candidates = [
+        ("h264_videotoolbox", DataFormat::H264),
+        ("hevc_videotoolbox", DataFormat::H265),
+        ("h264_videotoolbox_sw", DataFormat::H264),
+        ("hevc_videotoolbox_sw", DataFormat::H265),
+    ];
+
+    IntoIterator::into_iter(candidates)
+        .filter_map(|(name, format)| {
+            let config = EncodeContext {
+                name: name.to_owned(),
+                ..ctx.clone()
+            };
+            let Ok(mut encoder) = Encoder::new(config) else {
+                log::info!("RAM encoder probe {name}: initialization failed");
+                return None;
+            };
+            for timestamp in [0, 33, 66, 100] {
+                match encoder.encode(&yuv, timestamp) {
+                    Ok(frames)
+                        if frames
+                            .iter()
+                            .any(|frame| frame.key == 1 && !frame.data.is_empty()) =>
+                    {
+                        log::info!("RAM encoder probe {name}: produced a keyframe");
+                        return Some(CodecInfo {
+                            name: name.to_owned(),
+                            format,
+                            ..Default::default()
+                        });
+                    }
+                    Err(err) => {
+                        log::info!("RAM encoder probe {name}: encoding failed ({err})");
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+            log::info!("RAM encoder probe {name}: no keyframe");
+            None
+        })
+        .collect()
+}
+
 pub fn check_available_hwcodec() -> String {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     hwcodec::common::setup_parent_death_signal();
@@ -700,12 +829,11 @@ pub fn check_available_hwcodec() -> String {
     };
     #[cfg(feature = "vram")]
     let vram = crate::vram::check_available_vram();
-    #[cfg(feature = "vram")]
-    let vram_string = vram.2;
-    #[cfg(not(feature = "vram"))]
-    let vram_string = "".to_owned();
     let c = HwCodecConfig {
-        ram_encode: Encoder::available_encoders(ctx, Some(vram_string)),
+        #[cfg(any(windows, target_os = "macos"))]
+        ram_encode: probe_ram_encoders(ctx),
+        #[cfg(not(any(windows, target_os = "macos")))]
+        ram_encode: Encoder::available_encoders(ctx, None),
         ram_decode: Decoder::available_decoders(),
         #[cfg(feature = "vram")]
         vram_encode: vram.0,
@@ -719,7 +847,7 @@ pub fn check_available_hwcodec() -> String {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn start_check_process() {
-    if !enable_hwcodec_option() || HwCodecConfig::already_set() {
+    if (!cfg!(target_os = "macos") && !enable_hwcodec_option()) || HwCodecConfig::already_set() {
         return;
     }
     use hbb_common::allow_err;

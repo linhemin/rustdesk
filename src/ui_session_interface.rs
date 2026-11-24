@@ -540,24 +540,29 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn alternative_codecs(&self) -> (bool, bool, bool, bool) {
-        let luid = self.lc.read().unwrap().adapter_luid;
-        let mark_unsupported = self.lc.read().unwrap().mark_unsupported.clone();
-        let decoder = scrap::codec::Decoder::supported_decodings(
-            None,
-            use_texture_render(),
-            luid,
-            &mark_unsupported,
-        );
+        let lc = self.lc.read().unwrap();
+        let decoder = lc.get_supported_decoding();
         let mut vp8 = decoder.ability_vp8 > 0;
         let mut av1 = decoder.ability_av1 > 0;
         let mut h264 = decoder.ability_h264 > 0;
         let mut h265 = decoder.ability_h265 > 0;
-        let enc = &self.lc.read().unwrap().supported_encoding;
+        let enc = &lc.supported_encoding;
         vp8 = vp8 && enc.vp8;
         av1 = av1 && enc.av1;
         h264 = h264 && enc.h264;
         h265 = h265 && enc.h265;
         (vp8, av1, h264, h265)
+    }
+
+    #[cfg(feature = "flutter")]
+    pub fn h26x_true_color_codecs(&self) -> (bool, bool) {
+        let lc = self.lc.read().unwrap();
+        let decoder = lc.get_supported_decoding();
+        let encoder = &lc.supported_encoding;
+        (
+            encoder.h264 && decoder.ability_h264 > 0 && encoder.i444.h264 && decoder.i444.h264,
+            encoder.h265 && decoder.ability_h265 > 0 && encoder.i444.h265 && decoder.i444.h265,
+        )
     }
 
     pub fn update_supported_decodings(&self) {

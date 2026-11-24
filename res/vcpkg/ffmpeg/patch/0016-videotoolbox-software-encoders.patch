@@ -1,0 +1,135 @@
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -3508,8 +3508,12 @@
+ chromaprint_muxer_deps="chromaprint"
+ h264_videotoolbox_encoder_deps="pthreads"
+ h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
++h264_videotoolbox_sw_encoder_deps="pthreads"
++h264_videotoolbox_sw_encoder_select="atsc_a53 videotoolbox_encoder"
+ hevc_videotoolbox_encoder_deps="pthreads"
+ hevc_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
++hevc_videotoolbox_sw_encoder_deps="pthreads"
++hevc_videotoolbox_sw_encoder_select="atsc_a53 videotoolbox_encoder"
+ prores_videotoolbox_encoder_deps="pthreads"
+ prores_videotoolbox_encoder_select="videotoolbox_encoder"
+ libaom_av1_decoder_deps="libaom"
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -431,6 +431,7 @@
+                                           hw_base_encode.o hw_base_encode_h264.o \
+                                           h264_levels.o h2645data.o
+ OBJS-$(CONFIG_H264_VIDEOTOOLBOX_ENCODER) += videotoolboxenc.o
++OBJS-$(CONFIG_H264_VIDEOTOOLBOX_SW_ENCODER) += videotoolboxenc.o
+ OBJS-$(CONFIG_H264_V4L2M2M_DECODER)    += v4l2_m2m_dec.o
+ OBJS-$(CONFIG_H264_V4L2M2M_ENCODER)    += v4l2_m2m_enc.o
+ OBJS-$(CONFIG_HAP_DECODER)             += hapdec.o hap.o
+@@ -459,6 +460,7 @@
+ OBJS-$(CONFIG_HEVC_V4L2M2M_DECODER)    += v4l2_m2m_dec.o
+ OBJS-$(CONFIG_HEVC_V4L2M2M_ENCODER)    += v4l2_m2m_enc.o
+ OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_ENCODER) += videotoolboxenc.o
++OBJS-$(CONFIG_HEVC_VIDEOTOOLBOX_SW_ENCODER) += videotoolboxenc.o
+ OBJS-$(CONFIG_HNM4_VIDEO_DECODER)      += hnm4video.o
+ OBJS-$(CONFIG_HQ_HQA_DECODER)          += hq_hqa.o hq_hqadsp.o canopus.o
+ OBJS-$(CONFIG_HQX_DECODER)             += hqx.o hqxvlc.o hqxdsp.o canopus.o
+diff --git a/libavcodec/allcodecs.c b/libavcodec/allcodecs.c
+--- a/libavcodec/allcodecs.c
++++ b/libavcodec/allcodecs.c
+@@ -850,6 +850,7 @@
+ extern const FFCodec ff_h264_v4l2m2m_encoder;
+ extern const FFCodec ff_h264_vaapi_encoder;
+ extern const FFCodec ff_h264_videotoolbox_encoder;
++extern const FFCodec ff_h264_videotoolbox_sw_encoder;
+ extern const FFCodec ff_h264_vulkan_encoder;
+ extern const FFCodec ff_hevc_amf_encoder;
+ extern const FFCodec ff_hevc_cuvid_decoder;
+@@ -862,6 +863,7 @@
+ extern const FFCodec ff_hevc_v4l2m2m_encoder;
+ extern const FFCodec ff_hevc_vaapi_encoder;
+ extern const FFCodec ff_hevc_videotoolbox_encoder;
++extern const FFCodec ff_hevc_videotoolbox_sw_encoder;
+ extern const FFCodec ff_hevc_vulkan_encoder;
+ extern const FFCodec ff_libkvazaar_encoder;
+ extern const FFCodec ff_mjpeg_cuvid_decoder;
+diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
+--- a/libavcodec/videotoolboxenc.c
++++ b/libavcodec/videotoolboxenc.c
+@@ -19,5 +19,6 @@
+  */
+ 
++#include "config_components.h"
+ #include <VideoToolbox/VideoToolbox.h>
+ #include <CoreVideo/CoreVideo.h>
+ #include <CoreMedia/CoreMedia.h>
+@@ -2901,6 +2902,18 @@
+ };
+ 
+ #define OFFSET(x) offsetof(VTEncContext, x)
++#if CONFIG_H264_VIDEOTOOLBOX_SW_ENCODER || CONFIG_HEVC_VIDEOTOOLBOX_SW_ENCODER
++static av_cold int vtenc_init_sw(AVCodecContext *avctx)
++{
++    VTEncContext *vtctx = avctx->priv_data;
++    vtctx->require_sw = 1;
++    /* Apple's low-latency H.264 mode requests a hardware encoder. */
++    if (avctx->codec_id == AV_CODEC_ID_H264)
++        avctx->flags &= ~AV_CODEC_FLAG_LOW_DELAY;
++    return vtenc_init(avctx);
++}
++#endif
++
+ static const AVOption h264_options[] = {
+     { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = AV_PROFILE_UNKNOWN }, AV_PROFILE_UNKNOWN, INT_MAX, VE, .unit = "profile" },
+     { "baseline",             "Baseline Profile",             0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_BASELINE             }, INT_MIN, INT_MAX, VE, .unit = "profile" },
+@@ -2966,6 +2978,24 @@
+     .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
+     .hw_configs       = vt_encode_hw_configs,
+ };
++
++#if CONFIG_H264_VIDEOTOOLBOX_SW_ENCODER
++const FFCodec ff_h264_videotoolbox_sw_encoder = {
++    .p.name           = "h264_videotoolbox_sw",
++    CODEC_LONG_NAME("VideoToolbox H.264 Software Encoder"),
++    .p.type           = AVMEDIA_TYPE_VIDEO,
++    .p.id             = AV_CODEC_ID_H264,
++    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
++    .priv_data_size   = sizeof(VTEncContext),
++    .p.pix_fmts       = avc_pix_fmts,
++    .defaults         = vt_defaults,
++    .init             = vtenc_init_sw,
++    FF_CODEC_ENCODE_CB(vtenc_frame),
++    .close            = vtenc_close,
++    .p.priv_class     = &h264_videotoolbox_class,
++    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
++};
++#endif
+ 
+ static const AVOption hevc_options[] = {
+     { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = AV_PROFILE_UNKNOWN }, AV_PROFILE_UNKNOWN, INT_MAX, VE, .unit = "profile" },
+@@ -3007,6 +3034,26 @@
+     .hw_configs       = vt_encode_hw_configs,
+ };
+ 
++#if CONFIG_HEVC_VIDEOTOOLBOX_SW_ENCODER
++const FFCodec ff_hevc_videotoolbox_sw_encoder = {
++    .p.name           = "hevc_videotoolbox_sw",
++    CODEC_LONG_NAME("VideoToolbox H.265 Software Encoder"),
++    .p.type           = AVMEDIA_TYPE_VIDEO,
++    .p.id             = AV_CODEC_ID_HEVC,
++    .p.capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_DELAY,
++    .priv_data_size   = sizeof(VTEncContext),
++    .p.pix_fmts       = hevc_pix_fmts,
++    .defaults         = vt_defaults,
++    .color_ranges     = AVCOL_RANGE_MPEG | AVCOL_RANGE_JPEG,
++    .init             = vtenc_init_sw,
++    FF_CODEC_ENCODE_CB(vtenc_frame),
++    .close            = vtenc_close,
++    .p.priv_class     = &hevc_videotoolbox_class,
++    .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
++    .p.wrapper_name   = "videotoolbox",
++};
++#endif
++
+ static const AVOption prores_options[] = {
+     { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = AV_PROFILE_UNKNOWN }, AV_PROFILE_UNKNOWN, AV_PROFILE_PRORES_XQ, VE, .unit = "profile" },
+     { "auto",     "Automatically determine based on input format", 0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_UNKNOWN },            INT_MIN, INT_MAX, VE, .unit = "profile" },

@@ -5863,10 +5863,24 @@ impl Connection {
         let Some(usable) = usable else {
             return;
         };
+        #[allow(unused_mut)]
+        let mut i444 = last.i444.clone();
+        #[cfg(windows)]
+        {
+            let mut encoding = SupportedEncoding {
+                h264: usable.h264,
+                h265: usable.h265,
+                i444,
+                ..Default::default()
+            };
+            scrap::codec::Encoder::update_h26x_i444(&mut encoding);
+            i444 = encoding.i444;
+        }
         if usable.vp8 != last.vp8
             || usable.av1 != last.av1
             || usable.h264 != last.h264
             || usable.h265 != last.h265
+            || i444 != last.i444
         {
             let mut misc: Misc = Misc::new();
             let supported_encoding = SupportedEncoding {
@@ -5874,6 +5888,7 @@ impl Connection {
                 av1: usable.av1,
                 h264: usable.h264,
                 h265: usable.h265,
+                i444,
                 ..last.clone()
             };
             log::info!("update supported encoding: {:?}", supported_encoding);

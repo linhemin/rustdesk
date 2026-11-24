@@ -42,6 +42,8 @@ pub mod codec;
 pub mod convert;
 #[cfg(feature = "hwcodec")]
 pub mod hwcodec;
+#[cfg(all(windows, feature = "hwcodec"))]
+mod h26x_i444;
 #[cfg(feature = "mediacodec")]
 pub mod mediacodec;
 pub mod vpxcodec;

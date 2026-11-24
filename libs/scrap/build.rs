@@ -248,6 +248,15 @@ fn main() {
     gen_vcpkg_package("libvpx", "vpx_ffi.h", "vpx_ffi.rs", "^[vV].*");
     gen_vcpkg_package("aom", "aom_ffi.h", "aom_ffi.rs", "^(aom|AOM|OBU|AV1).*");
     gen_vcpkg_package("libyuv", "yuv_ffi.h", "yuv_ffi.rs", ".*");
+    if target_os == "windows" && env::var_os("CARGO_FEATURE_HWCODEC").is_some() {
+        let source = "src/common/h26x_i444/ffmpeg.c";
+        println!("cargo:rerun-if-changed={source}");
+        cc::Build::new()
+            .file(source)
+            .includes(find_package("avcodec"))
+            .static_crt(true)
+            .compile("rustdesk_h26x_i444");
+    }
     // ffmpeg();
 
     if target_os == "ios" {

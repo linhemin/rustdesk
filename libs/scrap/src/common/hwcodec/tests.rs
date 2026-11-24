@@ -1,16 +1,19 @@
-use super::{CodecInfo, HwCodecConfig, CONFIG, CONFIG_SET_BY_IPC};
+use super::{CodecInfo, HwCodecConfig, HwRamEncoder, CONFIG, CONFIG_SET_BY_IPC};
 use crate::{
-    codec::enable_vram_option,
+    codec::{enable_vram_option, Encoder, EncodingUpdate},
     vram::{VRamDecoder, VRamEncoder},
     AdapterDevice, CodecFormat,
 };
 use base::config::keys::{OPTION_ALLOW_D3D_RENDER, OPTION_ENABLE_HWCODEC};
+use base::message_proto::{supported_decoding::PreferCodec, SupportedDecoding};
 use hbb_common::config::{OVERWRITE_LOCAL_SETTINGS, OVERWRITE_SETTINGS};
 use hwcodec::{
     common::{DataFormat, Driver},
     vram::{DecodeContext, FeatureContext},
 };
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, mem, sync::Mutex};
+
+static CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct RestoreConfig {
     config: Option<HwCodecConfig>,
@@ -52,6 +55,7 @@ fn add_backend(config: &mut HwCodecConfig, driver: Driver, vendor: Driver, forma
 
 #[test]
 fn cached_sdk_entries_are_ignored_before_check_completes() {
+    let _test = CONFIG_TEST_LOCK.lock().unwrap();
     let _restore = RestoreConfig {
         config: CONFIG.lock().unwrap().take(),
         set_by_ipc: mem::replace(&mut *CONFIG_SET_BY_IPC.lock().unwrap(), false),
@@ -127,4 +131,98 @@ fn cached_sdk_entries_are_ignored_before_check_completes() {
         HwCodecConfig::get().vram_encode.len(),
         cached.vram_encode.len()
     );
+}
+
+#[test]
+fn amd_encoder_failure_preserves_other_formats_and_adapter_backends() {
+    let _test = CONFIG_TEST_LOCK.lock().unwrap();
+    let _restore = RestoreConfig {
+        config: CONFIG.lock().unwrap().take(),
+        set_by_ipc: *CONFIG_SET_BY_IPC.lock().unwrap(),
+        options: OVERWRITE_SETTINGS.read().unwrap().clone(),
+        local_options: OVERWRITE_LOCAL_SETTINGS.read().unwrap().clone(),
+    };
+    let mut config = HwCodecConfig::default();
+    config.ram_encode = IntoIterator::into_iter([
+        ("h264_qsv", DataFormat::H264),
+        ("h264_amf", DataFormat::H264),
+        ("hevc_amf", DataFormat::H265),
+    ])
+    .map(|(name, format)| CodecInfo {
+        name: name.to_owned(),
+        format,
+        ..Default::default()
+    })
+    .collect();
+    add_backend(&mut config, Driver::FFMPEG, Driver::AMF, DataFormat::H264);
+    add_backend(&mut config, Driver::FFMPEG, Driver::AMF, DataFormat::H265);
+    let amd_texture = config.vram_encode[0].clone();
+    *CONFIG.lock().unwrap() = Some(config);
+    OVERWRITE_SETTINGS
+        .write()
+        .unwrap()
+        .insert(OPTION_ENABLE_HWCODEC.into(), "Y".into());
+
+    for (prefer, expected) in [
+        (PreferCodec::Auto, CodecFormat::H265),
+        (PreferCodec::PreferHardware, CodecFormat::H265),
+        (PreferCodec::H264, CodecFormat::H264),
+    ] {
+        Encoder::update(EncodingUpdate::Update(
+            1,
+            SupportedDecoding {
+                ability_vp9: 1,
+                ability_h264: 1,
+                ability_h265: 1,
+                prefer: prefer.into(),
+                ..Default::default()
+            },
+        ));
+        let selected = Encoder::negotiated_codec();
+        Encoder::update(EncodingUpdate::Remove(1));
+        assert_eq!(selected, expected);
+    }
+
+    let amd = AdapterDevice {
+        luid: amd_texture.luid,
+        vendor_id: 0x1002,
+        ..Default::default()
+    };
+    assert_eq!(
+        VRamEncoder::try_get(&amd, CodecFormat::H264),
+        Some(amd_texture.clone())
+    );
+    HwCodecConfig::remove_texture_encoder(&amd_texture);
+    assert!(VRamEncoder::try_get(&amd, CodecFormat::H264).is_none());
+    assert!(VRamEncoder::try_get(&amd, CodecFormat::H265).is_some());
+    assert_eq!(
+        HwRamEncoder::try_get_for_adapter(CodecFormat::H264, amd.vendor_id)
+            .unwrap()
+            .name,
+        "h264_amf"
+    );
+
+    HwRamEncoder::disable_candidate("h264_amf");
+    assert_eq!(
+        HwRamEncoder::try_get_for_adapter(CodecFormat::H264, amd.vendor_id)
+            .unwrap()
+            .name,
+        "h264_qsv"
+    );
+    assert_eq!(
+        HwRamEncoder::try_get_for_adapter(CodecFormat::H265, amd.vendor_id)
+            .unwrap()
+            .name,
+        "hevc_amf"
+    );
+}
+
+#[test]
+#[ignore = "Requires a working hardware encoder"]
+fn windows_hardware_probe_finds_a_working_h26x_encoder() {
+    let config: HwCodecConfig =
+        hbb_common::serde_json::from_str(&super::check_available_hwcodec()).unwrap();
+    eprintln!("RAM encoders: {:?}", config.ram_encode);
+    eprintln!("Texture encoders: {:?}", config.vram_encode);
+    assert!(!config.ram_encode.is_empty() || !config.vram_encode.is_empty());
 }

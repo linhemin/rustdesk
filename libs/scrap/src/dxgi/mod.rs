@@ -752,6 +752,29 @@ impl Capturer {
     }
 }
 
+#[cfg(feature = "hwcodec")]
+pub(crate) fn physical_adapter_vendors() -> io::Result<Vec<u32>> {
+    let mut factory = ptr::null_mut();
+    wrap_hresult(unsafe { CreateDXGIFactory1(&IID_IDXGIFactory1, &mut factory) })?;
+    let factory = ComPtr(factory as *mut IDXGIFactory1);
+    let mut vendors = Vec::new();
+    for index in 0.. {
+        let mut adapter = ptr::null_mut();
+        let result = unsafe { (*factory.0).EnumAdapters1(index, &mut adapter) };
+        if result == DXGI_ERROR_NOT_FOUND {
+            return Ok(vendors);
+        }
+        wrap_hresult(result)?;
+        let adapter = ComPtr(adapter);
+        let mut desc: DXGI_ADAPTER_DESC1 = unsafe { mem::zeroed() };
+        wrap_hresult(unsafe { (*adapter.0).GetDesc1(&mut desc) })?;
+        if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE == 0 && !vendors.contains(&desc.VendorId) {
+            vendors.push(desc.VendorId);
+        }
+    }
+    Ok(vendors)
+}
+
 impl Drop for Capturer {
     fn drop(&mut self) {
         if let Err(err) = self.release_frame() {

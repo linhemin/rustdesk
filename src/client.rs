@@ -3529,6 +3529,8 @@ pub struct LoginConfigHandler {
     pub fixed_screen_fps: Option<i32>,
     pub adapter_luid: Option<i64>,
     pub mark_unsupported: Vec<CodecFormat>,
+    #[cfg(all(windows, feature = "hwcodec"))]
+    unsupported_h26x_i444: Vec<CodecFormat>,
     pub selected_windows_session_id: Option<u32>,
     pub peer_info: Option<PeerInfo>,
     password_source: PasswordSource, // where the sent password comes from
@@ -4099,12 +4101,18 @@ impl LoginConfigHandler {
     }
 
     pub fn get_supported_decoding(&self) -> SupportedDecoding {
-        let decoding = Decoder::supported_decodings(
+        #[allow(unused_mut)]
+        let mut decoding = Decoder::supported_decodings(
             Some(&self.id),
             use_texture_render(),
             self.adapter_luid,
             &self.mark_unsupported,
         );
+        #[cfg(all(windows, feature = "hwcodec"))]
+        if let Some(i444) = decoding.i444.as_mut() {
+            i444.h264 &= !self.unsupported_h26x_i444.contains(&CodecFormat::H264);
+            i444.h265 &= !self.unsupported_h26x_i444.contains(&CodecFormat::H265);
+        }
         #[cfg(all(target_os = "ios", feature = "flutter"))]
         if self.fixed_screen_fps.is_some() {
             return ios_texture::prefer_native(decoding, &self.supported_encoding, &self.mark_unsupported);
@@ -4721,6 +4729,11 @@ pub fn start_video_thread<F, T>(
                         let display = vf.display as usize;
                         let start = std::time::Instant::now();
                         let format = CodecFormat::from(&vf);
+                        #[cfg(all(windows, feature = "hwcodec"))]
+                        let h26x_i444 = match vf.union.as_ref() {
+                            Some(video_frame::Union::H264s(frames) | video_frame::Union::H265s(frames)) => frames.i444,
+                            _ => false,
+                        };
                         #[cfg(all(target_os = "ios", feature = "flutter"))]
                         if session.lc.read().unwrap().fixed_screen_fps.is_some()
                             && matches!(format, CodecFormat::H264 | CodecFormat::H265)
@@ -4838,6 +4851,18 @@ pub fn start_video_thread<F, T>(
                             {
                                 let mut lc = session.lc.write().unwrap();
                                 let format = handler.decoder.format();
+                                #[cfg(all(windows, feature = "hwcodec"))]
+                                if h26x_i444 {
+                                    if !lc.unsupported_h26x_i444.contains(&format) {
+                                        lc.unsupported_h26x_i444.push(format);
+                                        let capabilities = lc.update_supported_decodings();
+                                        drop(lc);
+                                        handler.reset(Some(format));
+                                        session.send(Data::Message(capabilities));
+                                        session.refresh_video(display as _);
+                                    }
+                                    continue;
+                                }
                                 if !lc.mark_unsupported.contains(&format) {
                                     lc.mark_unsupported.push(format);
                                     should_update_supported = true;

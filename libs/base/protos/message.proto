@@ -7,7 +7,10 @@ message EncodedVideoFrame {
   int64 pts = 3;
 }
 
-message EncodedVideoFrames { repeated EncodedVideoFrame frames = 1; }
+message EncodedVideoFrames {
+  repeated EncodedVideoFrame frames = 1;
+  bool i444 = 2;
+}
 
 message RGB { bool compress = 1; }
 
@@ -662,6 +665,8 @@ message SupportedDecoding {
     H265 = 3;
     VP8 = 4;
     AV1 = 5;
+    Software = 6;
+    PreferHardware = 7;
   }
 
   int32 ability_vp9 = 1;

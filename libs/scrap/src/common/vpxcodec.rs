@@ -82,7 +82,15 @@ impl EncoderApi for VpxEncoder {
                 // When the data buffer falls below this percentage of fullness, a dropped frame is indicated. Set the threshold to zero (0) to disable this feature.
                 // In dynamic scenes, low bitrate gets low fps while high bitrate gets high fps.
                 c.rc_dropframe_thresh = 25;
-                c.g_threads = codec_thread_num(64) as _;
+                #[cfg(windows)]
+                let threads = if config.codec == VpxVideoCodecId::VP8 {
+                    crate::codec::windows_realtime_codec_thread_num()
+                } else {
+                    codec_thread_num(64)
+                };
+                #[cfg(not(windows))]
+                let threads = codec_thread_num(64);
+                c.g_threads = threads as _;
                 c.g_error_resilient = VPX_ERROR_RESILIENT_DEFAULT;
                 // https://developers.google.com/media/vp9/bitrate-modes/
                 // Constant Bitrate mode (CBR) is recommended for live streaming with VP9.
@@ -94,7 +102,7 @@ impl EncoderApi for VpxEncoder {
                     c.kf_mode = vpx_kf_mode::VPX_KF_DISABLED; // reduce bandwidth a lot
                 }
 
-                let (q_min, q_max) = Self::calc_q_values(config.quality);
+                let (q_min, q_max) = Self::calc_q_values(config.quality, config.codec);
                 c.rc_min_quantizer = q_min;
                 c.rc_max_quantizer = q_max;
                 c.rc_target_bitrate =
@@ -166,7 +174,9 @@ impl EncoderApi for VpxEncoder {
                 } else if config.codec == VpxVideoCodecId::VP8 {
                     // https://github.com/webmproject/libvpx/blob/972149cafeb71d6f08df89e91a0130d6a38c4b15/vpx/vp8cx.h#L172
                     // https://groups.google.com/a/webmproject.org/g/webm-discuss/c/DJhSrmfQ61M
-                    call_vpx!(vpx_codec_control_(&mut ctx, VP8E_SET_CPUUSED as _, 12,));
+                    // The faster preset can overshoot CBR badly on scrolling desktops.
+                    let speed: c_int = if cfg!(windows) { 8 } else { 12 };
+                    call_vpx!(vpx_codec_control_(&mut ctx, VP8E_SET_CPUUSED as _, speed,));
                 }
 
                 Ok(Self {
@@ -213,7 +223,7 @@ impl EncoderApi for VpxEncoder {
 
     fn set_quality(&mut self, ratio: f32) -> ResultType<()> {
         let mut c = unsafe { *self.ctx.config.enc.to_owned() };
-        let (q_min, q_max) = Self::calc_q_values(ratio);
+        let (q_min, q_max) = Self::calc_q_values(ratio, self.id);
         c.rc_min_quantizer = q_min;
         c.rc_max_quantizer = q_max;
         c.rc_target_bitrate = Self::bitrate(self.width as _, self.height as _, ratio);
@@ -328,7 +338,7 @@ impl VpxEncoder {
     }
 
     #[inline]
-    fn calc_q_values(ratio: f32) -> (u32, u32) {
+    fn calc_q_values(ratio: f32, codec: VpxVideoCodecId) -> (u32, u32) {
         let b = (ratio * 100.0) as u32;
         let b = std::cmp::min(b, 200);
         let q_min1 = 36;
@@ -343,6 +353,10 @@ impl VpxEncoder {
 
         q_min = q_min.clamp(q_min2, q_min1);
         q_max = q_max.clamp(q_max2, q_max1);
+        if cfg!(windows) && codec == VpxVideoCodecId::VP8 {
+            // Give CBR room to lower quality during motion before dropping frames.
+            q_max = 63;
+        }
 
         (q_min, q_max)
     }
@@ -606,3 +620,94 @@ impl Drop for Image {
 }
 
 unsafe impl Send for vpx_codec_ctx_t {}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vp8_cbr_keeps_frames_during_desktop_scrolling() {
+        const WIDTH: usize = 1920;
+        const HEIGHT: usize = 1080;
+        const FRAMES: usize = 120;
+        const DIGITS: [[u8; 7]; 10] = [
+            [14, 17, 19, 21, 25, 17, 14],
+            [4, 12, 4, 4, 4, 4, 14],
+            [14, 17, 1, 2, 4, 8, 31],
+            [30, 1, 1, 14, 1, 1, 30],
+            [2, 6, 10, 18, 31, 2, 2],
+            [31, 16, 16, 30, 1, 1, 30],
+            [14, 16, 16, 30, 17, 17, 14],
+            [31, 1, 2, 4, 8, 8, 8],
+            [14, 17, 17, 14, 17, 17, 14],
+            [14, 17, 17, 15, 1, 1, 14],
+        ];
+        let cfg = crate::codec::EncoderCfg::VPX(VpxEncoderConfig {
+            width: WIDTH as u32,
+            height: HEIGHT as u32,
+            quality: 1.0,
+            codec: VpxVideoCodecId::VP8,
+            keyframe_interval: None,
+        });
+        let mut previous = VpxEncoder::new(cfg.clone(), false).unwrap();
+        let mut encoder = VpxEncoder::new(cfg, false).unwrap();
+        unsafe {
+            let mut previous_cfg = *previous.ctx.config.enc;
+            previous_cfg.rc_max_quantizer = 47;
+            assert_eq!(
+                vpx_codec_enc_config_set(&mut previous.ctx, &previous_cfg),
+                VPX_CODEC_OK
+            );
+            assert_eq!(
+                vpx_codec_control_(&mut previous.ctx, VP8E_SET_CPUUSED as _, 12 as c_int),
+                VPX_CODEC_OK
+            );
+        }
+        let mut sheet = vec![0; WIDTH * HEIGHT * 2];
+        for (y, row) in sheet.chunks_exact_mut(WIDTH).enumerate() {
+            for (x, pixel) in row.iter_mut().enumerate() {
+                let character = (x % 160) / 9;
+                let bitmap_x = x % 160 % 9;
+                let bitmap_y = y % 24;
+                *pixel = if y % 24 == 0 || x % 160 == 0 {
+                    199
+                } else if character < 11 && bitmap_x < 5 && (5..19).contains(&bitmap_y) {
+                    let number = (y / 24 * 64937 + x / 160 * 7919) as u32;
+                    let digit = if character < 6 {
+                        (character + y / 24 % 4) % 10
+                    } else {
+                        (number / 10u32.pow((character - 6) as u32) % 10) as usize
+                    };
+                    if DIGITS[digit][(bitmap_y - 5) / 2] & (1 << bitmap_x) != 0 {
+                        83
+                    } else {
+                        235 - (y / 24 % 2) as u8 * 15
+                    }
+                } else {
+                    235 - (y / 24 % 2) as u8 * 15
+                };
+            }
+        }
+
+        let mut frame = vec![128; WIDTH * HEIGHT * 3 / 2];
+        let mut outputs = [0, 0];
+        for tick in 0..FRAMES {
+            for (y, row) in frame[..WIDTH * HEIGHT].chunks_exact_mut(WIDTH).enumerate() {
+                let source = (tick * 31 / 2 + y * 1080 / 984) % (HEIGHT * 2);
+                row.copy_from_slice(&sheet[source * WIDTH..(source + 1) * WIDTH]);
+            }
+            for (output, encoder) in outputs.iter_mut().zip([&mut previous, &mut encoder]) {
+                match encoder.encode_to_message(EncodeInput::YUV(&frame), (tick * 1000 / 60) as i64) {
+                    Ok(message) => *output += message.vp8s().frames.len(),
+                    Err(err) if err.is::<VpxNoOutput>() => {}
+                    Err(err) => panic!("VP8 encode failed: {:#}", err),
+                }
+            }
+        }
+        assert!(
+            outputs[1] > outputs[0],
+            "VP8 output did not improve: {:?}",
+            outputs
+        );
+    }
+}
