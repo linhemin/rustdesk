@@ -1236,7 +1236,10 @@ fn get_encoder_config(
     match negotiated_codec {
         CodecFormat::H264 | CodecFormat::H265 => {
             #[cfg(feature = "vram")]
-            if let Some(feature) = VRamEncoder::try_get(&c.device(), negotiated_codec) {
+            if let Some(feature) = (!_software_h26x)
+                .then(|| VRamEncoder::try_get(&c.device(), negotiated_codec))
+                .flatten()
+            {
                 return EncoderCfg::VRAM(VRamEncoderConfig {
                     device: c.device(),
                     width: c.width,

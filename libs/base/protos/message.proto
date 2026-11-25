@@ -108,6 +108,7 @@ message Features {
   bool terminal = 2;
   bool port_forward_mux = 3;
   bool fixed_screen_fps = 4;
+  bool video_bitrate_limit_kbps = 5;
 }
 
 message CodecAbility {
@@ -124,6 +125,7 @@ message SupportedEncoding {
   bool vp8 = 3;
   bool av1 = 4;
   CodecAbility i444 = 5;
+  CodecAbility software = 6;
 }
 
 message PeerInfo {
@@ -677,6 +679,8 @@ message SupportedDecoding {
   int32 ability_av1 = 6;
   CodecAbility i444 = 7;
   Chroma prefer_chroma = 8;
+  bool software_encoding = 9;
+  bool prefer_hardware_encoding = 10;
 }
 
 message OptionMessage {
@@ -708,6 +712,7 @@ message OptionMessage {
   BoolOption show_my_cursor = 19;
   // 0 is unchanged, -1 restores automatic pacing, 15..120 locks the target.
   int32 fixed_screen_fps = 20;
+  uint32 video_bitrate_limit_kbps = 21;
 }
 
 message TestDelay {
@@ -724,6 +729,8 @@ message TestDelay {
   // Windows diagnostic builds exchange samples on an authenticated desktop session.
   bool request_video_diagnostics = 10;
   VideoDiagnostics video_diagnostics = 11;
+  // Zero means the viewer did not measure decoding, 1 represents zero decoded FPS.
+  uint32 decoded_video_fps_plus_one = 12;
 }
 
 message VideoDiagnostics {

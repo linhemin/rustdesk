@@ -551,6 +551,12 @@ impl<T: InvokeUiSession> Session<T> {
         av1 = av1 && enc.av1;
         h264 = h264 && enc.h264;
         h265 = h265 && enc.h265;
+        if decoder.software_encoding {
+            if let Some(software) = enc.software.as_ref() {
+                h264 = decoder.ability_h264 > 0 && software.h264;
+                h265 = decoder.ability_h265 > 0 && software.h265;
+            }
+        }
         (vp8, av1, h264, h265)
     }
 
@@ -650,7 +656,14 @@ impl<T: InvokeUiSession> Session<T> {
         if k.eq("remote_dir") {
             v = lc.get_all_remote_dir(v);
         }
+        let decode_changed = k == base::config::keys::OPTION_VIDEO_DECODER_BACKEND
+            && lc.get_option(&k) != v;
         lc.set_option(k, v);
+        if decode_changed {
+            lc.reset_decoder_capabilities();
+            drop(lc);
+            self.use_texture_render_changed();
+        }
     }
 
     #[inline]

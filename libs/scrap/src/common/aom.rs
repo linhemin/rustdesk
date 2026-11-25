@@ -56,12 +56,6 @@ pub struct AomEncoder {
     yuvfmt: EncodeYuvFormat,
 }
 
-fn aom_thread_num() -> usize {
-    #[cfg(windows)]
-    return crate::codec::windows_realtime_codec_thread_num();
-    #[cfg(not(windows))]
-    crate::codec::codec_thread_num(64)
-}
 
 // https://webrtc.googlesource.com/src/+/refs/heads/main/modules/video_coding/codecs/av1/libaom_av1_encoder.cc
 mod webrtc {
@@ -110,7 +104,7 @@ mod webrtc {
         // Overwrite default config with input encoder settings & RTC-relevant values.
         c.g_w = cfg.width;
         c.g_h = cfg.height;
-        c.g_threads = aom_thread_num() as _;
+        c.g_threads = crate::codec::realtime_codec_thread_num(64) as _;
         c.g_timebase.num = 1;
         c.g_timebase.den = kTimeBaseDen as _;
         c.g_input_bit_depth = kBitDepth;
@@ -461,7 +455,7 @@ impl AomDecoder {
         let i = call_aom_ptr!(aom_codec_av1_dx());
         let mut ctx = Default::default();
         let cfg = aom_codec_dec_cfg_t {
-            threads: aom_thread_num() as _,
+            threads: crate::codec::realtime_codec_thread_num(64) as _,
             w: 0,
             h: 0,
             allow_lowbitdepth: 1,

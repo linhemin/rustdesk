@@ -1,4 +1,10 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 /// Measure only complete video messages delivered to this viewer. File transfers
 /// and audio must not make a shared connection look fast enough for a higher rung.
@@ -8,6 +14,7 @@ pub(super) struct DeliveryWindow {
     bytes: u64,
     frames: u32,
     queued: u32,
+    decoded: Arc<AtomicUsize>,
 }
 
 impl DeliveryWindow {
@@ -23,25 +30,28 @@ impl DeliveryWindow {
         }
     }
 
-    pub(super) fn finish(&mut self, now: Instant) -> Option<(u32, u32, u32)> {
-        let old = std::mem::replace(
-            self,
-            Self {
-                start: Some(now),
-                ..Default::default()
-            },
-        );
-        let elapsed = now.checked_duration_since(old.start?)?;
-        if old.frames == 0
+    pub(super) fn decoded_counter(&self) -> Arc<AtomicUsize> {
+        self.decoded.clone()
+    }
+
+    pub(super) fn finish(&mut self, now: Instant) -> Option<(u32, u32, u32, u32)> {
+        let start = self.start.replace(now);
+        let bytes = std::mem::take(&mut self.bytes);
+        let frames = std::mem::take(&mut self.frames);
+        let queued = std::mem::take(&mut self.queued);
+        let decoded = self.decoded.swap(0, Ordering::Relaxed);
+        let elapsed = now.checked_duration_since(start?)?;
+        if frames == 0
             || !(Duration::from_millis(500)..=Duration::from_secs(5)).contains(&elapsed)
         {
             return None;
         }
         let ms = elapsed.as_millis() as u64;
         Some((
-            (old.bytes.saturating_mul(8) / ms).min(u32::MAX as u64) as u32,
-            (u64::from(old.frames) * 1000 / ms).min(1000) as u32,
-            (u64::from(old.queued) * 100 / u64::from(old.frames)) as u32,
+            (bytes.saturating_mul(8) / ms).min(u32::MAX as u64) as u32,
+            (u64::from(frames) * 1000 / ms).min(1000) as u32,
+            (u64::from(queued) * 100 / u64::from(frames)) as u32,
+            ((decoded as u64).saturating_mul(1000) / ms).min(1000) as u32 + 1,
         ))
     }
 }
@@ -58,9 +68,10 @@ mod tests {
         for n in 0..30 {
             w.frame(20_000, 1, if n < 3 { 4 } else { 0 });
         }
+        w.decoded_counter().fetch_add(24, Ordering::Relaxed);
         assert_eq!(
             w.finish(start + Duration::from_secs(1)),
-            Some((4800, 30, 10))
+            Some((4800, 30, 10, 25))
         );
         assert_eq!(w.finish(start + Duration::from_secs(2)), None);
         w.frame(4000, 1, 0);

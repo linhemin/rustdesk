@@ -30,6 +30,7 @@ dxgi-diagnostics = []
 [dependencies]
 cfg-if = "1.0"
 num_cpus = "1.15"
+rayon = "1"
 lazy_static = "1.4"
 hbb_common = { path = "../hbb_common" }
 base = { path = "../base" }

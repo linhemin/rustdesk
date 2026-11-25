@@ -1,23 +1,45 @@
-use base::message_proto::VideoFrame;
-use crossbeam_queue::ArrayQueue;
 use std::time::{Duration, Instant};
 
 // A decoder that never catches up would otherwise freeze the picture: every frame it finishes
 // already has a successor waiting.
 const MAX_HOLD: Duration = Duration::from_millis(50);
+const DEFAULT_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 
-/// Frames that arrive together (a retransmitted packet releases everything held behind it) are
-/// all decoded, because each one is the reference for the next, but only the newest is shown.
+/// Preserve timely frames when decoding and reception briefly overlap. Frames already
+/// queued in a burst are decoded for their references while presentation catches up.
 #[derive(Default)]
 pub(super) struct Freshness {
     skipping_since: Option<Instant>,
+    previous_pts: Option<i64>,
 }
 
 impl Freshness {
-    /// Whether to show the frame just decoded. `queue` holds the frames received after it.
-    pub(super) fn show(&mut self, queue: &ArrayQueue<VideoFrame>, now: Instant) -> bool {
+    pub(super) fn show(
+        &mut self,
+        following_frame_was_queued: bool,
+        pending: usize,
+        pts: Option<i64>,
+        decode_time: Duration,
+        now: Instant,
+    ) -> bool {
+        let frame_interval = pts
+            .zip(self.previous_pts)
+            .and_then(|(pts, previous)| pts.checked_sub(previous))
+            .filter(|ms| (4..=250).contains(ms))
+            .map_or(DEFAULT_FRAME_INTERVAL, |ms| {
+                Duration::from_millis(ms as u64)
+            })
+            .min(MAX_HOLD);
+        self.previous_pts = pts;
+        let behind = pending > 0
+            && (following_frame_was_queued || pending > 1 || decode_time >= frame_interval);
+        if !behind {
+            self.skipping_since = None;
+            return true;
+        }
+
         let since = *self.skipping_since.get_or_insert(now);
-        let stale = !queue.is_empty() && now.saturating_duration_since(since) < MAX_HOLD;
+        let stale = now.saturating_duration_since(since) < MAX_HOLD;
         if !stale {
             self.skipping_since = None;
         }
@@ -30,24 +52,37 @@ mod tests {
     use super::*;
 
     fn shown(arrived: &[i32], decode: Duration) -> Vec<i32> {
-        let queue = ArrayQueue::new(arrived.len());
-        for display in arrived {
-            let frame = VideoFrame {
-                display: *display,
-                ..Default::default()
-            };
-            assert!(queue.push(frame).is_ok());
-        }
         let mut freshness = Freshness::default();
         let mut now = Instant::now();
         let mut shown = Vec::new();
-        while let Some(frame) = queue.pop() {
+        for (index, frame) in arrived.iter().enumerate() {
+            let pending = arrived.len() - index - 1;
             now += decode;
-            if freshness.show(&queue, now) {
-                shown.push(frame.display);
+            if freshness.show(pending > 0, pending, None, decode, now) {
+                shown.push(*frame);
             }
         }
         shown
+    }
+
+    #[test]
+    fn a_single_successor_arriving_during_a_timely_decode_does_not_hide_the_frame() {
+        let mut freshness = Freshness::default();
+        let mut now = Instant::now();
+        let decode = Duration::from_millis(7);
+        for pts in [0, 16, 33, 50] {
+            now += decode;
+            assert!(freshness.show(false, 1, Some(pts), decode, now));
+        }
+    }
+
+    #[test]
+    fn a_late_decode_with_a_waiting_successor_drops_the_current_frame() {
+        let mut freshness = Freshness::default();
+        let now = Instant::now();
+        let decode = Duration::from_millis(10);
+        assert!(freshness.show(false, 0, Some(0), decode, now));
+        assert!(!freshness.show(false, 1, Some(8), decode, now + decode));
     }
 
     #[test]

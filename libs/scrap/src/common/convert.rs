@@ -6,12 +6,200 @@
 
 include!(concat!(env!("OUT_DIR"), "/yuv_ffi.rs"));
 
+use rayon::prelude::*;
+use std::sync::{Mutex, OnceLock};
+
 #[cfg(not(target_os = "ios"))]
 use crate::PixelBuffer;
 use crate::{generate_call_macro, EncodeYuvFormat, TraitPixelBuffer};
 use hbb_common::{bail, log, ResultType};
 
 generate_call_macro!(call_yuv, false);
+
+pub(super) type PlanarToRgb = unsafe extern "C" fn(
+    *const u8,
+    i32,
+    *const u8,
+    i32,
+    *const u8,
+    i32,
+    *mut u8,
+    i32,
+    i32,
+    i32,
+) -> i32;
+pub(super) type BiplanarToRgb =
+    unsafe extern "C" fn(*const u8, i32, *const u8, i32, *mut u8, i32, i32, i32) -> i32;
+
+#[derive(Clone, Copy)]
+pub(super) enum YuvToRgb {
+    Planar(PlanarToRgb, bool),
+    Nv12(BiplanarToRgb),
+}
+
+struct RgbSource {
+    convert: YuvToRgb,
+    planes: [*const u8; 3],
+    stride: [i32; 3],
+    width: i32,
+    dst_stride: i32,
+}
+
+// The conversion borrows the input planes read-only and joins every stripe before returning.
+unsafe impl Sync for RgbSource {}
+
+impl RgbSource {
+    unsafe fn rows(&self, dst: &mut [u8], first: usize, count: i32) -> i32 {
+        let plane = |index: usize, row: usize| {
+            if row == 0 {
+                self.planes[index]
+            } else {
+                self.planes[index].offset(row as isize * self.stride[index] as isize)
+            }
+        };
+        let y = plane(0, first);
+        match self.convert {
+            YuvToRgb::Planar(convert, subsampled) => {
+                let chroma_row = if subsampled { first / 2 } else { first };
+                convert(
+                    y,
+                    self.stride[0],
+                    plane(1, chroma_row),
+                    self.stride[1],
+                    plane(2, chroma_row),
+                    self.stride[2],
+                    dst.as_mut_ptr(),
+                    self.dst_stride,
+                    self.width,
+                    count,
+                )
+            }
+            YuvToRgb::Nv12(convert) => convert(
+                y,
+                self.stride[0],
+                plane(1, first / 2),
+                self.stride[1],
+                dst.as_mut_ptr(),
+                self.dst_stride,
+                self.width,
+                count,
+            ),
+        }
+    }
+
+    unsafe fn convert(&self, dst: &mut [u8], height: i32, pool: Option<&rayon::ThreadPool>) -> i32 {
+        let Some(pool) = pool else {
+            return self.rows(dst, 0, height);
+        };
+        let stride = self.dst_stride as usize;
+        // I420 and NV12 stripes must begin on whole chroma rows.
+        let rows = (height as usize)
+            .div_ceil(pool.current_num_threads())
+            .next_multiple_of(2);
+        pool.install(|| {
+            dst[..stride * height as usize]
+                .par_chunks_mut(stride * rows)
+                .enumerate()
+                .map(|(index, stripe)| {
+                    self.rows(stripe, index * rows, (stripe.len() / stride) as i32)
+                })
+                .find_any(|result| *result != 0)
+                .unwrap_or(0)
+        })
+    }
+}
+
+pub(super) unsafe fn convert_yuv_to_rgb(
+    convert: YuvToRgb,
+    planes: [*const u8; 3],
+    stride: [i32; 3],
+    dst: &mut [u8],
+    dst_stride: i32,
+    width: i32,
+    height: i32,
+) -> i32 {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    static ACTIVE: Mutex<()> = Mutex::new(());
+    let source = RgbSource {
+        convert,
+        planes,
+        stride,
+        width,
+        dst_stride,
+    };
+    let can_split = width > 0
+        && height >= 4
+        && i64::from(width) * i64::from(height) >= 1920 * 1080
+        && dst_stride > 0
+        && (dst_stride as usize)
+            .checked_mul(height as usize)
+            .is_some_and(|len| len <= dst.len())
+        && stride[0] > 0
+        && stride[1] > 0
+        && (matches!(convert, YuvToRgb::Nv12(_)) || stride[2] > 0);
+    if can_split {
+        // Concurrent sessions can convert on their own decoder thread while the pool is in use.
+        if let Ok(_active) = ACTIVE.try_lock() {
+            let pool = POOL.get_or_init(|| {
+                let threads = crate::codec::realtime_codec_thread_num(4);
+                if threads < 2 {
+                    return None;
+                }
+                match rayon::ThreadPoolBuilder::new().num_threads(threads).build() {
+                    Ok(pool) => Some(pool),
+                    Err(err) => {
+                        log::warn!("Could not start video conversion workers: {err}");
+                        None
+                    }
+                }
+            });
+            return source.convert(dst, height, pool.as_ref());
+        }
+    }
+    source.rows(dst, 0, height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parallel_yuv_conversion_preserves_chroma_and_padded_rgb_rows() {
+        let (width, height, stride, rgb_stride) = (1921, 1081, 1984, 7744);
+        let plane = |stride: i32, rows: i32, offset: usize| {
+            (0..(stride * rows) as usize)
+                .map(|i| (16 + (i / 7 + offset) % 220) as u8)
+                .collect::<Vec<_>>()
+        };
+        let y = plane(stride, height, 0);
+        let u = plane(stride, height, 60);
+        let v = plane(stride, height, 140);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        for convert in [
+            YuvToRgb::Planar(I420ToABGR, true),
+            YuvToRgb::Planar(I444ToARGB, false),
+            YuvToRgb::Nv12(NV12ToARGB),
+        ] {
+            let source = RgbSource {
+                convert,
+                planes: [y.as_ptr(), u.as_ptr(), v.as_ptr()],
+                stride: [stride; 3],
+                width,
+                dst_stride: rgb_stride,
+            };
+            let mut serial = vec![0xCC; (rgb_stride * height) as usize];
+            let mut parallel = serial.clone();
+            unsafe {
+                assert_eq!(source.convert(&mut serial, height, None), 0);
+                assert_eq!(source.convert(&mut parallel, height, Some(&pool)), 0);
+            }
+            assert!(parallel == serial);
+        }
+    }
+}
 
 #[cfg(not(target_os = "ios"))]
 pub fn convert_to_yuv(

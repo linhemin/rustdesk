@@ -3292,6 +3292,7 @@ mod audio_format_tests {
 /// Video handler for the [`Client`].
 pub struct VideoHandler {
     decoder: Decoder,
+    software_decoding: bool,
     pub rgb: ImageRgb,
     pub texture: ImageTexture,
     recorder: Arc<Mutex<Option<Recorder>>>,
@@ -3313,7 +3314,7 @@ impl VideoHandler {
     }
 
     /// Create a new video handler.
-    pub fn new(format: CodecFormat, _display: usize) -> Self {
+    pub fn new(format: CodecFormat, _display: usize, software_decoding: bool) -> Self {
         let luid = Self::get_adapter_luid();
         log::info!("new video handler for display #{_display}, format: {format:?}, luid: {luid:?}");
         let rgba_format =
@@ -3323,7 +3324,8 @@ impl VideoHandler {
                 ImageFormat::ARGB
             };
         VideoHandler {
-            decoder: Decoder::new(format, luid),
+            decoder: Decoder::with_backend(format, luid, software_decoding),
+            software_decoding,
             rgb: ImageRgb::new(rgba_format, crate::get_dst_align_rgba()),
             texture: Default::default(),
             recorder: Default::default(),
@@ -3398,7 +3400,7 @@ impl VideoHandler {
         self.rgb.set_align(crate::get_dst_align_rgba());
         let luid = Self::get_adapter_luid();
         let format = format.unwrap_or(self.decoder.format());
-        self.decoder = Decoder::new(format, luid);
+        self.decoder = Decoder::with_backend(format, luid, self.software_decoding);
         self.fail_counter = 0;
         self.first_frame = true;
     }
@@ -4102,22 +4104,45 @@ impl LoginConfigHandler {
 
     pub fn get_supported_decoding(&self) -> SupportedDecoding {
         #[allow(unused_mut)]
-        let mut decoding = Decoder::supported_decodings(
+        let mut decoding = Decoder::supported_decodings_with_backend(
             Some(&self.id),
             use_texture_render(),
             self.adapter_luid,
             &self.mark_unsupported,
+            self.software_decoding(),
         );
+        let encoder_backend = self.get_option(keys::OPTION_VIDEO_ENCODER_BACKEND);
+        decoding.software_encoding = encoder_backend == "software";
+        decoding.prefer_hardware_encoding = encoder_backend == "hardware";
+        if !encoder_backend.is_empty() {
+            use base::message_proto::supported_decoding::PreferCodec;
+            if matches!(
+                decoding.prefer.enum_value_or(PreferCodec::Auto),
+                PreferCodec::Software | PreferCodec::PreferHardware
+            ) {
+                decoding.prefer = PreferCodec::Auto.into();
+            }
+        }
         #[cfg(all(windows, feature = "hwcodec"))]
         if let Some(i444) = decoding.i444.as_mut() {
             i444.h264 &= !self.unsupported_h26x_i444.contains(&CodecFormat::H264);
             i444.h265 &= !self.unsupported_h26x_i444.contains(&CodecFormat::H265);
         }
         #[cfg(all(target_os = "ios", feature = "flutter"))]
-        if self.fixed_screen_fps.is_some() {
-            return ios_texture::prefer_native(decoding, &self.supported_encoding, &self.mark_unsupported);
+        if !self.software_decoding() {
+            return ios_texture::with_native_decoders(decoding, &self.mark_unsupported);
         }
         decoding
+    }
+
+    fn software_decoding(&self) -> bool {
+        self.get_option(keys::OPTION_VIDEO_DECODER_BACKEND) == "software"
+    }
+
+    pub(crate) fn reset_decoder_capabilities(&mut self) {
+        self.mark_unsupported.clear();
+        #[cfg(all(windows, feature = "hwcodec"))]
+        self.unsupported_h26x_i444.clear();
     }
 
     /// Parse the image quality option.
@@ -4686,6 +4711,7 @@ pub fn start_video_thread<F, T>(
     fps: Arc<RwLock<Option<usize>>>,
     chroma: Arc<RwLock<Option<Chroma>>>,
     discard_queue: Arc<RwLock<bool>>,
+    decoded_counter: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     video_diagnostic: Arc<crate::video_diagnostics::ReceiveStats>,
     video_callback: F,
@@ -4701,7 +4727,9 @@ pub fn start_video_thread<F, T>(
         #[cfg(windows)]
         sync_cpu_usage();
         get_hwcodec_config();
-        let mut video_handler = None;
+        let mut video_handler: Option<VideoHandler> = None;
+        let mut software_decoding = session.lc.read().unwrap().software_decoding();
+        let mut requested_software_decoding = software_decoding;
         #[cfg(all(target_os = "ios", feature = "flutter"))]
         let mut native_video_active = false;
         let mut count = 0;
@@ -4712,17 +4740,18 @@ pub fn start_video_thread<F, T>(
             if let Ok(data) = video_receiver.recv() {
                 match data {
                     MediaData::VideoFrame(_) | MediaData::VideoQueue => {
-                        let vf = match data {
+                        let (vf, following_frame_was_queued) = match data {
                             MediaData::VideoFrame(vf) => {
                                 *discard_queue.write().unwrap() = false;
-                                *vf
+                                (*vf, !video_queue.read().unwrap().is_empty())
                             }
                             MediaData::VideoQueue => {
-                                if let Some(vf) = video_queue.read().unwrap().pop() {
+                                let queue = video_queue.read().unwrap();
+                                if let Some(vf) = queue.pop() {
                                     if discard_queue.read().unwrap().clone() {
                                         continue;
                                     }
-                                    vf
+                                    (vf, !queue.is_empty())
                                 } else {
                                     continue;
                                 }
@@ -4735,18 +4764,28 @@ pub fn start_video_thread<F, T>(
                         let display = vf.display as usize;
                         let start = std::time::Instant::now();
                         let format = CodecFormat::from(&vf);
+                        if software_decoding != requested_software_decoding
+                            && io_loop::Remote::<T>::contains_key_frame(&vf)
+                        {
+                            software_decoding = requested_software_decoding;
+                            if let Some(handler) = video_handler.as_mut() {
+                                handler.software_decoding = software_decoding;
+                                handler.reset(Some(format));
+                            }
+                        }
                         #[cfg(all(windows, feature = "hwcodec"))]
                         let h26x_i444 = match vf.union.as_ref() {
                             Some(video_frame::Union::H264s(frames) | video_frame::Union::H265s(frames)) => frames.i444,
                             _ => false,
                         };
                         #[cfg(all(target_os = "ios", feature = "flutter"))]
-                        if session.lc.read().unwrap().fixed_screen_fps.is_some()
+                        if !software_decoding
                             && matches!(format, CodecFormat::H264 | CodecFormat::H265)
                         {
                             match ios_texture::decode(&vf) {
                                 ios_texture::DecodeStatus::Frame => {
                                     native_video_active = true;
+                                    decoded_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     *chroma.write().unwrap() = Some(Chroma::I420);
                                     let mut rgb = ImageRgb::new(ImageFormat::ARGB, crate::get_dst_align_rgba());
                                     video_callback(display, &mut rgb, std::ptr::null_mut(), false);
@@ -4768,7 +4807,7 @@ pub fn start_video_thread<F, T>(
                             continue;
                         }
                         if video_handler.is_none() {
-                            let mut handler = VideoHandler::new(format, display);
+                            let mut handler = VideoHandler::new(format, display, software_decoding);
                             let record_state = session.lc.read().unwrap().record_state;
                             let record_permission = session.lc.read().unwrap().record_permission;
                             let id = session.lc.read().unwrap().id.clone();
@@ -4781,16 +4820,39 @@ pub fn start_video_thread<F, T>(
                             let mut pixelbuffer = true;
                             let mut tmp_chroma = None;
                             let format_changed = handler.decoder.format() != format;
+                            if format_changed {
+                                freshness = video_freshness::Freshness::default();
+                            }
+                            let pts = match vf.union.as_ref() {
+                                Some(
+                                    video_frame::Union::Vp8s(frames)
+                                    | video_frame::Union::Vp9s(frames)
+                                    | video_frame::Union::Av1s(frames)
+                                    | video_frame::Union::H264s(frames)
+                                    | video_frame::Union::H265s(frames),
+                                ) => frames.frames.last().map(|frame| frame.pts),
+                                _ => None,
+                            };
                             #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                             let decode_started = std::time::Instant::now();
+                            #[cfg(all(windows, feature = "hwcodec"))]
+                            let waiting_keyframe = handler.decoder.waiting_for_i444_keyframe();
                             let decoded = handler.handle_frame(vf, &mut pixelbuffer, &mut tmp_chroma);
                             #[cfg(all(windows, feature = "windows-video-diagnostics"))]
-                            video_diagnostic.decode_max_us.fetch_max(
+                            video_diagnostic.record_decode(
                                 decode_started.elapsed().as_micros() as u64,
-                                std::sync::atomic::Ordering::Relaxed,
+                                handler.decoder.decoder_backend(),
                             );
+                            #[cfg(all(windows, feature = "hwcodec"))]
+                            if handler.decoder.waiting_for_i444_keyframe() {
+                                if !waiting_keyframe {
+                                    session.refresh_video(display as _);
+                                }
+                                continue;
+                            }
                             match decoded {
                                 Ok(true) => {
+                                    decoded_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     #[cfg(all(target_os = "ios", feature = "flutter"))]
                                     if native_video_active {
                                         ios_texture::clear_frame(display);
@@ -4798,9 +4860,14 @@ pub fn start_video_thread<F, T>(
                                     }
                                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                                     video_diagnostic.decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    let pending = video_queue.read().unwrap().len();
+                                    let now = std::time::Instant::now();
                                     if freshness.show(
-                                        &video_queue.read().unwrap(),
-                                        std::time::Instant::now(),
+                                        following_frame_was_queued,
+                                        pending,
+                                        pts,
+                                        now.saturating_duration_since(start),
+                                        now,
                                     ) {
                                         #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                                         video_diagnostic.ui_submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4883,8 +4950,12 @@ pub fn start_video_thread<F, T>(
                         }
                     }
                     MediaData::Reset => {
-                        if let Some(handler) = video_handler.as_mut() {
-                            handler.reset(None);
+                        freshness = video_freshness::Freshness::default();
+                        requested_software_decoding = session.lc.read().unwrap().software_decoding();
+                        if software_decoding == requested_software_decoding {
+                            if let Some(handler) = video_handler.as_mut() {
+                                handler.reset(None);
+                            }
                         }
                     }
                     MediaData::RecordScreen(start) => {

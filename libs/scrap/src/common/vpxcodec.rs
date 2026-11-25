@@ -8,7 +8,7 @@ use hbb_common::log;
 use hbb_common::ResultType;
 use base::message_proto::{Chroma, EncodedVideoFrame, EncodedVideoFrames, VideoFrame};
 
-use crate::codec::{base_bitrate, codec_thread_num, EncoderApi};
+use crate::codec::{base_bitrate, realtime_codec_thread_num, EncoderApi};
 use crate::{EncodeInput, EncodeYuvFormat, GoogleImage, Pixfmt, STRIDE_ALIGN};
 
 use super::vpx::{vp8e_enc_control_id::*, vpx_codec_err_t::*, *};
@@ -82,14 +82,7 @@ impl EncoderApi for VpxEncoder {
                 // When the data buffer falls below this percentage of fullness, a dropped frame is indicated. Set the threshold to zero (0) to disable this feature.
                 // In dynamic scenes, low bitrate gets low fps while high bitrate gets high fps.
                 c.rc_dropframe_thresh = 25;
-                #[cfg(windows)]
-                let threads = if config.codec == VpxVideoCodecId::VP8 {
-                    crate::codec::windows_realtime_codec_thread_num()
-                } else {
-                    codec_thread_num(64)
-                };
-                #[cfg(not(windows))]
-                let threads = codec_thread_num(64);
+                let threads = realtime_codec_thread_num(64);
                 c.g_threads = threads as _;
                 c.g_error_resilient = VPX_ERROR_RESILIENT_DEFAULT;
                 // https://developers.google.com/media/vp9/bitrate-modes/
@@ -474,7 +467,7 @@ impl VpxDecoder {
         };
         let mut ctx = Default::default();
         let cfg = vpx_codec_dec_cfg_t {
-            threads: codec_thread_num(64) as _,
+            threads: realtime_codec_thread_num(64) as _,
             w: 0,
             h: 0,
         };

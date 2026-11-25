@@ -1,16 +1,40 @@
 #include <errno.h>
+#include <limits.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <windows.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/dict.h>
 #include <libavutil/hwcontext.h>
 
+typedef int (*Convert444)(const uint8_t *, int, const uint8_t *, int,
+                          const uint8_t *, int, uint8_t *, int, int, int);
+
+typedef struct {
+    Convert444 convert;
+    const uint8_t *planes[3];
+    int strides[3];
+    uint8_t *rgb;
+    int rgb_stride;
+    int width;
+    int first_row;
+    int rows;
+    int result;
+} ColorRows;
+
 typedef struct {
     AVCodecContext *context;
     AVPacket *packet;
     AVFrame *frame;
+    AVFrame *download;
+    PTP_WORK color_work[3];
+    ColorRows color_rows[3];
+    int color_workers;
+    uint8_t *planar;
+    unsigned int planar_capacity;
 } Codec;
 
 typedef void (*PacketCallback)(void *, const uint8_t *, int, int64_t, int);
@@ -19,11 +43,58 @@ typedef int (*FrameCallback)(void *, const uint8_t *, int, const uint8_t *, int,
 
 void rd_i444_free(Codec *codec) {
     if (codec) {
+        for (int i = 0; i < codec->color_workers; ++i)
+            CloseThreadpoolWork(codec->color_work[i]);
         av_frame_free(&codec->frame);
+        av_frame_free(&codec->download);
         av_packet_free(&codec->packet);
         avcodec_free_context(&codec->context);
+        av_free(codec->planar);
         free(codec);
     }
+}
+
+static int convert_rows(const ColorRows *rows) {
+    const ptrdiff_t row = rows->first_row;
+    return rows->convert(rows->planes[0] + row * rows->strides[0], rows->strides[0],
+                         rows->planes[1] + row * rows->strides[1], rows->strides[1],
+                         rows->planes[2] + row * rows->strides[2], rows->strides[2],
+                         rows->rgb + row * rows->rgb_stride, rows->rgb_stride,
+                         rows->width, rows->rows);
+}
+
+static void CALLBACK convert_color_work(PTP_CALLBACK_INSTANCE instance, void *context, PTP_WORK work) {
+    (void)instance;
+    (void)work;
+    ColorRows *rows = context;
+    rows->result = convert_rows(rows);
+}
+
+int rd_i444_convert(Codec *codec, Convert444 convert, const uint8_t *y, int y_stride,
+                    const uint8_t *u, int u_stride, const uint8_t *v, int v_stride,
+                    uint8_t *rgb, int rgb_stride, int width, int height) {
+    ColorRows rows = {
+        convert, {y, u, v}, {y_stride, u_stride, v_stride}, rgb, rgb_stride, width, 0, height, 0
+    };
+    if ((int64_t)width * height < 1280 * 720 || height < 4)
+        return convert_rows(&rows);
+
+    const int part_height = height / (codec->color_workers + 1);
+    rows.rows = part_height;
+    for (int i = 0; i < codec->color_workers; ++i) {
+        codec->color_rows[i] = rows;
+        SubmitThreadpoolWork(codec->color_work[i]);
+        rows.first_row += part_height;
+    }
+    rows.rows = height - rows.first_row;
+    int result = convert_rows(&rows);
+    // FFmpeg releases the planes as soon as the frame callback returns.
+    for (int i = 0; i < codec->color_workers; ++i) {
+        WaitForThreadpoolWorkCallbacks(codec->color_work[i], FALSE);
+        if (result == 0)
+            result = codec->color_rows[i].result;
+    }
+    return result;
 }
 
 static Codec *allocate(const AVCodec *implementation) {
@@ -143,18 +214,76 @@ int rd_i444_encode(Codec *codec, const uint8_t *pixels, int stride, int64_t pts,
     return result == AVERROR(EAGAIN) ? 0 : result;
 }
 
-Codec *rd_i444_decoder(int hevc, int threads) {
-    const AVCodec *implementation = avcodec_find_decoder(hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
+static enum AVPixelFormat d3d11_444_format(AVCodecContext *context, const enum AVPixelFormat *formats) {
+    (void)context;
+    for (; *formats != AV_PIX_FMT_NONE; ++formats)
+        if (*formats == AV_PIX_FMT_D3D11)
+            return *formats;
+    return AV_PIX_FMT_NONE;
+}
+
+static Codec *open_decoder(const AVCodec *implementation, int threads, int hardware) {
     Codec *codec = allocate(implementation);
     if (!codec)
         return NULL;
-    codec->context->thread_count = threads;
+    codec->context->thread_count = hardware ? 1 : threads;
     codec->context->thread_type = FF_THREAD_SLICE;
-    if (avcodec_open2(codec->context, implementation, NULL) < 0) {
+    int result = 0;
+    if (hardware) {
+        codec->download = av_frame_alloc();
+        codec->context->get_format = d3d11_444_format;
+        result = codec->download
+            ? av_hwdevice_ctx_create(&codec->context->hw_device_ctx, AV_HWDEVICE_TYPE_D3D11VA,
+                                     NULL, NULL, 0)
+            : AVERROR(ENOMEM);
+    }
+    if (result >= 0)
+        result = avcodec_open2(codec->context, implementation, NULL);
+    if (result < 0) {
         rd_i444_free(codec);
         return NULL;
     }
+    for (int i = 0; i < 3 && i + 1 < threads; ++i) {
+        PTP_WORK work = CreateThreadpoolWork(convert_color_work, &codec->color_rows[i], NULL);
+        if (!work)
+            break;
+        codec->color_work[codec->color_workers++] = work;
+    }
     return codec;
+}
+
+Codec *rd_i444_decoder(int hevc, int threads) {
+    return open_decoder(avcodec_find_decoder(hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264), threads, 0);
+}
+
+Codec *rd_i444_d3d11_decoder(int threads) {
+    return open_decoder(avcodec_find_decoder(AV_CODEC_ID_HEVC), threads, 1);
+}
+
+static int render_ayuv(Codec *codec, AVFrame *frame, int width, int height,
+                       void *output, FrameCallback callback) {
+    if (width <= 0 || height <= 0 || width > INT_MAX / 4 ||
+        height > INT_MAX / 3 / width || frame->format != AV_PIX_FMT_VUYX ||
+        frame->width < width || frame->height < height ||
+        frame->linesize[0] < width * 4 || !frame->data[0])
+        return AVERROR_INVALIDDATA;
+    size_t plane_size = (size_t)width * height;
+    av_fast_malloc(&codec->planar, &codec->planar_capacity, plane_size * 3);
+    if (!codec->planar)
+        return AVERROR(ENOMEM);
+    uint8_t *y = codec->planar;
+    uint8_t *u = y + plane_size;
+    uint8_t *v = u + plane_size;
+    for (int row = 0; row < height; ++row) {
+        const uint8_t *packed = frame->data[0] + (ptrdiff_t)row * frame->linesize[0];
+        size_t offset = (size_t)row * width;
+        for (int col = 0; col < width; ++col) {
+            v[offset + col] = packed[4 * col];
+            u[offset + col] = packed[4 * col + 1];
+            y[offset + col] = packed[4 * col + 2];
+        }
+    }
+    return callback(output, y, width, u, width, v, width, width, height);
 }
 
 int rd_i444_decode(Codec *codec, const uint8_t *data, int size, void *output,
@@ -169,7 +298,16 @@ int rd_i444_decode(Codec *codec, const uint8_t *data, int size, void *output,
         return result;
     while ((result = avcodec_receive_frame(codec->context, codec->frame)) >= 0) {
         AVFrame *frame = codec->frame;
-        if (frame->format != AV_PIX_FMT_YUV444P || frame->color_range == AVCOL_RANGE_JPEG)
+        if (frame->color_range == AVCOL_RANGE_JPEG)
+            result = AVERROR_INVALIDDATA;
+        else if (frame->format == AV_PIX_FMT_D3D11 && codec->download) {
+            result = av_hwframe_transfer_data(codec->download, frame, 0);
+            if (result >= 0)
+                result = render_ayuv(codec, codec->download, frame->width, frame->height,
+                                     output, callback);
+            av_frame_unref(codec->download);
+        }
+        else if (frame->format != AV_PIX_FMT_YUV444P)
             result = AVERROR_INVALIDDATA;
         else
             result = callback(output, frame->data[0], frame->linesize[0],

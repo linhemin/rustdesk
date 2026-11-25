@@ -300,17 +300,35 @@ pub(crate) struct ReceiveStats {
     pub(crate) overwritten: AtomicU64,
     pub(crate) decoded: AtomicU64,
     pub(crate) decode_errors: AtomicU64,
-    pub(crate) decode_max_us: AtomicU64,
+    decode_max_us: AtomicU64,
+    decode_total_us: AtomicU64,
+    decode_calls: AtomicU64,
+    decode_backends: AtomicU64,
     pub(crate) ui_submitted: AtomicU64,
 }
 
 impl ReceiveStats {
+    pub(crate) fn record_decode(&self, micros: u64, backend: Option<scrap::codec::DecoderBackend>) {
+        self.decode_calls.fetch_add(1, Relaxed);
+        self.decode_total_us.fetch_add(micros, Relaxed);
+        self.decode_max_us.fetch_max(micros, Relaxed);
+        if let Some(backend) = backend {
+            self.decode_backends.fetch_or(1 << backend as u8, Relaxed);
+        }
+    }
+
     pub(crate) fn report(&self, interval_ms: u128, transport: &str) {
+        use scrap::codec::DecoderBackend;
+        let backends = self.decode_backends.swap(0, Relaxed);
+        let names = DecoderBackend::ALL.into_iter()
+            .filter(|backend| backends & (1 << *backend as u8) != 0)
+            .map(DecoderBackend::name).collect::<Vec<_>>().join(",");
         log::info!(
-            "video_diag_v1 role=receive transport={transport} interval_ms={interval_ms} received_frames={} decode_queue_max={} overwritten={} decoded_frames={} decode_errors={} decode_max_us={} ui_submitted={}",
+            "video_diag_v1 role=receive transport={transport} interval_ms={interval_ms} received_frames={} decode_queue_max={} overwritten={} decoded_frames={} decode_errors={} decode_calls={} decode_total_us={} decode_max_us={} decode_backends={names} ui_submitted={}",
             self.received.swap(0, Relaxed), self.decode_queue_max.swap(0, Relaxed),
             self.overwritten.swap(0, Relaxed), self.decoded.swap(0, Relaxed),
-            self.decode_errors.swap(0, Relaxed), self.decode_max_us.swap(0, Relaxed),
+            self.decode_errors.swap(0, Relaxed), self.decode_calls.swap(0, Relaxed),
+            self.decode_total_us.swap(0, Relaxed), self.decode_max_us.swap(0, Relaxed),
             self.ui_submitted.swap(0, Relaxed)
         );
     }

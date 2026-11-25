@@ -136,6 +136,11 @@ pub trait TraitCapturer {
     #[cfg(not(any(target_os = "ios")))]
     fn frame<'a>(&'a mut self, timeout: std::time::Duration) -> std::io::Result<Frame<'a>>;
 
+    // Asynchronous capture can report updates that were overwritten before consumption.
+    fn take_source_updates(&mut self) -> u32 {
+        0
+    }
+
     #[cfg(windows)]
     fn is_gdi(&self) -> bool;
     #[cfg(windows)]
@@ -451,81 +456,27 @@ pub trait GoogleImage {
         rgb.raw.resize(rgb.h * bytes_per_row, 0);
         let stride = self.stride();
         let planes = self.planes();
-        unsafe {
-            match (self.chroma(), rgb.fmt()) {
-                (Chroma::I420, ImageFormat::Raw) => {
-                    super::I420ToRAW(
-                        planes[0],
-                        stride[0],
-                        planes[1],
-                        stride[1],
-                        planes[2],
-                        stride[2],
-                        rgb.raw.as_mut_ptr(),
-                        bytes_per_row as _,
-                        self.width() as _,
-                        self.height() as _,
-                    );
-                }
-                (Chroma::I420, ImageFormat::ARGB) => {
-                    super::I420ToARGB(
-                        planes[0],
-                        stride[0],
-                        planes[1],
-                        stride[1],
-                        planes[2],
-                        stride[2],
-                        rgb.raw.as_mut_ptr(),
-                        bytes_per_row as _,
-                        self.width() as _,
-                        self.height() as _,
-                    );
-                }
-                (Chroma::I420, ImageFormat::ABGR) => {
-                    super::I420ToABGR(
-                        planes[0],
-                        stride[0],
-                        planes[1],
-                        stride[1],
-                        planes[2],
-                        stride[2],
-                        rgb.raw.as_mut_ptr(),
-                        bytes_per_row as _,
-                        self.width() as _,
-                        self.height() as _,
-                    );
-                }
-                (Chroma::I444, ImageFormat::ARGB) => {
-                    super::I444ToARGB(
-                        planes[0],
-                        stride[0],
-                        planes[1],
-                        stride[1],
-                        planes[2],
-                        stride[2],
-                        rgb.raw.as_mut_ptr(),
-                        bytes_per_row as _,
-                        self.width() as _,
-                        self.height() as _,
-                    );
-                }
-                (Chroma::I444, ImageFormat::ABGR) => {
-                    super::I444ToABGR(
-                        planes[0],
-                        stride[0],
-                        planes[1],
-                        stride[1],
-                        planes[2],
-                        stride[2],
-                        rgb.raw.as_mut_ptr(),
-                        bytes_per_row as _,
-                        self.width() as _,
-                        self.height() as _,
-                    );
-                }
-                // (Chroma::I444, ImageFormat::Raw), new version libyuv have I444ToRAW
-                _ => log::error!("unsupported pixfmt: {:?}", self.chroma()),
+        let (convert, subsampled): (convert::PlanarToRgb, _) = match (self.chroma(), rgb.fmt()) {
+            (Chroma::I420, ImageFormat::Raw) => (super::I420ToRAW, true),
+            (Chroma::I420, ImageFormat::ARGB) => (super::I420ToARGB, true),
+            (Chroma::I420, ImageFormat::ABGR) => (super::I420ToABGR, true),
+            (Chroma::I444, ImageFormat::ARGB) => (super::I444ToARGB, false),
+            (Chroma::I444, ImageFormat::ABGR) => (super::I444ToABGR, false),
+            _ => {
+                log::error!("unsupported pixfmt: {:?}", self.chroma());
+                return;
             }
+        };
+        unsafe {
+            convert::convert_yuv_to_rgb(
+                convert::YuvToRgb::Planar(convert, subsampled),
+                [planes[0], planes[1], planes[2]],
+                [stride[0], stride[1], stride[2]],
+                &mut rgb.raw,
+                bytes_per_row as _,
+                self.width() as _,
+                self.height() as _,
+            );
         }
     }
     fn data(&self) -> (&[u8], &[u8], &[u8]) {

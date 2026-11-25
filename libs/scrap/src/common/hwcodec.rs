@@ -1,5 +1,8 @@
 use crate::{
-    codec::{base_bitrate, codec_thread_num, enable_hwcodec_option, EncoderApi, EncoderCfg},
+    codec::{
+        base_bitrate, codec_thread_num, enable_hwcodec_option, realtime_codec_thread_num, EncoderApi,
+        EncoderCfg,
+    },
     convert::*,
     CodecFormat, EncodeInput, ImageFormat, ImageRgb, Pixfmt, HW_STRIDE_ALIGN,
 };
@@ -350,7 +353,11 @@ pub struct HwRamDecoder {
 }
 
 impl HwRamDecoder {
-    pub fn try_get(format: CodecFormat) -> Option<CodecInfo> {
+    pub fn new(format: CodecFormat) -> ResultType<Self> {
+        Self::with_backend(format, false)
+    }
+
+    pub fn try_get_with_backend(format: CodecFormat, software_only: bool) -> Option<CodecInfo> {
         let mut info = None;
         let soft = CodecInfo::soft();
         match format {
@@ -366,7 +373,7 @@ impl HwRamDecoder {
             }
             _ => {}
         }
-        if enable_hwcodec_option() {
+        if !software_only && enable_hwcodec_option() {
             let best = CodecInfo::prioritized(HwCodecConfig::get().ram_decode);
             match format {
                 CodecFormat::H264 => {
@@ -385,8 +392,8 @@ impl HwRamDecoder {
         info
     }
 
-    pub fn new(format: CodecFormat) -> ResultType<Self> {
-        let info = HwRamDecoder::try_get(format);
+    pub fn with_backend(format: CodecFormat, software_only: bool) -> ResultType<Self> {
+        let info = HwRamDecoder::try_get_with_backend(format, software_only);
         log::info!("try create {info:?} ram decoder");
         let Some(info) = info else {
             bail!("unsupported format: {:?}", format);
@@ -394,15 +401,22 @@ impl HwRamDecoder {
         let ctx = DecodeContext {
             name: info.name.clone(),
             device_type: info.hwdevice.clone(),
-            thread_count: codec_thread_num(16) as _,
+            thread_count: realtime_codec_thread_num(16) as _,
         };
         match Decoder::new(ctx) {
             Ok(decoder) => Ok(HwRamDecoder { decoder, info }),
             Err(_) => {
-                HwCodecConfig::clear(false, false);
+                if Self::uses_hardware(&info) {
+                    HwCodecConfig::clear(false, false);
+                    return Self::with_backend(format, true);
+                }
                 Err(anyhow!(format!("Failed to create decoder")))
             }
         }
+    }
+
+    pub fn uses_hardware(info: &CodecInfo) -> bool {
+        info.hwdevice != hwcodec::ffmpeg::AVHWDeviceType::AV_HWDEVICE_TYPE_NONE
     }
     pub fn decode<'a>(&'a mut self, data: &[u8]) -> ResultType<Vec<HwRamDecoderImage<'a>>> {
         match self.decoder.decode(data) {
@@ -462,14 +476,11 @@ impl HwRamDecoderImage<'_> {
                         ImageFormat::ABGR => I420ToABGR,
                         _ => bail!("unsupported format: {:?} -> {:?}", frame.pixfmt, rgb.fmt()),
                     };
-                    call_yuv!(f(
-                        i420_offset_y,
-                        linesize_i420[0],
-                        i420_offset_u,
-                        linesize_i420[1],
-                        i420_offset_v,
-                        linesize_i420[2],
-                        rgb.raw.as_mut_ptr(),
+                    call_yuv!(convert_yuv_to_rgb(
+                        YuvToRgb::Planar(f, true),
+                        [i420_offset_y, i420_offset_u, i420_offset_v],
+                        [linesize_i420[0], linesize_i420[1], linesize_i420[2]],
+                        &mut rgb.raw,
                         bytes_per_row as _,
                         width,
                         height,
@@ -480,12 +491,11 @@ impl HwRamDecoderImage<'_> {
                         ImageFormat::ABGR => NV12ToABGR,
                         _ => bail!("unsupported format: {:?} -> {:?}", frame.pixfmt, rgb.fmt()),
                     };
-                    call_yuv!(f(
-                        frame.data[0].as_ptr(),
-                        frame.linesize[0],
-                        frame.data[1].as_ptr(),
-                        frame.linesize[1],
-                        rgb.raw.as_mut_ptr(),
+                    call_yuv!(convert_yuv_to_rgb(
+                        YuvToRgb::Nv12(f),
+                        [frame.data[0].as_ptr(), frame.data[1].as_ptr(), std::ptr::null()],
+                        [frame.linesize[0], frame.linesize[1], 0],
+                        &mut rgb.raw,
                         bytes_per_row as _,
                         width,
                         height,
@@ -498,14 +508,11 @@ impl HwRamDecoderImage<'_> {
                     ImageFormat::ABGR => I420ToABGR,
                     _ => bail!("unsupported format: {:?} -> {:?}", frame.pixfmt, rgb.fmt()),
                 };
-                call_yuv!(f(
-                    frame.data[0].as_ptr(),
-                    frame.linesize[0],
-                    frame.data[1].as_ptr(),
-                    frame.linesize[1],
-                    frame.data[2].as_ptr(),
-                    frame.linesize[2],
-                    rgb.raw.as_mut_ptr(),
+                call_yuv!(convert_yuv_to_rgb(
+                    YuvToRgb::Planar(f, true),
+                    [frame.data[0].as_ptr(), frame.data[1].as_ptr(), frame.data[2].as_ptr()],
+                    [frame.linesize[0], frame.linesize[1], frame.linesize[2]],
+                    &mut rgb.raw,
                     bytes_per_row as _,
                     width,
                     height,

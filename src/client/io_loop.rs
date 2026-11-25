@@ -1671,7 +1671,7 @@ impl<T: InvokeUiSession> Remote<T> {
         }
     }
 
-    fn contains_key_frame(vf: &VideoFrame) -> bool {
+    pub(super) fn contains_key_frame(vf: &VideoFrame) -> bool {
         use video_frame::Union::*;
         match &vf.union {
             Some(vf) => match vf {
@@ -2659,10 +2659,13 @@ impl<T: InvokeUiSession> Remote<T> {
                             && self.handler.lc.read().unwrap().conn_type == ConnType::DEFAULT_CONN,
                     );
                     if !t.from_client {
-                        let (kbps, fps, queued) = self.video_delivery.finish(std::time::Instant::now()).unwrap_or_default();
+                        let (kbps, fps, queued, decoded_fps) = self.video_delivery
+                            .finish(std::time::Instant::now())
+                            .unwrap_or_default();
                         t.delivered_video_kbps = kbps;
                         t.delivered_video_fps = fps;
                         t.queued_video_percent = queued;
+                        t.decoded_video_fps_plus_one = decoded_fps;
                     }
                     self.handler.handle_test_delay(t, peer).await;
                 }
@@ -3111,6 +3114,7 @@ impl<T: InvokeUiSession> Remote<T> {
             discard_queue: discard_queue.clone(),
         };
         let handler = self.handler.ui_handler.clone();
+        let decoded_counter = self.video_delivery.decoded_counter();
         crate::client::start_video_thread(
             self.handler.clone(),
             display,
@@ -3119,6 +3123,7 @@ impl<T: InvokeUiSession> Remote<T> {
             decode_fps,
             self.chroma.clone(),
             discard_queue,
+            decoded_counter,
             #[cfg(all(windows, feature = "windows-video-diagnostics"))]
             self.video_diagnostic.clone(),
             move |display: usize,

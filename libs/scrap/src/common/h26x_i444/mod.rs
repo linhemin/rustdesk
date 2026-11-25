@@ -1,5 +1,5 @@
 use crate::{
-    codec::{codec_thread_num, EncoderApi, EncoderCfg},
+    codec::{realtime_codec_thread_num, EncoderApi, EncoderCfg},
     convert::{I444ToABGR, I444ToARGB},
     hwcodec::HwRamEncoder,
     CodecFormat, EncodeInput, EncodeYuvFormat, ImageFormat, ImageRgb, Pixfmt,
@@ -18,6 +18,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         OnceLock,
     },
+    time::{Duration, Instant},
 };
 
 #[cfg(test)]
@@ -147,6 +148,9 @@ impl Format {
 }
 
 type PacketCallback = unsafe extern "C" fn(*mut c_void, *const u8, i32, i64, i32);
+type Convert444 = unsafe extern "C" fn(
+    *const u8, i32, *const u8, i32, *const u8, i32, *mut u8, i32, i32, i32,
+) -> i32;
 type FrameCallback = unsafe extern "C" fn(
     *mut c_void,
     *const u8,
@@ -162,7 +166,22 @@ type FrameCallback = unsafe extern "C" fn(
 extern "C" {
     fn rd_i444_encoder(name: *const c_char, w: i32, h: i32, bitrate: i32, gop: i32) -> *mut c_void;
     fn rd_i444_decoder(hevc: i32, threads: i32) -> *mut c_void;
+    fn rd_i444_d3d11_decoder(threads: i32) -> *mut c_void;
     fn rd_i444_free(codec: *mut c_void);
+    fn rd_i444_convert(
+        codec: *mut c_void,
+        convert: Convert444,
+        y: *const u8,
+        y_stride: i32,
+        u: *const u8,
+        u_stride: i32,
+        v: *const u8,
+        v_stride: i32,
+        rgb: *mut u8,
+        rgb_stride: i32,
+        width: i32,
+        height: i32,
+    ) -> i32;
     fn rd_i444_bitrate(codec: *mut c_void, bitrate: i64);
     fn rd_i444_encode(
         codec: *mut c_void,
@@ -366,14 +385,53 @@ unsafe extern "C" fn write_packet(
     }
 }
 
-pub(super) struct Decoder(Codec);
+#[derive(Default)]
+struct HardwareDecodeBudget {
+    previous_pts: Option<i64>,
+    slow_frames: u8,
+}
+
+impl HardwareDecodeBudget {
+    fn record(&mut self, pts: i64, elapsed: Duration) {
+        let frame_interval = self.previous_pts.replace(pts)
+            .and_then(|previous| pts.checked_sub(previous))
+            .filter(|interval| (1..=250).contains(interval));
+        if frame_interval.is_some_and(|ms| elapsed > Duration::from_millis(ms as u64 + 2)) {
+            self.slow_frames = self.slow_frames.saturating_add(1);
+        } else {
+            self.slow_frames = 0;
+        }
+    }
+
+    fn over_budget(&self) -> bool {
+        self.slow_frames >= 4
+    }
+}
+
+pub(super) struct Decoder(Codec, Option<HardwareDecodeBudget>);
 
 impl Decoder {
     pub(super) fn new(format: Format) -> ResultType<Self> {
-        let raw =
-            unsafe { rd_i444_decoder(i32::from(format.is_hevc()), codec_thread_num(8) as i32) };
+        let threads = realtime_codec_thread_num(8);
+        let raw = unsafe { rd_i444_decoder(i32::from(format.is_hevc()), threads as i32) };
         let codec = NonNull::new(raw).ok_or_else(|| anyhow!("H.26x 4:4:4 decoder unavailable"))?;
-        Ok(Self(Codec(codec)))
+        Ok(Self(Codec(codec), None))
+    }
+
+    pub(super) fn try_d3d11(format: Format) -> Option<Self> {
+        if !format.is_hevc() {
+            return None;
+        }
+        let raw = unsafe { rd_i444_d3d11_decoder(realtime_codec_thread_num(4) as i32) };
+        NonNull::new(raw).map(|codec| Self(Codec(codec), Some(HardwareDecodeBudget::default())))
+    }
+
+    pub(super) fn is_hardware(&self) -> bool {
+        self.1.is_some()
+    }
+
+    pub(super) fn over_budget(&self) -> bool {
+        self.1.as_ref().is_some_and(HardwareDecodeBudget::over_budget)
     }
 
     pub(super) fn decode(
@@ -382,7 +440,9 @@ impl Decoder {
         rgb: &mut ImageRgb,
     ) -> ResultType<bool> {
         use std::convert::TryFrom;
+        let started = self.1.as_ref().map(|_| Instant::now());
         let mut output = Decoded {
+            codec: self.0 .0,
             rgb,
             rendered: false,
         };
@@ -404,11 +464,19 @@ impl Decoder {
                 bail!("H.26x 4:4:4 decoding failed ({result})");
             }
         }
+        if output.rendered {
+            if let (Some(budget), Some(started), Some(packet)) =
+                (self.1.as_mut(), started, frames.frames.last())
+            {
+                budget.record(packet.pts, started.elapsed());
+            }
+        }
         Ok(output.rendered)
     }
 }
 
 struct Decoded<'a> {
+    codec: NonNull<c_void>,
     rgb: &'a mut ImageRgb,
     rendered: bool,
 }
@@ -455,7 +523,9 @@ unsafe extern "C" fn render(
         return -1;
     };
     rgb.raw.resize(len, 0);
-    let result = convert(
+    let result = rd_i444_convert(
+        output.codec.as_ptr(),
+        convert,
         y,
         y_stride,
         u,

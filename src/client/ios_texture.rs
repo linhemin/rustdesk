@@ -1,4 +1,4 @@
-use base::message_proto::{video_frame, supported_decoding::PreferCodec, SupportedDecoding, SupportedEncoding, VideoFrame};
+use base::message_proto::{video_frame, SupportedDecoding, VideoFrame};
 use scrap::CodecFormat;
 
 extern "C" {
@@ -17,9 +17,8 @@ pub(super) fn clear_frame(display: usize) {
     unsafe { rustdesk_ios_texture_clear_frame(display as i32) }
 }
 
-pub(super) fn prefer_native(
+pub(super) fn with_native_decoders(
     mut decoding: SupportedDecoding,
-    host: &SupportedEncoding,
     unsupported: &[CodecFormat],
 ) -> SupportedDecoding {
     let native = unsafe { rustdesk_ios_texture_capabilities() };
@@ -27,13 +26,6 @@ pub(super) fn prefer_native(
     let h265 = native & 2 != 0 && !unsupported.contains(&CodecFormat::H265);
     if h264 { decoding.ability_h264 = 1; }
     if h265 { decoding.ability_h265 = 1; }
-    if decoding.prefer == PreferCodec::Auto.into() {
-        if h265 && host.h265 {
-            decoding.prefer = PreferCodec::H265.into();
-        } else if h264 && host.h264 {
-            decoding.prefer = PreferCodec::H264.into();
-        }
-    }
     decoding
 }
 

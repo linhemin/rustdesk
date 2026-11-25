@@ -8,9 +8,16 @@ pub use hbb_common::config::keys::*;
 pub const OPTION_VIEW_ONLY: &str = "view_only";
 pub const OPTION_SHOW_MONITORS_TOOLBAR: &str = "show_monitors_toolbar";
 pub const OPTION_FIXED_SCREEN_FPS: &str = "fixed-screen-fps";
+pub const OPTION_VIDEO_ENCODER_BACKEND: &str = "video-encoder-backend";
+pub const OPTION_VIDEO_DECODER_BACKEND: &str = "video-decoder-backend";
 pub const CUSTOM_BITRATE_AUTO: i32 = 2001;
 // Older hosts mask off this bit and still read the baseline percentage below it.
 pub const CUSTOM_BITRATE_AUTO_FLAG: i32 = 1 << 20;
+// Carry an absolute rate through the existing native UI's integer quality value.
+pub const CUSTOM_BITRATE_KBPS_BASE: i32 = 1 << 22;
+pub const OPTION_CUSTOM_VIDEO_BITRATE: &str = "custom-video-bitrate";
+pub const MIN_VIDEO_BITRATE_KBPS: u32 = 500;
+pub const MAX_VIDEO_BITRATE_KBPS: u32 = 200_000;
 pub const OPTION_SHOW_REMOTE_CURSOR: &str = "show_remote_cursor";
 pub const OPTION_FOLLOW_REMOTE_CURSOR: &str = "follow_remote_cursor";
 pub const OPTION_FOLLOW_REMOTE_WINDOW: &str = "follow_remote_window";
