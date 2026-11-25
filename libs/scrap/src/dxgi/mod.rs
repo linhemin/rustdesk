@@ -28,6 +28,14 @@ use crate::RotationMode::*;
 use crate::{AdapterDevice, Frame, PixelBuffer};
 use std::ffi::c_void;
 
+thread_local! {
+    static CAPTURE_UPDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub fn take_capture_updates() -> usize {
+    CAPTURE_UPDATES.with(std::cell::Cell::take)
+}
+
 #[cfg(feature = "dxgi-diagnostics")]
 thread_local! {
     static DESKTOP_UPDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -44,8 +52,9 @@ pub fn take_prefetched_frames() -> usize {
     PREFETCHED_FRAMES.with(std::cell::Cell::take)
 }
 
-#[cfg(feature = "dxgi-diagnostics")]
 fn record_desktop_updates(count: usize) {
+    CAPTURE_UPDATES.with(|updates| updates.set(updates.get().saturating_add(count)));
+    #[cfg(feature = "dxgi-diagnostics")]
     DESKTOP_UPDATES.with(|updates| updates.set(updates.get() + count));
 }
 
@@ -487,7 +496,6 @@ impl Capturer {
         if *info.LastPresentTime.QuadPart() == 0 {
             return Err(std::io::ErrorKind::WouldBlock.into());
         }
-        #[cfg(feature = "dxgi-diagnostics")]
         record_desktop_updates(info.AccumulatedFrames as usize);
 
         #[allow(invalid_value)]
@@ -704,7 +712,6 @@ impl Capturer {
             if info.AccumulatedFrames == 0 || *info.LastPresentTime.QuadPart() == 0 {
                 return Err(std::io::ErrorKind::WouldBlock.into());
             }
-            #[cfg(feature = "dxgi-diagnostics")]
             record_desktop_updates(info.AccumulatedFrames as usize);
 
             let mut texture: *mut ID3D11Texture2D = ptr::null_mut();

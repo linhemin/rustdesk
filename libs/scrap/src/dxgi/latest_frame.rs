@@ -35,7 +35,6 @@ struct Mailbox {
     reading: Option<usize>,
     failure: Option<io::Error>,
     stopping: bool,
-    #[cfg(feature = "dxgi-diagnostics")]
     desktop_updates: usize,
 }
 
@@ -151,7 +150,6 @@ impl LatestFrameCapture {
             })
             .unwrap();
 
-        #[cfg(feature = "dxgi-diagnostics")]
         super::record_desktop_updates(mem::take(&mut state.desktop_updates));
         if let Some(error) = state.failure.take() {
             return Err(error);
@@ -264,12 +262,7 @@ impl CaptureResources {
             match unsafe { self.capture_into(slot) } {
                 Ok(Some(updates)) => {
                     let mut state = mailbox.lock().unwrap();
-                    #[cfg(feature = "dxgi-diagnostics")]
-                    {
-                        state.desktop_updates += updates as usize;
-                    }
-                    #[cfg(not(feature = "dxgi-diagnostics"))]
-                    let _ = updates;
+                    state.desktop_updates = state.desktop_updates.saturating_add(updates as usize);
                     state.ready = Some(slot);
                     ready.notify_one();
                 }

@@ -216,6 +216,7 @@ impl CaptureStats {
         codec: scrap::CodecFormat,
         hardware: bool,
         target_kbps: u32,
+        requested_cap_kbps: Option<u32>,
         size: (usize, usize),
         target_period: Duration,
         period: Duration,
@@ -226,8 +227,9 @@ impl CaptureStats {
         let settled_quality_frames = t.settled_quality_frames;
         let (width, height) = size;
         let encoding = if hardware { "gpu" } else { "cpu" };
+        let requested_cap_kbps = requested_cap_kbps.map_or_else(|| "none".to_owned(), |v| v.to_string());
         let metrics = format!(
-            "role=capture display={display} interval_ms={} backend={} target_fps={:.1} dxgi_frames={} dxgi_no_frame={} gdi_frames={} gdi_no_frame={} capture_errors={} capture_max_us={} convert_max_us={} encode_calls={} encoded_frames={} refresh_frames=0 encode_max_us={} ack_wait_max_us={} ack_missed={} codec={codec:?} encoding={encoding} target_kbps={target_kbps} encode_vpx_no_output={} encode_empty_output={} encode_errors={} refresh_calls=0 refresh_vpx_no_output=0 refresh_empty_output=0 refresh_errors=0 refresh_encode_max_us=0 width={width} height={height} capture_total_us={} convert_total_us={} encode_total_us={} refresh_encode_total_us=0 ack_wait_total_us={} dxgi_updates={dxgi_updates} dxgi_prefetched={dxgi_prefetched} settled_quality_frames={settled_quality_frames}",
+            "role=capture display={display} interval_ms={} backend={} target_fps={:.1} dxgi_frames={} dxgi_no_frame={} gdi_frames={} gdi_no_frame={} capture_errors={} capture_max_us={} convert_max_us={} encode_calls={} encoded_frames={} refresh_frames=0 encode_max_us={} ack_wait_max_us={} ack_missed={} codec={codec:?} encoding={encoding} target_kbps={target_kbps} requested_cap_kbps={requested_cap_kbps} encode_vpx_no_output={} encode_empty_output={} encode_errors={} refresh_calls=0 refresh_vpx_no_output=0 refresh_empty_output=0 refresh_errors=0 refresh_encode_max_us=0 width={width} height={height} capture_total_us={} convert_total_us={} encode_total_us={} refresh_encode_total_us=0 ack_wait_total_us={} dxgi_updates={dxgi_updates} dxgi_prefetched={dxgi_prefetched} settled_quality_frames={settled_quality_frames}",
             period.as_millis(), if gdi { "gdi" } else { "dxgi" },
             1.0 / target_period.as_secs_f64(), t.dxgi_frames, t.dxgi_no_frame, t.gdi_frames,
             t.gdi_no_frame, t.capture_errors, t.capture_max_us, t.convert_max_us, t.encode.calls,

@@ -1,19 +1,25 @@
 use crate::{quartz, Frame, Pixfmt};
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc, Mutex, TryLockError,
+};
 use std::{io, mem};
 
 pub struct Capturer {
     inner: quartz::Capturer,
     frame: Arc<Mutex<Option<quartz::Frame>>>,
+    source_updates: Arc<AtomicU32>,
     saved_raw_data: Vec<u8>, // for faster compare and copy
 }
 
 impl Capturer {
     pub fn new(display: Display) -> io::Result<Capturer> {
         let frame = Arc::new(Mutex::new(None));
+        let source_updates = Arc::new(AtomicU32::new(0));
 
         let f = frame.clone();
+        let updates = source_updates.clone();
         let inner = quartz::Capturer::new(
             display.0,
             display.width(),
@@ -21,6 +27,7 @@ impl Capturer {
             quartz::PixelFormat::Argb8888,
             Default::default(),
             move |inner| {
+                updates.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut f) = f.lock() {
                     *f = Some(inner);
                 }
@@ -31,6 +38,7 @@ impl Capturer {
         Ok(Capturer {
             inner,
             frame,
+            source_updates,
             saved_raw_data: Vec::new(),
         })
     }
@@ -45,6 +53,10 @@ impl Capturer {
 }
 
 impl crate::TraitCapturer for Capturer {
+    fn take_source_updates(&mut self) -> u32 {
+        self.source_updates.swap(0, Ordering::Relaxed)
+    }
+
     fn frame<'a>(&'a mut self, _timeout_ms: std::time::Duration) -> io::Result<Frame<'a>> {
         match self.frame.try_lock() {
             Ok(mut handle) => {

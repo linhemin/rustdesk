@@ -13,7 +13,6 @@ lazy_static! {
 pub struct Capturer {
     display: Display,
     rgba: Vec<u8>,
-    saved_raw_data: Vec<u8>, // for faster compare and copy
 }
 
 impl Capturer {
@@ -21,7 +20,6 @@ impl Capturer {
         Ok(Capturer {
             display,
             rgba: Vec::new(),
-            saved_raw_data: Vec::new(),
         })
     }
 
@@ -36,7 +34,7 @@ impl Capturer {
 
 impl crate::TraitCapturer for Capturer {
     fn frame<'a>(&'a mut self, _timeout: Duration) -> io::Result<Frame<'a>> {
-        if get_video_raw(&mut self.rgba, &mut self.saved_raw_data).is_some() {
+        if get_video_raw(&mut self.rgba).is_some() {
             Ok(Frame::PixelBuffer(PixelBuffer::new(
                 &self.rgba,
                 self.width(),

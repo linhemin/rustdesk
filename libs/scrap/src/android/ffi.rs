@@ -73,7 +73,7 @@ impl FrameRaw {
         self.last_update = Instant::now();
     }
 
-    fn take<'a>(&mut self, dst: &mut Vec<u8>, last: &mut Vec<u8>) -> Option<()> {
+    fn take(&mut self, dst: &mut Vec<u8>, audio_history: Option<&mut Vec<u8>>) -> Option<()> {
         if self.enable.not() || !self.ready {
             return None;
         }
@@ -82,10 +82,14 @@ impl FrameRaw {
             return None;
         }
         self.ready = false;
-        // Never true: `last` starts empty and only `would_block_if_equal` fills it. Left off on
-        // purpose: Android sends a frame only when the screen recomposes, so repeats are rare.
-        if last.len() == self.data.len() && crate::would_block_if_equal(last, &self.data).is_err()
-        {
+        let duplicate = match audio_history {
+            Some(last) => {
+                last.len() == self.data.len()
+                    && crate::would_block_if_equal(last, &self.data).is_err()
+            }
+            None => *dst == self.data,
+        };
+        if duplicate {
             return None;
         }
         std::mem::swap(dst, &mut self.data);
@@ -93,12 +97,12 @@ impl FrameRaw {
     }
 }
 
-pub fn get_video_raw<'a>(dst: &mut Vec<u8>, last: &mut Vec<u8>) -> Option<()> {
-    VIDEO_RAW.lock().ok()?.take(dst, last)
+pub fn get_video_raw(dst: &mut Vec<u8>) -> Option<()> {
+    VIDEO_RAW.lock().ok()?.take(dst, None)
 }
 
-pub fn get_audio_raw<'a>(dst: &mut Vec<u8>, last: &mut Vec<u8>) -> Option<()> {
-    AUDIO_RAW.lock().ok()?.take(dst, last)
+pub fn get_audio_raw(dst: &mut Vec<u8>, last: &mut Vec<u8>) -> Option<()> {
+    AUDIO_RAW.lock().ok()?.take(dst, Some(last))
 }
 
 pub fn get_clipboards(client: bool) -> Option<MultiClipboards> {

@@ -49,6 +49,10 @@ impl TraitCapturer for Capturer {
         }
     }
 
+    fn take_source_updates(&mut self) -> u32 {
+        dxgi::take_capture_updates().min(u32::MAX as usize) as u32
+    }
+
     fn is_gdi(&self) -> bool {
         self.inner.is_gdi()
     }

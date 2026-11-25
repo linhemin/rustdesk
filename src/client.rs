@@ -3706,7 +3706,19 @@ impl LoginConfigHandler {
     /// Load [`PeerConfig`].
     pub fn load_config(&self) -> PeerConfig {
         debug_assert!(self.id.len() > 0);
-        PeerConfig::load(&self.id)
+        let new_peer = !PeerConfig::exists(&self.id);
+        let mut config = PeerConfig::load(&self.id);
+        if new_peer {
+            let value = config::UserDefaultConfig::load().get(keys::OPTION_CUSTOM_VIDEO_BITRATE);
+            if value.parse::<i32>().is_ok_and(|quality| {
+                quality == keys::CUSTOM_BITRATE_AUTO || Self::custom_bitrate_kbps(quality) != 0
+            }) {
+                config
+                    .options
+                    .insert(keys::OPTION_CUSTOM_VIDEO_BITRATE.to_owned(), value);
+            }
+        }
+        config
     }
 
     /// Save a [`PeerConfig`] into the handler.
@@ -4049,16 +4061,16 @@ impl LoginConfigHandler {
         } else if q == "custom" {
             let config = self.load_config();
             let allow_more = !crate::using_public_server() || self.direct == Some(true);
-            let quality = if config.custom_image_quality.is_empty() {
-                50
-            } else {
-                let mut quality = config.custom_image_quality[0];
-                if !allow_more && quality > 100 && quality != keys::CUSTOM_BITRATE_AUTO {
-                    quality = 50;
-                }
-                quality
-            };
+            let mut quality = Self::custom_quality_setting(&config);
+            if !allow_more
+                && quality > 100
+                && quality != keys::CUSTOM_BITRATE_AUTO
+                && Self::custom_bitrate_kbps(quality) == 0
+            {
+                quality = 50;
+            }
             msg.custom_image_quality = Self::custom_bitrate_wire_value(quality);
+            msg.video_bitrate_limit_kbps = Self::custom_bitrate_kbps(quality);
             #[cfg(feature = "flutter")]
             if let Some(custom_fps) = self.options.get("custom-fps") {
                 let mut custom_fps = custom_fps.parse().unwrap_or(30);
@@ -4240,9 +4252,36 @@ impl LoginConfigHandler {
     fn custom_bitrate_wire_value(image_quality: i32) -> i32 {
         if image_quality == keys::CUSTOM_BITRATE_AUTO {
             keys::CUSTOM_BITRATE_AUTO_FLAG | (50 << 8)
+        } else if Self::custom_bitrate_kbps(image_quality) != 0 {
+            50 << 8
         } else {
             image_quality << 8
         }
+    }
+
+    fn custom_bitrate_kbps(image_quality: i32) -> u32 {
+        let kbps = image_quality.saturating_sub(keys::CUSTOM_BITRATE_KBPS_BASE) as u32;
+        if (keys::MIN_VIDEO_BITRATE_KBPS..=keys::MAX_VIDEO_BITRATE_KBPS).contains(&kbps) {
+            kbps
+        } else {
+            0
+        }
+    }
+
+    fn custom_quality_setting(config: &PeerConfig) -> i32 {
+        config
+            .options
+            .get(keys::OPTION_CUSTOM_VIDEO_BITRATE)
+            .and_then(|value| value.parse::<i32>().ok())
+            .filter(|quality| {
+                *quality == keys::CUSTOM_BITRATE_AUTO || Self::custom_bitrate_kbps(*quality) != 0
+            })
+            .or_else(|| config.custom_image_quality.first().copied())
+            .unwrap_or(50)
+    }
+
+    pub(crate) fn custom_quality_setting_for_ui(&self) -> i32 {
+        Self::custom_quality_setting(&self.config)
     }
 
     /// Create a [`Message`] for saving custom image quality.
@@ -4250,13 +4289,23 @@ impl LoginConfigHandler {
         let mut misc = Misc::new();
         misc.set_option(OptionMessage {
             custom_image_quality: Self::custom_bitrate_wire_value(image_quality),
+            video_bitrate_limit_kbps: Self::custom_bitrate_kbps(image_quality),
             ..Default::default()
         });
         let mut msg_out = Message::new();
         msg_out.set_misc(misc);
         let mut config = self.load_config();
         config.image_quality = "custom".to_owned();
-        config.custom_image_quality = vec![image_quality as _];
+        if Self::custom_bitrate_kbps(image_quality) != 0 {
+            config.options.insert(
+                keys::OPTION_CUSTOM_VIDEO_BITRATE.to_owned(),
+                image_quality.to_string(),
+            );
+            config.custom_image_quality = vec![50];
+        } else {
+            config.options.remove(keys::OPTION_CUSTOM_VIDEO_BITRATE);
+            config.custom_image_quality = vec![image_quality];
+        }
         self.save_config(config);
         msg_out
     }

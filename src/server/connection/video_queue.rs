@@ -12,6 +12,7 @@ use super::video_service;
 
 const MAX_PENDING_FRAMES: usize = 8;
 const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
+const PRESSURED_FRAME_AGE: Duration = Duration::from_millis(50);
 
 pub(super) enum Event {
     Send(Instant, Arc<Message>),
@@ -28,6 +29,7 @@ pub(super) struct VideoQueue {
 struct Pending {
     messages: VecDeque<(Instant, Arc<Message>)>,
     recovery: HashMap<i32, Recovery>,
+    send_pressure: bool,
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     discarded_frames: usize,
 }
@@ -82,6 +84,10 @@ impl VideoQueue {
         }
     }
 
+    pub(super) fn take_send_pressure(&self) -> bool {
+        std::mem::take(&mut self.pending.lock().unwrap().send_pressure)
+    }
+
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     pub(super) fn len(&self) -> usize {
         self.pending.lock().unwrap().messages.len()
@@ -106,6 +112,7 @@ impl Pending {
             let Some(message::Union::VideoFrame(frame)) = &message.union else {
                 return true;
             };
+            self.send_pressure = true;
             self.recovery.insert(frame.display, Recovery::NeedsRefresh);
             #[cfg(all(windows, feature = "windows-video-diagnostics"))]
             {
@@ -118,7 +125,8 @@ impl Pending {
     }
 
     fn next(&mut self, conn_id: i32) -> Option<Event> {
-        if self.expired(Instant::now()) {
+        let now = Instant::now();
+        if self.expired(now) {
             self.discard_video(conn_id);
         }
         if let Some((&display, state)) = self
@@ -130,9 +138,11 @@ impl Pending {
             *state = Recovery::WaitingForKeyframe;
             return Some(Event::Refresh(display));
         }
-        self.messages
-            .pop_front()
-            .map(|(at, message)| Event::Send(at, message))
+        let (at, message) = self.messages.pop_front()?;
+        if message.has_video_frame() && now.duration_since(at) >= PRESSURED_FRAME_AGE {
+            self.send_pressure = true;
+        }
+        Some(Event::Send(at, message))
     }
 }
 
@@ -224,10 +234,14 @@ mod tests {
         queue.push(1, frame(1, 0, true));
         tokio::time::advance(MAX_FRAME_AGE).await;
         assert!(matches!(queue.recv(1).await, Event::Refresh(1)));
+        assert!(queue.take_send_pressure());
+        assert!(!queue.take_send_pressure());
 
         let other_display = frame(0, 1, false);
         queue.push(1, frame(1, 2, false));
         queue.push(1, other_display.clone());
+        tokio::time::advance(PRESSURED_FRAME_AGE).await;
         assert_sends(&queue, &other_display).await;
+        assert!(queue.take_send_pressure());
     }
 }

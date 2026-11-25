@@ -117,6 +117,7 @@ struct ParsedPeerInfo {
     idd_impl: String,
     support_view_camera: bool,
     support_terminal: bool,
+    separate_fps_feedback: bool,
     live_direct: bool,
     live_native: bool,
     live_direct_trickle: bool,
@@ -1772,10 +1773,14 @@ impl<T: InvokeUiSession> Remote<T> {
             }
             if Some(auto_fps) != last_auto_fps {
                 let mut misc = Misc::new();
-                misc.set_option(OptionMessage {
-                    custom_fps: auto_fps as _,
-                    ..Default::default()
-                });
+                if self.peer_info.separate_fps_feedback && !self.handler.is_view_camera() {
+                    misc.set_auto_adjust_fps(auto_fps as _);
+                } else {
+                    misc.set_option(OptionMessage {
+                        custom_fps: auto_fps as _,
+                        ..Default::default()
+                    });
+                }
                 let mut msg = Message::new();
                 msg.set_misc(misc);
                 // Send inline so a queued manual FPS update is applied after this decision.
@@ -2784,6 +2789,7 @@ impl<T: InvokeUiSession> Remote<T> {
     fn set_peer_info(&mut self, pi: &PeerInfo) {
         self.last_auto_fps = None;
         self.peer_info.platform = pi.platform.clone();
+        self.peer_info.separate_fps_feedback = pi.features.video_bitrate_limit_kbps;
 
         // Check features field for terminal support
         if let Some(features) = pi.features.as_ref() {
@@ -3446,6 +3452,7 @@ mod tests {
     #[tokio::test]
     async fn manual_fps_update_allows_the_same_automatic_limit_again() {
         let (mut remote, mut peer, mut far) = remote_and_peer().await;
+        remote.peer_info.separate_fps_feedback = true;
         let (video_sender, _video_receiver) = std::sync::mpsc::channel();
         remote.video_threads.insert(
             0,
@@ -3477,7 +3484,11 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let msg = Message::parse_from_bytes(&bytes).unwrap();
-            assert_eq!(msg.misc().option().custom_fps, expected);
+            if manual_fps.is_some() {
+                assert_eq!(msg.misc().option().custom_fps, expected);
+            } else {
+                assert_eq!(msg.misc().auto_adjust_fps(), expected as u32);
+            }
         }
     }
 }

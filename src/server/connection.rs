@@ -1239,6 +1239,10 @@ impl Connection {
                     }
                 }
                 _ = second_timer.tick() => {
+                    if conn.is_authed_remote_conn() {
+                        let pressure = video_queue.take_send_pressure();
+                        video_service::VIDEO_QOS.lock().unwrap().observe_video_send_pressure(id, pressure);
+                    }
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                     {
                         video_diagnostic.discarded(video_queue.take_discarded_frames());
@@ -2188,6 +2192,7 @@ impl Connection {
         pi.features = Some(Features {
             privacy_mode: privacy_mode::is_privacy_mode_supported(),
             fixed_screen_fps: cfg!(windows) && !self.view_camera && !self.terminal,
+            video_bitrate_limit_kbps: !self.terminal,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             terminal,
             ..Default::default()
@@ -3249,7 +3254,16 @@ impl Connection {
                     }
                     let new_delay = tm.elapsed().as_millis() as u32;
                     let mut qos = video_service::VIDEO_QOS.lock().unwrap();
-                    qos.user_video_delivery(self.inner.id(), t.delivered_video_kbps, t.delivered_video_fps, t.queued_video_percent);
+                    let fps = t
+                        .decoded_video_fps_plus_one
+                        .checked_sub(1)
+                        .map_or(t.delivered_video_fps, |decoded| decoded.min(t.delivered_video_fps));
+                    qos.user_video_delivery(
+                        self.inner.id(),
+                        t.delivered_video_kbps,
+                        fps,
+                        t.queued_video_percent,
+                    );
                     qos.user_network_delay(self.inner.id(), new_delay);
                     drop(qos);
                     self.network_delay = new_delay;
@@ -5076,7 +5090,15 @@ impl Connection {
                 video_service::VIDEO_QOS
                     .lock()
                     .unwrap()
-                    .user_image_quality(self.inner.id(), image_quality);
+                    .user_image_quality_with_limit(
+                        self.inner.id(),
+                        image_quality,
+                        if q == ImageQuality::NotSet {
+                            o.video_bitrate_limit_kbps
+                        } else {
+                            0
+                        },
+                    );
             }
         }
         if cfg!(windows) && o.fixed_screen_fps != 0 && self.is_authed_remote_conn() {
@@ -6152,6 +6174,7 @@ impl Connection {
         option.supported_decoding.is_some()
             && option.image_quality.enum_value() == Ok(ImageQuality::NotSet)
             && option.custom_image_quality == 0
+            && option.video_bitrate_limit_kbps == 0
             && option.custom_fps == 0
             && option.fixed_screen_fps == 0
             && Self::is_bool_option_not_set(option.lock_after_session_end)
@@ -6282,6 +6305,7 @@ impl Connection {
         if option.custom_image_quality >= 0 {
             scoped.custom_image_quality = option.custom_image_quality;
         }
+        scoped.video_bitrate_limit_kbps = option.video_bitrate_limit_kbps;
         if option.custom_fps >= 0 {
             scoped.custom_fps = option.custom_fps;
         }
@@ -6315,6 +6339,7 @@ impl Connection {
     fn option_has_non_terminal_login_field(option: &OptionMessage) -> bool {
         option.image_quality.enum_value() != Ok(ImageQuality::NotSet)
             || option.custom_image_quality != 0
+            || option.video_bitrate_limit_kbps != 0
             || option.custom_fps != 0
             || option.fixed_screen_fps != 0
             || option.supported_decoding.is_some()
