@@ -904,6 +904,7 @@ impl InvokeUiSession for FlutterHandler {
         for ref f in pi.features.iter() {
             features.insert("privacy_mode", f.privacy_mode);
             features.insert("fixed_screen_fps", f.fixed_screen_fps);
+            features.insert("video_bitrate_limit_kbps", f.video_bitrate_limit_kbps);
         }
         // compatible with 1.1.9
         if get_version_number(&pi.version) < get_version_number("1.2.0") {

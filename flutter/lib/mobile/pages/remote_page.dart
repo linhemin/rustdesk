@@ -1025,8 +1025,11 @@ class _RemotePageState extends State<RemotePage>
       _lastNativePerformance = const {};
       _syncNativePresentation();
       await gFFI.canvasModel.setMobileHeightFit(active);
-      if (active && mounted) {
-        if (_nativeFixedFps) await _nativeSession.configureVideoTexture(true);
+      if (active && mounted && revision == _nativeSessionRevision) {
+        final nativeDecode = await _nativeSession.configureVideoTexture(true);
+        if (mounted && revision == _nativeSessionRevision && nativeDecode) {
+          bind.sessionChangePreferCodec(sessionId: sessionId);
+        }
         _syncNativePerformance();
       }
     }
@@ -1291,7 +1294,6 @@ class _RemotePageState extends State<RemotePage>
         !gFFI.ffiModel.pi.features.fixedScreenFps) return;
     _nativePerformanceBusy = true;
     try {
-      if (enabled) await _nativeSession.configureVideoTexture(true);
       if (!mounted) return;
       await bind.sessionToggleOption(sessionId: sessionId, value: 'fixed-screen-fps');
       _nativeFixedFps = _nativeOption('fixed-screen-fps');
@@ -1299,9 +1301,6 @@ class _RemotePageState extends State<RemotePage>
         if (_nativePerformanceTarget != 60) {
           await bind.sessionSetCustomFps(sessionId: sessionId, fps: _nativePerformanceTarget);
         }
-      } else {
-        await _nativeSession.configureVideoTexture(false);
-        if (mounted) setState(() => _nativeVideoTexture = null);
       }
       _syncNativePerformance();
     } finally {
@@ -1343,6 +1342,9 @@ class _RemotePageState extends State<RemotePage>
     if (!mounted) return const [];
     final codecs = await toolbarCodec(context, widget.id, gFFI);
     if (!mounted) return const [];
+    final encoders = await toolbarCodecBackend(gFFI, encoder: true);
+    final decoders = await toolbarCodecBackend(gFFI, encoder: false);
+    if (!mounted) return const [];
     final remoteCursor = await toolbarCursor(context, widget.id, gFFI);
     if (!mounted) return const [];
     final toggles = await toolbarDisplayToggle(context, widget.id, gFFI);
@@ -1359,7 +1361,12 @@ class _RemotePageState extends State<RemotePage>
         await canvas.updateViewStyle();
       });
     }
-    for (final group in [('画质', qualities), ('编码', codecs)]) {
+    for (final group in [
+      ('画质', qualities),
+      ('编码格式', codecs),
+      (translate('Encoder'), encoders),
+      (translate('Decoder'), decoders),
+    ]) {
       for (final item in group.$2) {
         final title = item.child;
         if (title is! Text || title.data == null || item.onChanged == null) {
@@ -2808,6 +2815,8 @@ void showOptions(
   List<TRadioMenu<String>> imageQualityRadios =
       await toolbarImageQuality(context, id, gFFI);
   List<TRadioMenu<String>> codecRadios = await toolbarCodec(context, id, gFFI);
+  final encoderRadios = await toolbarCodecBackend(gFFI, encoder: true);
+  final decoderRadios = await toolbarCodecBackend(gFFI, encoder: false);
   List<TToggleMenu> cursorToggles = await toolbarCursor(context, id, gFFI);
   List<TToggleMenu> displayToggles =
       await toolbarDisplayToggle(context, id, gFFI);
@@ -2836,6 +2845,8 @@ void showOptions(
         (imageQualityRadios.isNotEmpty ? imageQualityRadios[0].groupValue : '')
             .obs;
     var codec = (codecRadios.isNotEmpty ? codecRadios[0].groupValue : '').obs;
+    final encoder = (encoderRadios.firstOrNull?.groupValue ?? '').obs;
+    final decoder = (decoderRadios.firstOrNull?.groupValue ?? '').obs;
     final radios = [
       for (var e in viewStyleRadios)
         Obx(() => getRadio<String>(
@@ -2882,6 +2893,20 @@ void showOptions(
                   }
                 : null)),
       if (codecRadios.isNotEmpty) const Divider(color: MyTheme.border),
+      for (final (label, options, selected) in [
+        ('Encoder', encoderRadios, encoder),
+        ('Decoder', decoderRadios, decoder),
+      ])
+        if (options.isNotEmpty) ...[
+          Text(translate(label)),
+          for (final item in options)
+            Obx(() => getRadio<String>(
+                item.child, item.value, selected.value, (value) {
+              item.onChanged?.call(value);
+              if (value != null) selected.value = value;
+            })),
+          const Divider(color: MyTheme.border),
+        ],
       ListTile(
         contentPadding: EdgeInsets.zero,
         visualDensity: VisualDensity.compact,

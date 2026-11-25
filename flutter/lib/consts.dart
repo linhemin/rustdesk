@@ -153,6 +153,8 @@ const String kOptionTouchMode = "touch-mode";
 const String kOptionI444 = "i444";
 const String kOptionSwapLeftRightMouse = "swap-left-right-mouse";
 const String kOptionCodecPreference = "codec-preference";
+const String kOptionVideoEncoderBackend = "video-encoder-backend";
+const String kOptionVideoDecoderBackend = "video-decoder-backend";
 const String kOptionRemoteMenubarDragLeft = "remote-menubar-drag-left";
 const String kOptionRemoteMenubarDragRight = "remote-menubar-drag-right";
 const String kOptionRemoteMenubarEdge = "remote-menubar-edge";
@@ -294,6 +296,9 @@ const double kDefaultQuality = 50;
 const double kMaxQuality = 100;
 const double kMaxMoreQuality = 2000;
 const double kAutoBitrate = 2001;
+const int kBitrateKbpsBase = 1 << 22;
+const int kDefaultBitrateKbps = 8000;
+const String kKeyCustomVideoBitrate = 'custom-video-bitrate';
 
 // trackpad speed
 const String kKeyTrackpadSpeed = 'trackpad-speed';

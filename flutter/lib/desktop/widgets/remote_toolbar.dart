@@ -1873,6 +1873,8 @@ class _DisplayMenuState extends State<_DisplayMenu> {
         scrollStyle(state, colorScheme),
         imageQuality(),
         codec(),
+        if (!isWeb) codecBackend(encoder: true),
+        if (!isWeb) codecBackend(encoder: false),
         MenuButton(
           ffi: ffi,
           child: Text(translate('Video settings')),
@@ -2116,6 +2118,25 @@ class _DisplayMenuState extends State<_DisplayMenu> {
                       groupValue: e.groupValue,
                       onChanged: e.onChanged,
                       child: e.child,
+                      ffi: ffi))
+                  .toList());
+        });
+  }
+
+  codecBackend({required bool encoder}) {
+    return futureBuilder(
+        future: toolbarCodecBackend(ffi, encoder: encoder),
+        hasData: (data) {
+          final radios = data as List<TRadioMenu<String>>;
+          return _SubmenuButton(
+              ffi: ffi,
+              child: Text(translate(encoder ? 'Encoder' : 'Decoder')),
+              menuChildren: radios
+                  .map((item) => RdoMenuButton(
+                      value: item.value,
+                      groupValue: item.groupValue,
+                      onChanged: item.onChanged,
+                      child: item.child,
                       ffi: ffi))
                   .toList());
         });

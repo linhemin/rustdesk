@@ -1488,6 +1488,8 @@ class FfiModel with ChangeNotifier {
       Map<String, dynamic> features = json.decode(evt['features']);
       _pi.features.privacyMode = features['privacy_mode'] == true;
       _pi.features.fixedScreenFps = features['fixed_screen_fps'] == true;
+      _pi.features.videoBitrateLimitKbps =
+          features['video_bitrate_limit_kbps'] == true;
       if (!isCache) {
         handleResolutions(peerId, evt["resolutions"]);
       }
@@ -4708,6 +4710,7 @@ class Resolution {
 class Features {
   bool privacyMode = false;
   bool fixedScreenFps = false;
+  bool videoBitrateLimitKbps = false;
 }
 
 const kInvalidDisplayIndex = -1;

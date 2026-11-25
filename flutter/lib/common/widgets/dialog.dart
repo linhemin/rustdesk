@@ -18,7 +18,8 @@ import '../../common.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'address_book.dart';
-import 'setting_widgets.dart' show TrackpadSpeedWidget;
+import 'setting_widgets.dart'
+    show BitrateLimitDropdown, TrackpadSpeedWidget, savedBitrateKbps;
 
 void clientClose(SessionID sessionId, FFI ffi) async {
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
@@ -1852,7 +1853,9 @@ Future<void> customImageQualityDialog(
   final peer = ffi.ffiModel.pi;
   final publicRelay = await bind.mainIsUsingPublicServer() && direct != true;
   final showFps = !publicRelay && versionCmp(peer.version, '1.2.0') >= 0;
-  final showMore = !publicRelay && versionCmp(peer.version, '1.2.2') >= 0;
+  final actualBitrate = !isWeb && peer.features.videoBitrateLimitKbps;
+  final showMore =
+      !actualBitrate && !publicRelay && versionCmp(peer.version, '1.2.2') >= 0;
   final canFixFps = !isWeb &&
       ffi.connType == ConnType.defaultConn &&
       peer.features.fixedScreenFps;
@@ -1862,6 +1865,8 @@ Future<void> customImageQualityDialog(
           ?.firstOrNull;
   final initialQuality = savedQuality?.toDouble() ?? kDefaultQuality;
   final initialUnlimited = !isWeb && initialQuality == kAutoBitrate;
+  final initialBitrateKbps = savedBitrateKbps(savedQuality);
+  var bitrateKbps = initialBitrateKbps;
   final maxAllowed = showMore ? kMaxMoreQuality : kMaxQuality;
   var bitrate = initialQuality >= kMinQuality && initialQuality <= maxAllowed
       ? initialQuality
@@ -1919,11 +1924,18 @@ Future<void> customImageQualityDialog(
             !fixed && showFps && (fps != initialFps || fromCustomPreset);
         if (fromCustomPreset ||
             unlimited != initialUnlimited ||
-            (!unlimited && bitrate != initialBitrate) ||
-            changeFps) {
+            (!unlimited &&
+                (actualBitrate
+                    ? bitrateKbps != initialBitrateKbps
+                    : bitrate != initialBitrate)) ||
+            (!actualBitrate && changeFps)) {
+          final value = unlimited
+              ? kAutoBitrate.round()
+              : actualBitrate
+                  ? kBitrateKbpsBase + (bitrateKbps ?? kDefaultBitrateKbps)
+                  : bitrate.round();
           await bind.sessionSetCustomImageQuality(
-              sessionId: sessionId,
-              value: (unlimited ? kAutoBitrate : bitrate).round());
+              sessionId: sessionId, value: value);
         }
         if (changeFps) {
           await bind.sessionSetCustomFps(
@@ -1945,15 +1957,23 @@ Future<void> customImageQualityDialog(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           ListTile(
               title: Text(translate('Bitrate limit')),
-              trailing: unlimited ? null : Text('${bitrate.round()}%')),
-          Slider(
-              value: bitrate,
-              min: kMinQuality,
-              max: more ? kMaxMoreQuality : kMaxQuality,
-              divisions: more ? 199 : 18,
-              onChanged: busy || unlimited
-                  ? null
-                  : (value) => setState(() => bitrate = value)),
+              trailing: actualBitrate
+                  ? BitrateLimitDropdown(
+                      kbps: bitrateKbps,
+                      onChanged: busy || unlimited
+                          ? null
+                          : (value) => setState(() => bitrateKbps = value),
+                    )
+                  : (unlimited ? null : Text('${bitrate.round()}%'))),
+          if (!actualBitrate)
+            Slider(
+                value: bitrate,
+                min: kMinQuality,
+                max: more ? kMaxMoreQuality : kMaxQuality,
+                divisions: more ? 199 : 18,
+                onChanged: busy || unlimited
+                    ? null
+                    : (value) => setState(() => bitrate = value)),
           if (!isWeb)
             CheckboxListTile(
                 title: Text(translate('No bitrate cap')),

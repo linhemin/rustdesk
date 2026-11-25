@@ -876,9 +876,12 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
   final sessionId = ffi.sessionId;
   final alternativeCodecs =
       await bind.sessionAlternativeCodecs(sessionId: sessionId);
-  final groupValue = await bind.sessionGetOption(
+  final savedCodec = await bind.sessionGetOption(
           sessionId: sessionId, arg: kOptionCodecPreference) ??
       'auto';
+  final groupValue = ['software', 'prefer-hardware', ''].contains(savedCodec)
+      ? 'auto'
+      : savedCodec;
   final List<bool> codecs = [];
   try {
     final Map codecsJson = jsonDecode(alternativeCodecs);
@@ -901,6 +904,16 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
   }
   onChanged(String? value) async {
     if (value == null) return;
+    if (!isWeb && (savedCodec == 'software' || savedCodec == 'prefer-hardware')) {
+      final backend = await bind.sessionGetOption(
+          sessionId: sessionId, arg: kOptionVideoEncoderBackend);
+      if (backend == null || backend.isEmpty) {
+        await bind.sessionPeerOption(
+            sessionId: sessionId,
+            name: kOptionVideoEncoderBackend,
+            value: savedCodec == 'software' ? 'software' : 'hardware');
+      }
+    }
     await bind.sessionPeerOption(
         sessionId: sessionId, name: kOptionCodecPreference, value: value);
     bind.sessionChangePreferCodec(sessionId: sessionId);
@@ -923,16 +936,53 @@ Future<List<TRadioMenu<String>>> toolbarCodec(
   }
   return _registerRadioMenuShortcuts(ffi, [
     radio(autoLabel, 'auto', true, kShortcutActionCodecAuto),
-    if (!isWeb) ...[
-      radio(translate('Prefer hardware encoding'), 'prefer-hardware', true),
-      radio(translate('Software encoding'), 'software', true),
-    ],
     if (codecs[0]) radio('VP8', 'vp8', codecs[0], kShortcutActionCodecVp8),
     radio('VP9', 'vp9', true, kShortcutActionCodecVp9),
     if (codecs[1]) radio('AV1', 'av1', codecs[1], kShortcutActionCodecAv1),
     if (codecs[2]) radio('H264', 'h264', codecs[2], kShortcutActionCodecH264),
     if (codecs[3]) radio('H265', 'h265', codecs[3], kShortcutActionCodecH265),
   ], ownedActionIds: _kToolbarCodecActionIds);
+}
+
+Future<List<TRadioMenu<String>>> toolbarCodecBackend(FFI ffi,
+    {required bool encoder}) async {
+  if (isWeb) return [];
+  final sessionId = ffi.sessionId;
+  final key = encoder ? kOptionVideoEncoderBackend : kOptionVideoDecoderBackend;
+  var current = await bind.sessionGetOption(sessionId: sessionId, arg: key);
+  if (encoder && (current == null || current.isEmpty)) {
+    final legacy = await bind.sessionGetOption(
+        sessionId: sessionId, arg: kOptionCodecPreference);
+    if (legacy == 'software') current = 'software';
+    if (legacy == 'prefer-hardware') current = 'hardware';
+  }
+  final groupValue = switch (current) {
+    'software' => 'software',
+    'hardware' => 'hardware',
+    _ => encoder ? 'auto' : 'hardware',
+  };
+  return [
+    for (final (value, label) in [
+      ('auto', 'Auto'),
+      (
+        'hardware',
+        encoder ? 'Prefer hardware encoding' : 'Prefer hardware decoding'
+      ),
+      ('software', encoder ? 'Software encoding' : 'Software decoding'),
+    ])
+      if (encoder || value != 'auto')
+        TRadioMenu<String>(
+          child: Text(translate(label)),
+          value: value,
+          groupValue: groupValue,
+          onChanged: (value) async {
+            if (value == null) return;
+            await bind.sessionPeerOption(
+                sessionId: sessionId, name: key, value: value);
+            if (encoder) bind.sessionChangePreferCodec(sessionId: sessionId);
+          },
+        ),
+  ];
 }
 
 Future<List<TToggleMenu>> toolbarCursor(

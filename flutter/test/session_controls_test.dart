@@ -3,6 +3,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/remote_input.dart';
+import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/mobile/session_canvas_drag.dart';
 import 'package:flutter_hbb/mobile/widgets/session_controls.dart';
@@ -104,6 +105,24 @@ class _TouchImageModel extends Fake implements ImageModel {
 class _TouchImage extends Fake implements ui.Image {}
 
 void main() {
+  testWidgets('video bitrate list selects an absolute rate in kbps',
+      (tester) async {
+    int? selectedKbps;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: BitrateLimitDropdown(
+          kbps: 8000,
+          onChanged: (value) => selectedKbps = value,
+        ),
+      ),
+    ));
+    await tester.tap(find.text('8 Mbps'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('10 Mbps').hitTestable());
+    await tester.pumpAndSettle();
+    expect(selectedKbps, 10000);
+  });
+
   setUpAll(() {
     isTest = true;
     platformFFI.setBindingForTesting(_Binding());

@@ -6,15 +6,70 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
 
+int? savedBitrateKbps(num? quality) {
+  final kbps = (quality?.toInt() ?? 0) - kBitrateKbpsBase;
+  return kbps >= 500 && kbps <= 200000 ? kbps : null;
+}
+
+class BitrateLimitDropdown extends StatelessWidget {
+  const BitrateLimitDropdown({super.key, required this.kbps, this.onChanged});
+
+  final int? kbps;
+  final ValueChanged<int?>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final rates = {
+      500,
+      1000,
+      2000,
+      3000,
+      5000,
+      8000,
+      10000,
+      15000,
+      20000,
+      25000,
+      30000,
+      40000,
+      50000,
+      60000,
+      75000,
+      100000,
+      125000,
+      150000,
+      200000,
+      if (kbps != null) kbps!,
+    }.toList()
+      ..sort();
+    return DropdownButton<int>(
+      value: kbps,
+      hint: const Text('—'),
+      onChanged: onChanged,
+      items: [
+        for (final rate in rates)
+          DropdownMenuItem(
+            value: rate,
+            child:
+                Text('${rate % 1000 == 0 ? rate ~/ 1000 : rate / 1000} Mbps'),
+          ),
+      ],
+    );
+  }
+}
+
 customImageQualityWidget(
     {required double initQuality,
     required double initFps,
     required Function(double)? setQuality,
     required Function(double)? setFps,
     required bool showFps,
-    required bool showMoreQuality}) {
+    required bool showMoreQuality,
+    required bool actualBitrate}) {
   final autoBitrate = (!isWeb && initQuality == kAutoBitrate).obs;
-  if (autoBitrate.value || initQuality < kMinQuality ||
+  final bitrateKbps = RxnInt(savedBitrateKbps(initQuality));
+  if (autoBitrate.value ||
+      initQuality < kMinQuality ||
       initQuality > (showMoreQuality ? kMaxMoreQuality : kMaxQuality)) {
     initQuality = kDefaultQuality;
   }
@@ -51,55 +106,72 @@ customImageQualityWidget(
 
   return Column(
     children: [
-      Obx(() => Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: Slider(
-                  value: qualityValue.value,
-                  min: kMinQuality,
-                  max: moreQualityChecked.value ? kMaxMoreQuality : kMaxQuality,
-                  divisions: moreQualityChecked.value
-                      ? ((kMaxMoreQuality - kMinQuality) / 10).round()
-                      : ((kMaxQuality - kMinQuality) / 5).round(),
-                  onChanged: setQuality == null || autoBitrate.value
-                      ? null
-                      : (double value) async {
-                          qualityValue.value = value;
-                          debouncerQuality.value = value;
-                        },
-                ),
+      if (actualBitrate)
+        Obx(() => ListTile(
+              title: Text(translate('Bitrate limit')),
+              trailing: BitrateLimitDropdown(
+                kbps: bitrateKbps.value,
+                onChanged: autoBitrate.value || setQuality == null
+                    ? null
+                    : (value) {
+                        if (value == null) return;
+                        bitrateKbps.value = value;
+                        setQuality(kBitrateKbpsBase + value.toDouble());
+                      },
               ),
-              Expanded(
-                  flex: 1,
-                  child: Text(
-                    '${qualityValue.value.round()}%',
-                    style: const TextStyle(fontSize: 15),
-                  )),
-              Expanded(
-                  flex: isMobile ? 2 : 1,
-                  child: Text(
-                    translate('Bitrate'),
-                    style: const TextStyle(fontSize: 15),
-                  )),
-              // mobile doesn't have enough space
-              if (showMoreQuality && !isMobile)
+            )),
+      if (!actualBitrate)
+        Obx(() => Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Slider(
+                    value: qualityValue.value,
+                    min: kMinQuality,
+                    max: moreQualityChecked.value
+                        ? kMaxMoreQuality
+                        : kMaxQuality,
+                    divisions: moreQualityChecked.value
+                        ? ((kMaxMoreQuality - kMinQuality) / 10).round()
+                        : ((kMaxQuality - kMinQuality) / 5).round(),
+                    onChanged: setQuality == null || autoBitrate.value
+                        ? null
+                        : (double value) async {
+                            qualityValue.value = value;
+                            debouncerQuality.value = value;
+                          },
+                  ),
+                ),
                 Expanded(
                     flex: 1,
-                    child: Row(
-                      children: [
-                        Checkbox(
-                          value: moreQualityChecked.value,
-                          onChanged: autoBitrate.value ? null : onMoreChanged,
-                        ),
-                        Expanded(
-                          child: Text(translate('More')),
-                        )
-                      ],
-                    ))
-            ],
-          )),
-      if (showMoreQuality && isMobile)
+                    child: Text(
+                      '${qualityValue.value.round()}%',
+                      style: const TextStyle(fontSize: 15),
+                    )),
+                Expanded(
+                    flex: isMobile ? 2 : 1,
+                    child: Text(
+                      translate('Bitrate'),
+                      style: const TextStyle(fontSize: 15),
+                    )),
+                // mobile doesn't have enough space
+                if (showMoreQuality && !isMobile)
+                  Expanded(
+                      flex: 1,
+                      child: Row(
+                        children: [
+                          Checkbox(
+                            value: moreQualityChecked.value,
+                            onChanged: autoBitrate.value ? null : onMoreChanged,
+                          ),
+                          Expanded(
+                            child: Text(translate('More')),
+                          )
+                        ],
+                      ))
+              ],
+            )),
+      if (!actualBitrate && showMoreQuality && isMobile)
         Obx(() => Row(
               children: [
                 Expanded(
@@ -125,7 +197,14 @@ customImageQualityWidget(
                   : (value) {
                       if (value == null) return;
                       autoBitrate.value = value;
-                      setQuality(value ? kAutoBitrate : qualityValue.value);
+                      if (actualBitrate && !value) {
+                        bitrateKbps.value ??= kDefaultBitrateKbps;
+                      }
+                      setQuality(value
+                          ? kAutoBitrate
+                          : actualBitrate
+                              ? kBitrateKbpsBase + bitrateKbps.value!.toDouble()
+                              : qualityValue.value);
                     },
               controlAffinity: ListTileControlAffinity.leading,
             )),
@@ -169,10 +248,15 @@ customImageQualitySetting() {
   final qualityKey = 'custom_image_quality';
   final fpsKey = 'custom-fps';
 
+  final legacyQuality =
+      double.tryParse(bind.mainGetUserDefaultOption(key: qualityKey)) ??
+          kDefaultQuality;
+  final actualBitrate = !isWeb && !isOptionFixed(qualityKey);
+  final settingKey = actualBitrate ? kKeyCustomVideoBitrate : qualityKey;
   final initQuality =
-      (double.tryParse(bind.mainGetUserDefaultOption(key: qualityKey)) ??
-          kDefaultQuality);
-  final isQuanlityFixed = isOptionFixed(qualityKey);
+      double.tryParse(bind.mainGetUserDefaultOption(key: settingKey)) ??
+          legacyQuality;
+  final isQualityFixed = isOptionFixed(settingKey);
   final initFps =
       (double.tryParse(bind.mainGetUserDefaultOption(key: fpsKey)) ??
           kDefaultFps);
@@ -181,11 +265,11 @@ customImageQualitySetting() {
   return customImageQualityWidget(
       initQuality: initQuality,
       initFps: initFps,
-      setQuality: isQuanlityFixed
+      setQuality: isQualityFixed
           ? null
           : (v) {
               bind.mainSetUserDefaultOption(
-                  key: qualityKey, value: v.toString());
+                  key: settingKey, value: v.round().toString());
             },
       setFps: isFpsFixed
           ? null
@@ -193,7 +277,8 @@ customImageQualitySetting() {
               bind.mainSetUserDefaultOption(key: fpsKey, value: v.toString());
             },
       showFps: true,
-      showMoreQuality: true);
+      showMoreQuality: true,
+      actualBitrate: actualBitrate);
 }
 
 List<Widget> ServerConfigImportExportWidgets(

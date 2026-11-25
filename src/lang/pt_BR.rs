@@ -884,5 +884,9 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Video settings", ""),
         ("Bitrate limit", ""),
         ("Target frame rate", ""),
+        ("Encoder", ""),
+        ("Decoder", ""),
+        ("Prefer hardware decoding", ""),
+        ("Software decoding", ""),
     ].iter().cloned().collect();
 }
