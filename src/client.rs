@@ -3666,6 +3666,7 @@ pub struct LoginConfigHandler {
     pub other_server: Option<(String, String, String)>,
     pub custom_fps: Arc<Mutex<Option<usize>>>,
     pub fixed_screen_fps: Option<i32>,
+    controller_display_fps: Option<i32>,
     pub adapter_luid: Option<i64>,
     pub mark_unsupported: Vec<CodecFormat>,
     #[cfg(all(windows, feature = "hwcodec"))]
@@ -4093,7 +4094,13 @@ impl LoginConfigHandler {
                 return None;
             }
             self.fixed_screen_fps = self.fixed_screen_fps.is_none().then_some(60);
-            option.fixed_screen_fps = self.fixed_screen_fps.unwrap_or(-1);
+            option.fixed_screen_fps = self.fixed_screen_fps
+                .map_or(-1, |fps| self.fps_for_controller_display(fps));
+            if self.fixed_screen_fps.is_none() {
+                if let Some(fps) = *self.custom_fps.lock().unwrap() {
+                    option.custom_fps = self.normal_fps_for_path(fps as i32);
+                }
+            }
             option.supported_decoding = Some(self.get_supported_decoding()).into();
         } else if name == "show-quality-monitor" {
             config.show_quality_monitor.v = !config.show_quality_monitor.v;
@@ -4208,15 +4215,16 @@ impl LoginConfigHandler {
             }
             msg.custom_image_quality = Self::custom_bitrate_wire_value(quality);
             msg.video_bitrate_limit_kbps = Self::custom_bitrate_kbps(quality);
-            #[cfg(feature = "flutter")]
-            if let Some(custom_fps) = self.options.get("custom-fps") {
-                let mut custom_fps = custom_fps.parse().unwrap_or(30);
-                if !allow_more && custom_fps > 30 {
-                    custom_fps = 30;
-                }
-                msg.custom_fps = custom_fps;
-                *self.custom_fps.lock().unwrap() = Some(custom_fps as _);
-            }
+        }
+        #[cfg(feature = "flutter")]
+        if self.conn_type == ConnType::DEFAULT_CONN
+            || (q == "custom" && self.options.contains_key(keys::OPTION_CUSTOM_FPS))
+        {
+            let mut session_fps = self.custom_fps.lock().unwrap();
+            let requested = session_fps.map(|fps| fps as i32)
+                .unwrap_or_else(|| self.configured_screen_fps());
+            *session_fps = Some(requested as usize);
+            msg.custom_fps = self.normal_fps_for_path(requested);
         }
         let view_only = self.get_toggle_option("view-only");
         if view_only {
@@ -4246,7 +4254,8 @@ impl LoginConfigHandler {
         if view_only || self.get_toggle_option("disable-clipboard") {
             msg.disable_clipboard = BoolOption::Yes.into();
         }
-        msg.fixed_screen_fps = self.fixed_screen_fps.unwrap_or_default();
+        msg.fixed_screen_fps = self.fixed_screen_fps
+            .map_or(0, |fps| self.fps_for_controller_display(fps));
         msg.supported_decoding = MessageField::some(self.get_supported_decoding());
         Some(msg)
     }
@@ -4476,6 +4485,68 @@ impl LoginConfigHandler {
         self.save_config(config);
     }
 
+    #[cfg(feature = "flutter")]
+    fn configured_screen_fps(&self) -> i32 {
+        self.options
+            .get(keys::OPTION_CUSTOM_FPS)
+            .cloned()
+            .unwrap_or_else(|| config::UserDefaultConfig::load().get(keys::OPTION_CUSTOM_FPS))
+            .parse()
+            .ok()
+            .filter(|fps| (5..=120).contains(fps))
+            .unwrap_or(120)
+    }
+
+    pub(super) fn fps_for_controller_display(&self, fps: i32) -> i32 {
+        self.controller_display_fps.map_or(fps, |limit| fps.min(limit))
+    }
+
+    #[cfg(feature = "flutter")]
+    pub(crate) fn update_controller_display_fps(&mut self, limit: Option<i32>) -> Option<Message> {
+        if self.conn_type != ConnType::DEFAULT_CONN || self.controller_display_fps == limit {
+            return None;
+        }
+        let fixed = self.fixed_screen_fps.is_some();
+        let requested = self.fixed_screen_fps.or_else(|| {
+            self.custom_fps.lock().unwrap().map(|fps| fps as i32)
+        });
+        let effective = |lc: &Self, fps| {
+            if fixed {
+                lc.fps_for_controller_display(fps)
+            } else {
+                lc.normal_fps_for_path(fps)
+            }
+        };
+        let previous = requested.map(|fps| effective(self, fps));
+        self.controller_display_fps = limit;
+        let fps = requested?;
+        (previous != Some(effective(self, fps))).then(|| self.set_custom_fps(fps, false))
+    }
+
+    pub(super) fn normal_fps_for_path(&self, fps: i32) -> i32 {
+        let fps = self.fps_for_controller_display(fps);
+        if fps > 30 && self.direct != Some(true) && crate::using_public_server() {
+            30
+        } else {
+            fps
+        }
+    }
+
+    fn update_live_path_fps(&mut self, direct: bool) -> Option<Message> {
+        let previous = self.direct.replace(direct);
+        if previous == Some(direct)
+            || self.conn_type != ConnType::DEFAULT_CONN
+            || self.fixed_screen_fps.is_some()
+        {
+            return None;
+        }
+        let requested = (*self.custom_fps.lock().unwrap())? as i32;
+        if self.fps_for_controller_display(requested) <= 30 || !crate::using_public_server() {
+            return None;
+        }
+        Some(self.set_custom_fps(requested, false))
+    }
+
     /// Create a [`Message`] for saving custom fps.
     ///
     /// # Arguments
@@ -4488,15 +4559,16 @@ impl LoginConfigHandler {
             let target = fps.clamp(15, 120);
             self.fixed_screen_fps = Some(target);
             misc.set_option(OptionMessage {
-                fixed_screen_fps: target,
+                fixed_screen_fps: self.fps_for_controller_display(target),
                 ..Default::default()
             });
             let mut msg = Message::new();
             msg.set_misc(misc);
             return msg;
         }
+        let fps = fps.clamp(5, 120);
         misc.set_option(OptionMessage {
-            custom_fps: fps,
+            custom_fps: self.normal_fps_for_path(fps),
             ..Default::default()
         });
         let mut msg_out = Message::new();
@@ -4513,6 +4585,10 @@ impl LoginConfigHandler {
     }
 
     pub fn get_option(&self, k: &str) -> String {
+        #[cfg(feature = "flutter")]
+        if k == keys::OPTION_CUSTOM_FPS && self.conn_type == ConnType::DEFAULT_CONN {
+            return self.configured_screen_fps().to_string();
+        }
         if k == keys::OPTION_FIXED_SCREEN_FPS {
             return self.fixed_screen_fps.map_or_else(String::new, |fps| fps.to_string());
         }
@@ -6269,6 +6345,63 @@ pub fn check_if_retry(msgtype: &str, title: &str, text: &str, retry_for_relay: b
                 && !text.to_lowercase().contains("restricted")
                 && !text.to_lowercase().contains("incoming only")
                 && !text.to_lowercase().contains("not allowed")))
+}
+
+#[cfg(all(test, feature = "flutter"))]
+mod screen_fps_request_tests {
+    use super::*;
+
+    #[test]
+    fn screen_limit_changes_the_wire_request_and_preserves_the_user_choice() {
+        let mut lc = LoginConfigHandler::default();
+        lc.direct = Some(true);
+        lc.config.options.insert(keys::OPTION_CUSTOM_FPS.into(), "120".into());
+        assert!(lc.update_controller_display_fps(Some(60)).is_none());
+        assert_eq!(lc.get_option_message(true).unwrap().custom_fps, 60);
+        let change = lc.update_controller_display_fps(Some(120)).unwrap();
+        assert_eq!(change.misc().option().custom_fps, 120);
+        lc.fixed_screen_fps = Some(90);
+        let change = lc.update_controller_display_fps(Some(60)).unwrap();
+        assert_eq!(change.misc().option().fixed_screen_fps, 60);
+        let change = lc.update_controller_display_fps(None).unwrap();
+        assert_eq!(change.misc().option().fixed_screen_fps, 90);
+        assert_eq!(lc.get_option(keys::OPTION_CUSTOM_FPS), "120");
+    }
+
+    #[test]
+    fn login_sends_the_saved_frame_rate_for_each_quality_preset() {
+        let mut lc = LoginConfigHandler::default();
+        lc.id = Uuid::new_v4().to_string();
+        lc.direct = Some(true);
+        for fps in [30, 60, 120] {
+            lc.config.options.insert(keys::OPTION_CUSTOM_FPS.into(), fps.to_string());
+            *lc.custom_fps.lock().unwrap() = None;
+            for preset in ["best", "balanced", "low", "custom"] {
+                lc.config.image_quality = preset.into();
+                assert_eq!(lc.get_option_message(true).unwrap().custom_fps, fps, "{preset}");
+            }
+        }
+    }
+
+    #[test]
+    fn switching_quality_keeps_the_current_normal_frame_rate() {
+        let session = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
+        let id = Uuid::new_v4().to_string();
+        let (tx, mut rx) = unbounded_channel();
+        *session.sender.write().unwrap() = Some(tx);
+        {
+            let mut lc = session.lc.write().unwrap();
+            lc.id = id.clone();
+            lc.direct = Some(true);
+            lc.set_custom_fps(60, false);
+        }
+        session.save_image_quality("best".into());
+        PeerConfig::remove(&id);
+        let Data::Message(msg) = rx.try_recv().unwrap() else { panic!("expected quality option"); };
+        assert_eq!(msg.misc().option().image_quality.enum_value(), Ok(ImageQuality::Best));
+        assert!(rx.try_recv().is_err(), "unexpected FPS override after choosing Best");
+        assert_eq!(session.lc.read().unwrap().get_option_message(true).unwrap().custom_fps, 60);
+    }
 }
 
 #[cfg(test)]

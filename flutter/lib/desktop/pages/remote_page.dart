@@ -149,6 +149,12 @@ class _RemotePageState extends State<RemotePage>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ffi.setControllerView(View.of(context));
+  }
+
+  @override
   void initState() {
     super.initState();
     _ffi = FFI(widget.sessionId);

@@ -21,6 +21,30 @@
 
 namespace {
 
+void RegisterDisplayRefreshRate(flutter::FlutterViewController* controller) {
+  flutter::MethodChannel<> channel(controller->engine()->messenger(),
+      "org.rustdesk.rustdesk/display", &flutter::StandardMethodCodec::GetInstance());
+  const HWND window = controller->view()->GetNativeWindow();
+  channel.SetMethodCallHandler([window](const flutter::MethodCall<>& call,
+                                         std::unique_ptr<flutter::MethodResult<>> result) {
+    if (call.method_name() != "displayRefreshRate") {
+      result->NotImplemented();
+      return;
+    }
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &info) &&
+        EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) &&
+        mode.dmDisplayFrequency > 1) {
+      result->Success(flutter::EncodableValue(static_cast<int>(mode.dmDisplayFrequency)));
+    } else {
+      result->Success();
+    }
+  });
+}
+
 // If the window is resized between the creation of the Flutter surface and the
 // present of the first frame - which is what the PowerToys FancyZones option
 // "Move newly created windows to their last known zone" does - the embedder's
@@ -103,6 +127,7 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  RegisterDisplayRefreshRate(flutter_controller_.get());
 
   flutter::MethodChannel<> channel(
     flutter_controller_->engine()->messenger(),
@@ -149,6 +174,7 @@ bool FlutterWindow::OnCreate() {
     auto *flutter_view_controller =
         reinterpret_cast<flutter::FlutterViewController *>(controller);
     auto *registry = flutter_view_controller->engine();
+    RegisterDisplayRefreshRate(flutter_view_controller);
     TextureRgbaRendererPluginCApiRegisterWithRegistrar(
         registry->GetRegistrarForPlugin("TextureRgbaRendererPlugin"));
     FlutterGpuTextureRendererPluginCApiRegisterWithRegistrar(

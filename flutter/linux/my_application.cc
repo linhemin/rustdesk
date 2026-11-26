@@ -29,6 +29,33 @@ void try_set_transparent(GtkWindow* window, GdkScreen* screen, FlView* view);
 
 extern bool gIsConnectionManager;
 
+static void register_display_refresh_rate(FlView* view) {
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  g_autoptr(FlMethodChannel) channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "org.rustdesk.rustdesk/display", FL_METHOD_CODEC(codec));
+  GWeakRef* weak_view = g_new0(GWeakRef, 1);
+  g_weak_ref_init(weak_view, view);
+  fl_method_channel_set_method_call_handler(
+      channel, [](FlMethodChannel*, FlMethodCall* call, gpointer data) {
+        if (strcmp(fl_method_call_get_name(call), "displayRefreshRate") != 0) {
+          g_autoptr(FlMethodNotImplementedResponse) response = fl_method_not_implemented_response_new();
+          fl_method_call_respond(call, FL_METHOD_RESPONSE(response), nullptr);
+          return;
+        }
+        g_autoptr(GObject) widget = G_OBJECT(g_weak_ref_get(static_cast<GWeakRef*>(data)));
+        GdkWindow* window = widget ? gtk_widget_get_window(GTK_WIDGET(widget)) : nullptr;
+        GdkMonitor* monitor = window ? gdk_display_get_monitor_at_window(
+            gdk_window_get_display(window), window) : nullptr;
+        int millihertz = monitor ? gdk_monitor_get_refresh_rate(monitor) : 0;
+        g_autoptr(FlValue) rate = fl_value_new_int((millihertz + 500) / 1000);
+        fl_method_call_respond_success(call, rate, nullptr);
+      }, weak_view, [](gpointer data) {
+        g_weak_ref_clear(static_cast<GWeakRef*>(data));
+        g_free(data);
+      });
+}
+
 // --- Side mouse button support (back/forward) ---
 // Flutter's Linux embedder doesn't deliver X11 button 8/9 events to Dart.
 // We intercept them via GDK and forward through a dedicated platform channel.
@@ -94,6 +121,7 @@ static void on_subwindow_created(FlPluginRegistry* registry) {
   // Set up side button forwarding for sub-windows.
   if (registry == NULL || !FL_IS_VIEW(registry)) return;
   FlView* view = FL_VIEW(registry);
+  register_display_refresh_rate(view);
   GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(view));
   if (toplevel != NULL && GTK_IS_WINDOW(toplevel)) {
     FlMethodChannel* channel = side_buttons_create_channel(fl_view_get_engine(view));
@@ -178,6 +206,7 @@ static void my_application_activate(GApplication* application) {
       (WindowCreatedCallback)on_subwindow_created);
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+  register_display_refresh_rate(view);
 
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   self->host_channel = fl_method_channel_new(

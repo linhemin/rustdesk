@@ -495,17 +495,9 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn save_image_quality(&self, value: String) {
-        let msg = self.lc.write().unwrap().save_image_quality(value.clone());
+        let msg = self.lc.write().unwrap().save_image_quality(value);
         if let Some(msg) = msg {
             self.send(Data::Message(msg));
-        }
-        if value != "custom" && self.lc.read().unwrap().fixed_screen_fps.is_none() {
-            let custom_fps = *self.lc.read().unwrap().custom_fps.lock().unwrap();
-            if custom_fps.unwrap_or(30) != 30 {
-                // non custom quality use 30 fps
-                let msg = self.lc.write().unwrap().set_custom_fps(30, false);
-                self.send(Data::Message(msg));
-            }
         }
     }
 

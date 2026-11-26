@@ -62,6 +62,8 @@ class _VideoPeer extends Fake implements FfiModel {
 
 class _VideoSession extends Fake implements FFI {
   @override
+  int? get controllerDisplayFps => 48;
+  @override
   bool get closed => false;
   @override
   final dialogManager = OverlayDialogManager();
@@ -212,6 +214,8 @@ void main() {
 
     await open();
     expect(find.text('Adaptive bitrate'), findsOneWidget);
+    expect(find.text('≤ 60 FPS'), findsOneWidget);
+    expect(find.text('Display · 48 Hz'), findsOneWidget);
     expect(find.text('3.109 Mbps'), findsNothing);
     await tester.tap(find.text('Custom'));
     await tester.pumpAndSettle();

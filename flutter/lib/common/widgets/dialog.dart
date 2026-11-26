@@ -1972,6 +1972,8 @@ Future<void> customImageQualityDialog(
       }
     }
 
+    final requestedFps = fixed ? fixedFps : fps.round();
+    final displayFps = isMobile ? ffi.controllerDisplayFps : null;
     final content = Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment:
@@ -2072,7 +2074,10 @@ Future<void> customImageQualityDialog(
             ListTile(
                 contentPadding: isMobile ? EdgeInsets.zero : null,
                 title: Text(translate('Target frame rate')),
-                trailing: Text(fixed ? '$fixedFps FPS' : '${fps.round()} FPS')),
+                subtitle: displayFps != null && displayFps < requestedFps
+                    ? Text('${translate("Display")} · $displayFps Hz')
+                    : null,
+                trailing: Text('≤ $requestedFps FPS')),
           if (fixed)
             Wrap(spacing: 6, children: [
               for (final rate in [30, 60, 90, 120])

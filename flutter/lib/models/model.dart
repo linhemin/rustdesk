@@ -29,6 +29,7 @@ import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/models/desktop_render_texture.dart';
 import 'package:flutter_hbb/models/terminal_model.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
+import 'package:flutter_hbb/common/controller_display_fps.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
 import 'package:tuple/tuple.dart';
@@ -421,6 +422,7 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'udp_probe_report') {
         parent.target?.qualityMonitorModel.addUdpReport(evt['report']);
       } else if (name == 'update_quality_status') {
+        parent.target?._controllerDisplay?.refresh();
         parent.target?.qualityMonitorModel.updateQualityStatus(evt);
       } else if (name == 'update_block_input_state') {
         updateBlockInputState(evt, peerId);
@@ -4230,6 +4232,15 @@ enum ConnType {
 
 /// Flutter state manager and data communication with the Rust core.
 class FFI {
+  ui.FlutterView? _controllerView;
+  ControllerDisplayFps? _controllerDisplay;
+  int? get controllerDisplayFps => _controllerDisplay?.hz;
+
+  void setControllerView(ui.FlutterView view) {
+    _controllerView = view;
+    _controllerDisplay?.refresh();
+  }
+
   var id = '';
   var version = '';
   var connType = ConnType.defaultConn;
@@ -4390,6 +4401,25 @@ class FFI {
         return;
       }
       ffiModel.pi.currentDisplay = display;
+    }
+    _controllerDisplay?.dispose();
+    _controllerDisplay = null;
+    if (!isWeb && connType == ConnType.defaultConn) {
+      final nativeChannel = isIOS
+          ? const MethodChannel('awesun/session')
+          : isWindows || isLinux
+              ? const MethodChannel('org.rustdesk.rustdesk/display')
+              : null;
+      _controllerDisplay = ControllerDisplayFps(
+        () => (_controllerView ?? ui.PlatformDispatcher.instance.implicitView)
+                ?.display.refreshRate ?? 0,
+        nativeChannel == null
+            ? null
+            : () => nativeChannel.invokeMethod<int>('displayRefreshRate'),
+        (fps) => bind.sessionPeerOption(
+            sessionId: sessionId, name: 'controller-display-fps',
+            value: fps?.toString() ?? ''),
+      )..refresh();
     }
     if (isDesktop && connType == ConnType.defaultConn) {
       textureModel.updateCurrentDisplay(display ?? 0);
@@ -4578,6 +4608,9 @@ class FFI {
   /// Close the remote session.
   Future<void> close({bool closeSession = true}) async {
     closed = true;
+    _controllerDisplay?.dispose();
+    _controllerDisplay = null;
+    _controllerView = null;
     if (isWeb) {
       platformFFI.clearVideoFrameCallback();
     }

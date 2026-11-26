@@ -237,6 +237,7 @@ pub unsafe extern "C" fn get_rustdesk_app_name(buffer: *mut u16, length: i32) ->
 #[derive(Default)]
 struct SessionHandler {
     event_stream: Option<StreamSink<EventToUI>>,
+    display_fps: Option<i32>,
     // displays of current session.
     // We need this variable to check if the display is in use before pushing rgba to flutter.
     displays: Vec<usize>,
@@ -2107,6 +2108,30 @@ pub mod sessions {
         SESSIONS.read().unwrap().get(&(peer_id, conn_type)).cloned()
     }
 
+    pub fn set_display_fps(session: &FlutterSession, id: &SessionID, value: &str) {
+        let limit = if value.is_empty() {
+            None
+        } else if let Ok(fps @ 15..=120) = value.parse::<i32>() {
+            Some(fps)
+        } else {
+            return;
+        };
+        let mut handlers = session.session_handlers.write().unwrap();
+        if let Some(handler) = handlers.get_mut(id) {
+            handler.display_fps = limit;
+            apply_display_fps(session, &handlers);
+        }
+    }
+
+    fn apply_display_fps(session: &FlutterSession, handlers: &HashMap<SessionID, SessionHandler>) {
+        // One peer stream can feed multiple local windows on different monitors.
+        let limit = handlers.values().map(|handler| handler.display_fps.unwrap_or(120)).max();
+        let message = session.lc.write().unwrap().update_controller_display_fps(limit);
+        if let Some(message) = message {
+            session.send(Data::Message(message));
+        }
+    }
+
     #[inline]
     pub fn remove_session_by_session_id(id: &SessionID) -> Option<FlutterSession> {
         let mut remove_peer_key = None;
@@ -2119,6 +2144,7 @@ pub mod sessions {
                         remove_peer_key = Some(peer_key.clone());
                     } else {
                         check_remove_unused_displays(None, id, s, &write_lock);
+                        apply_display_fps(s, &write_lock);
                     }
                     break;
                 }

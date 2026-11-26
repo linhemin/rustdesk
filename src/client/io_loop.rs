@@ -507,7 +507,11 @@ impl<T: InvokeUiSession> Remote<T> {
                                 {
                                     diagnostic_transport = transport.unwrap_or(stream_type);
                                 }
-                                self.handler.update_direct(Some(direct));
+                                let fps_update = self.handler.lc.write().unwrap().update_live_path_fps(direct);
+                                if let Some(msg) = fps_update.filter(|_| self.is_connected) {
+                                    self.last_auto_fps = None;
+                                    allow_err!(peer.send(&msg).await);
+                                }
                                 self.handler.set_connection_type(
                                     true, direct, transport.unwrap_or(stream_type),
                                 );
@@ -1767,12 +1771,13 @@ impl<T: InvokeUiSession> Remote<T> {
                 v.fps_control.inactive_counter = 0;
             }
         });
-        let custom_fps = self.handler.lc.read().unwrap().custom_fps.clone();
-        let custom_fps = custom_fps.lock().unwrap().clone();
-        let mut custom_fps = custom_fps.unwrap_or(30);
-        if custom_fps < 5 || custom_fps > 120 {
-            custom_fps = 30;
-        }
+        let custom_fps = {
+            let lc = self.handler.lc.read().unwrap();
+            let requested = lc.custom_fps.lock().unwrap()
+                .filter(|fps| (5..=120).contains(fps))
+                .unwrap_or(if cfg!(feature = "flutter") { 120 } else { 30 });
+            lc.normal_fps_for_path(requested as i32) as usize
+        };
         let inactive_threshold = 15;
         let max_queue_len = self
             .video_threads

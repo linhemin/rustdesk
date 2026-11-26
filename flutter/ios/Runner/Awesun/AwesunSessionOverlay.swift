@@ -29,6 +29,13 @@ final class AwesunSessionOverlay {
             guard let self = self else { result(nil); return }
             let args = call.arguments as? [String: Any] ?? [:]
             switch call.method {
+            case "displayRefreshRate":
+                guard let screen = self.installedIn?.viewIfLoaded?.window?.screen else {
+                    result(nil)
+                    return
+                }
+                let maximum = screen.maximumFramesPerSecond
+                result(ProcessInfo.processInfo.isLowPowerModeEnabled ? min(maximum, 60) : maximum)
             case "setActive":
                 result(self.setActive(args["active"] as? Bool == true, touchMode: args["touchMode"] as? Bool == true))
             case "setPresentation":
