@@ -892,5 +892,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Software decoding", "软件解码"),
         ("Remote P2P test", "远程打洞测试"),
         ("Allow this computer to receive P2P diagnostics, change TCP, UDP and WebRTC test settings, and reconnect this session for 15 minutes.", "允许这台电脑在 15 分钟内接收打洞诊断、更改 TCP、UDP 和 WebRTC 测试设置，并重连此会话。"),
+        ("Relay servers", "中继服务器列表"),
+        ("Enter one address per line. Leave empty to use only direct connections.", "每行填写一个地址。留空时只允许直连。"),
+        ("Enter up to eight relay servers", "最多可填写八个不同的中继服务器"),
+        ("Invalid relay server address", "中继服务器地址无效"),
+        ("Leave the ID server empty to use the public ID server.", "ID 服务器留空时使用公共 ID 服务器。"),
     ].iter().cloned().collect();
 }

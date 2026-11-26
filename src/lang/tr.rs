@@ -889,5 +889,10 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Software decoding", ""),
         ("Remote P2P test", ""),
         ("Allow this computer to receive P2P diagnostics, change TCP, UDP and WebRTC test settings, and reconnect this session for 15 minutes.", ""),
+        ("Relay servers", ""),
+        ("Enter one address per line. Leave empty to use only direct connections.", ""),
+        ("Enter up to eight relay servers", ""),
+        ("Invalid relay server address", ""),
+        ("Leave the ID server empty to use the public ID server.", ""),
     ].iter().cloned().collect();
 }

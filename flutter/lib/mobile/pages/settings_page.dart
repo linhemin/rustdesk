@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import '../../common/relay_servers.dart';
+import '../../common/widgets/relay_servers.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:get/get.dart';
@@ -353,8 +355,10 @@ class _SettingsState extends State<_SettingsContent>
             !incomingOnly)
           SettingsTile.switchTile(
             title: Text(translate('Direct connections only')),
-            initialValue: mainGetLocalBoolOptionSync(kOptionDirectOnly),
-            onToggle: isOptionFixed(kOptionDirectOnly)
+            initialValue: configuredRelayText().isEmpty ||
+                mainGetLocalBoolOptionSync(kOptionDirectOnly),
+            onToggle: configuredRelayText().isEmpty ||
+                    isOptionFixed(kOptionDirectOnly)
                 ? null
                 : (value) async {
                     await mainSetLocalBoolOption(kOptionDirectOnly, value);
@@ -1000,7 +1004,7 @@ class _SettingsState extends State<_SettingsContent>
     final server = <AbstractSettingsTile>[
       if (!disabledSettings && !_hideNetwork && !_hideServer)
         SettingsTile(
-            title: Text(translate('ID/Relay Server')),
+            title: Text(translate(isWeb ? 'ID/Relay Server' : 'ID Server')),
             leading: Icon(apple ? Icons.hub_outlined : Icons.cloud),
             value: apple
                 ? Text(translate(_isUsingPublicServer ? 'Default' : 'Custom'))
@@ -1015,6 +1019,19 @@ class _SettingsState extends State<_SettingsContent>
                 setState(callback);
               });
             }),
+      if (!disabledSettings && !_hideNetwork && !_hideServer && !isWeb)
+        SettingsTile(
+          title: Text(translate('Relay servers')),
+          leading: const Icon(Icons.hub_outlined),
+          description: Text(relaySummary(configuredRelayText()),
+              maxLines: 2, overflow: TextOverflow.ellipsis),
+          onPressed: isOptionFixed(relayServersOption)
+              ? null
+              : (context) async {
+                  if (await editRelayServers(context) && mounted)
+                    setState(() {});
+                },
+        ),
     ];
     final network = _networkTiles(disabledSettings, incomingOnly, outgoingOnly);
     final appearance = <AbstractSettingsTile>[
@@ -1169,10 +1186,10 @@ class _SettingsState extends State<_SettingsContent>
                 SettingsTile.navigation(
                   title: Text(translate('Network')),
                   leading: const Icon(Icons.public),
-                  value: Text(translate(
-                      mainGetLocalBoolOptionSync(kOptionDirectOnly)
-                          ? 'Direct connections only'
-                          : 'Auto')),
+                  value: Text(translate(configuredRelayText().isEmpty ||
+                          mainGetLocalBoolOptionSync(kOptionDirectOnly)
+                      ? 'Direct connections only'
+                      : 'Auto')),
                   onPressed: (context) async {
                     await Navigator.of(context).push(
                       MaterialPageRoute<void>(

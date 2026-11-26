@@ -30,6 +30,7 @@ import 'package:window_size/window_size.dart' as window_size;
 
 import '../consts.dart';
 import 'common/widgets/overlay.dart';
+import 'common/relay_servers.dart';
 import 'common/widgets/workspace.dart';
 import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
@@ -2971,7 +2972,21 @@ bool get kUseCompatibleUiMode =>
 
 bool get isWin10 => windowsBuildNumber.windowsVersion == WindowsTarget.w10;
 
+String configuredRelayText() => relayServerText(
+    bind.mainGetOptionSync(key: relayServersOption),
+    bind.mainGetOptionSync(key: 'relay-server'));
+
+String relaySummary(String text) {
+  if (text.isEmpty) return translate('Direct connections only');
+  return text.split('\n').join(', ');
+}
+
+Future<void> storeRelayServers(List<String> entries) async {
+  await bind.mainSetOption(key: relayServersOption, value: jsonEncode(entries));
+}
+
 class ServerConfig {
+  bool hasRelayServers = true;
   late String idServer;
   late String relayServer;
   late String apiServer;
@@ -2999,7 +3014,17 @@ class ServerConfig {
       json = jsonDecode(utf8.decode(bytes, allowMalformed: true));
     }
     idServer = json['host'] ?? '';
-    relayServer = json['relay'] ?? '';
+    hasRelayServers = json.containsKey('relays') || json.containsKey('relay');
+    if (json.containsKey('relays')) {
+      final relays = json['relays'];
+      if (relays is! List ||
+          !relays.every((e) => e is String && !e.contains(RegExp(r'[\r\n]')))) {
+        throw const FormatException('Invalid relay server address');
+      }
+      relayServer = parseRelayServers(relays.join('\n')).join('\n');
+    } else {
+      relayServer = json['relay'] ?? '';
+    }
     apiServer = json['api'] ?? '';
     key = json['key'] ?? '';
   }
@@ -3007,12 +3032,16 @@ class ServerConfig {
   /// encode to shared string
   /// also see [ServerConfig.decode]
   String encode() {
-    Map<String, String> config = {};
+    Map<String, dynamic> config = {};
     config['host'] = idServer.trim();
-    config['relay'] = relayServer.trim();
+    if (hasRelayServers) {
+      final relays = parseRelayServers(relayServer);
+      config['relays'] = relays;
+      config['relay'] = relays.isEmpty ? '' : relays.first;
+    }
     config['api'] = apiServer.trim();
     config['key'] = key.trim();
-    return base64UrlEncode(Uint8List.fromList(jsonEncode(config).codeUnits))
+    return base64UrlEncode(Uint8List.fromList(utf8.encode(jsonEncode(config))))
         .split('')
         .reversed
         .join();
@@ -3021,7 +3050,8 @@ class ServerConfig {
   /// from local options
   ServerConfig.fromOptions(Map<String, dynamic> options)
       : idServer = options['custom-rendezvous-server'] ?? "",
-        relayServer = options['relay-server'] ?? "",
+        relayServer = relayServerText(
+            options[relayServersOption] ?? "", options['relay-server'] ?? ""),
         apiServer = options['api-server'] ?? "",
         key = options['key'] ?? "";
 }
@@ -3607,9 +3637,7 @@ importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
   if (text != null && text.isNotEmpty) {
     try {
       final sc = ServerConfig.decode(text);
-      if (isWeb || isIOS) {
-        sc.relayServer = '';
-      }
+      if (isWeb) sc.hasRelayServers = false;
       if (sc.idServer.isNotEmpty) {
         Future<bool> success = setServerConfig(controllers, errMsgs, sc);
         success.then((value) {
@@ -3644,12 +3672,27 @@ Future<bool> setServerConfig(
   }
 
   config.idServer = removeEndSlash(config.idServer.trim());
-  config.relayServer = removeEndSlash(config.relayServer.trim());
+  final List<String> relays;
+  try {
+    relays = config.hasRelayServers && !isWeb
+        ? parseRelayServers(config.relayServer)
+        : [];
+  } on FormatException catch (e) {
+    if (errMsgs != null) {
+      errMsgs[1].value = [
+        translate(e.message),
+        if (e.source != null) e.source.toString()
+      ].join(' · ');
+    }
+    return false;
+  }
+  if (config.hasRelayServers && !isWeb) config.relayServer = relays.join('\n');
   config.apiServer = removeEndSlash(config.apiServer.trim());
   config.key = config.key.trim();
   if (controllers != null) {
     controllers[0].text = config.idServer;
-    controllers[1].text = config.relayServer;
+    if (config.hasRelayServers && !isWeb)
+      controllers[1].text = config.relayServer;
     controllers[2].text = config.apiServer;
     controllers[3].text = config.key;
   }
@@ -3658,14 +3701,6 @@ Future<bool> setServerConfig(
     errMsgs[0].value = translate(await bind.mainTestIfValidServer(
         server: config.idServer, testWithProxy: true));
     if (errMsgs[0].isNotEmpty) {
-      return false;
-    }
-  }
-  // relay
-  if (config.relayServer.isNotEmpty && errMsgs != null) {
-    errMsgs[1].value = translate(await bind.mainTestIfValidServer(
-        server: config.relayServer, testWithProxy: true));
-    if (errMsgs[1].isNotEmpty) {
       return false;
     }
   }
@@ -3683,7 +3718,12 @@ Future<bool> setServerConfig(
   // should set one by one
   await bind.mainSetOption(
       key: 'custom-rendezvous-server', value: config.idServer);
-  await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
+  if (!isWeb &&
+      config.hasRelayServers &&
+      !isOptionFixed(relayServersOption) &&
+      bind.mainGetOptionSync(key: relayServersOption) != jsonEncode(relays)) {
+    await storeRelayServers(relays);
+  }
   await bind.mainSetOption(key: 'api-server', value: config.apiServer);
   await bind.mainSetOption(key: 'key', value: config.key);
   final newApiServer = await bind.mainGetApiServer();

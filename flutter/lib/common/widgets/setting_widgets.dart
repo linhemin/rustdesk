@@ -292,15 +292,18 @@ List<Widget> ServerConfigImportExportWidgets(
   }
 
   export() {
-    final text = ServerConfig(
-            idServer: controllers[0].text.trim(),
-            relayServer: controllers[1].text.trim(),
-            apiServer: controllers[2].text.trim(),
-            key: controllers[3].text.trim())
-        .encode();
-    debugPrint("ServerConfig export: $text");
-    Clipboard.setData(ClipboardData(text: text));
-    showToast(translate('Export server configuration successfully'));
+    try {
+      final text = ServerConfig(
+              idServer: controllers[0].text.trim(),
+              relayServer: controllers[1].text.trim(),
+              apiServer: controllers[2].text.trim(),
+              key: controllers[3].text.trim())
+          .encode();
+      Clipboard.setData(ClipboardData(text: text));
+      showToast(translate('Export server configuration successfully'));
+    } on FormatException catch (e) {
+      errMsgs[1].value = translate(e.message);
+    }
   }
 
   return [

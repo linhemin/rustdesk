@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../common.dart';
+import '../../common/relay_servers.dart';
+import '../../common/widgets/relay_servers.dart';
 import '../../common/widgets/api_server_warning.dart';
 import '../../models/platform_model.dart';
 import '../server_config_qr.dart';
@@ -22,14 +24,18 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
   final _controllers = [
     for (final key in [
       'custom-rendezvous-server',
-      'relay-server',
+      relayServersOption,
       'api-server',
       'key'
     ])
-      TextEditingController(text: bind.mainGetOptionSync(key: key)),
+      TextEditingController(
+          text: key == relayServersOption
+              ? configuredRelayText()
+              : bind.mainGetOptionSync(key: key)),
   ];
   final _errors = [for (var i = 0; i < 3; i++) ''.obs];
   bool _saving = false;
+  bool _showImportedRelays = false;
 
   @override
   void initState() {
@@ -59,6 +65,7 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
     try {
       final config = ServerConfig.decode(value.trim());
       if (config.idServer.isEmpty) throw const FormatException();
+      setState(() => _showImportedRelays = config.hasRelayServers);
       final values = [
         config.idServer,
         config.relayServer,
@@ -66,7 +73,7 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
         config.key
       ];
       for (var i = 0; i < _controllers.length; i++) {
-        _controllers[i].text = values[i];
+        if (i != 1 || config.hasRelayServers) _controllers[i].text = values[i];
       }
       for (final error in _errors) {
         error.value = '';
@@ -100,7 +107,7 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
       error.value = '';
     }
     try {
-      final success = await setServerConfig(null, _errors, _config);
+      final success = await setServerConfig(null, _errors, _config..hasRelayServers = _showImportedRelays);
       if (!mounted) return;
       if (success) {
         Navigator.of(context).pop();
@@ -125,7 +132,7 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
             leading: TextButton(
                 onPressed: _saving ? null : () => Navigator.of(context).pop(),
                 child: Text(translate('Cancel'))),
-            title: Text(translate('ID/Relay Server'),
+            title: Text(translate(_showImportedRelays ? 'ID/Relay Server' : 'ID Server'),
                 style: const TextStyle(fontSize: 15)),
             actions: [
               TextButton(
@@ -141,26 +148,38 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
                   borderRadius: BorderRadius.circular(14),
                   clipBehavior: Clip.antiAlias,
                   child: Obx(() => Column(children: [
-                        for (var i = 0; i < _controllers.length; i++) ...[
+                        for (final i in [0, if (_showImportedRelays) 1, 2, 3]) ...[
                           if (i > 0) const Divider(height: 1, indent: 16),
-                          AppleSettingsField(
-                            label: translate([
-                              'ID Server',
-                              'Relay Server',
-                              'API Server',
-                              'Key'
-                            ][i]),
-                            controller: _controllers[i],
-                            enabled: !_saving,
-                            error: i < _errors.length ? _errors[i].value : null,
-                          ),
+                          if (i == 1)
+                            Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(horizontal: 16),
+                                child: RelayServersField(
+                                    controller: _controllers[1],
+                                    error: _errors[1].value,
+                                    enabled: !_saving &&
+                                        !isOptionFixed(relayServersOption)))
+                          else
+                            AppleSettingsField(
+                              label: translate([
+                                'ID Server',
+                                'Relay Server',
+                                'API Server',
+                                'Key'
+                              ][i]),
+                              controller: _controllers[i],
+                              enabled: !_saving,
+                              error:
+                                  i < _errors.length ? _errors[i].value : null,
+                            ),
                         ],
                       ])),
                 ),
                 Padding(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                     child: Text(
-                        translate('Leave empty to use the public server.'),
+                        translate(
+                            'Leave the ID server empty to use the public ID server.'),
                         style: Theme.of(context).textTheme.bodySmall)),
                 ApiServerWarning(
                     controller: _controllers[2],
@@ -191,10 +210,14 @@ class _ServerSettingsPageState extends State<ServerSettingsPage> {
                           onPressed: _saving
                               ? null
                               : () async {
-                                  await Clipboard.setData(
-                                      ClipboardData(text: _config.encode()));
-                                  showToast(translate(
-                                      'Export server configuration successfully'));
+                                  try {
+                                    await Clipboard.setData(
+                                        ClipboardData(text: _config.encode()));
+                                    showToast(translate(
+                                        'Export server configuration successfully'));
+                                  } on FormatException catch (e) {
+                                    _errors[1].value = translate(e.message);
+                                  }
                                 },
                           icon: const Icon(Icons.copy, size: 17)),
                     ]),

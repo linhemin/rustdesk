@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
+import '../../common/relay_servers.dart';
+import '../../common/widgets/relay_servers.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
@@ -2251,7 +2253,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
         child: Column(children: [
           if (_expandedDesktopSettings &&
               bind.mainGetBuildinOption(key: kOptionHideServerSetting) != 'Y')
-            _Card(title: 'ID/Relay Server', children: [
+            _Card(title: isWeb ? 'ID/Relay Server' : 'ID Server', children: [
               ListTile(
                 leading: const Icon(Icons.dns_outlined),
                 title: SelectableText(bind
@@ -2259,10 +2261,6 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                         .isEmpty
                     ? translate('Default')
                     : bind.mainGetOptionSync(key: 'custom-rendezvous-server')),
-                subtitle: bind.mainGetOptionSync(key: 'relay-server').isEmpty
-                    ? null
-                    : SelectableText(
-                        bind.mainGetOptionSync(key: 'relay-server')),
                 trailing: OutlinedButton(
                   onPressed: locked
                       ? null
@@ -2400,8 +2398,21 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
               if (showServerRow)
                 listTile(
                   icon: Icons.dns_outlined,
-                  title: 'ID/Relay Server',
+                  title: isWeb ? 'ID/Relay Server' : 'ID Server',
                   onTap: () => showServerSettings(gFFI.dialogManager, setState),
+                ),
+              if (!hideServer && !isWeb)
+                ListTile(
+                  leading: const Icon(Icons.hub_outlined, color: _accentColor),
+                  title: Text(translate('Relay servers')),
+                  subtitle: Text(relaySummary(configuredRelayText()),
+                      maxLines: 2, overflow: TextOverflow.ellipsis),
+                  onTap: locked || isOptionFixed(relayServersOption)
+                      ? null
+                      : () async {
+                          if (await editRelayServers(context) && mounted)
+                            setState(() {});
+                        },
                 ),
               if (showDirectOnly) ...[
                 if (showServerRow) divider,
@@ -2415,8 +2426,11 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                         style: const TextStyle(fontSize: _kContentFontSize)),
                     subtitle: Text(translate('direct-only-tip'),
                         style: Theme.of(context).textTheme.bodySmall),
-                    value: mainGetLocalBoolOptionSync(kOptionDirectOnly),
-                    onChanged: locked || isOptionFixed(kOptionDirectOnly)
+                    value: configuredRelayText().isEmpty ||
+                        mainGetLocalBoolOptionSync(kOptionDirectOnly),
+                    onChanged: locked ||
+                            configuredRelayText().isEmpty ||
+                            isOptionFixed(kOptionDirectOnly)
                         ? null
                         : (value) async {
                             await mainSetLocalBoolOption(kOptionDirectOnly, value);

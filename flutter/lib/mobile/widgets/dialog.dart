@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../../common/relay_servers.dart';
+import '../../common/widgets/relay_servers.dart';
 import 'package:flutter_hbb/common/widgets/api_server_warning.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/common/widgets/toolbar.dart';
@@ -63,18 +65,22 @@ void showServerSettings(OverlayDialogManager dialogManager,
     print("Invalid server config: $e");
   }
   showServerSettingsWithValue(
-      ServerConfig.fromOptions(options), dialogManager, setState);
+      ServerConfig.fromOptions(options), dialogManager, setState, previewImport: false);
 }
 
 void showServerSettingsWithValue(
     ServerConfig serverConfig,
     OverlayDialogManager dialogManager,
-    void Function(VoidCallback)? upSetState) async {
+    void Function(VoidCallback)? upSetState, {bool previewImport = true}) async {
+  final showRelays = !isWeb && previewImport && serverConfig.hasRelayServers;
   const labelWidth = 120.0;
   const labelSpacing = 8.0;
   var isInProgress = false;
   final idCtrl = TextEditingController(text: serverConfig.idServer);
-  final relayCtrl = TextEditingController(text: serverConfig.relayServer);
+  final relayCtrl = TextEditingController(
+      text: serverConfig.hasRelayServers
+          ? serverConfig.relayServer
+          : configuredRelayText());
   final apiCtrl = TextEditingController(text: serverConfig.apiServer);
   final keyCtrl = TextEditingController(text: serverConfig.key);
 
@@ -101,7 +107,7 @@ void showServerSettingsWithValue(
               idServer: idCtrl.text.trim(),
               relayServer: relayCtrl.text.trim(),
               apiServer: apiCtrl.text.trim(),
-              key: keyCtrl.text.trim()));
+              key: keyCtrl.text.trim())..hasRelayServers = showRelays);
       setState(() {
         isInProgress = false;
       });
@@ -146,7 +152,7 @@ void showServerSettingsWithValue(
     return CustomAlertDialog(
       title: Row(
         children: [
-          Expanded(child: Text(translate('ID/Relay Server'))),
+          Expanded(child: Text(translate(showRelays ? 'ID/Relay Server' : 'ID Server'))),
           ...ServerConfigImportExportWidgets(controllers, errMsgs),
         ],
       ),
@@ -159,9 +165,11 @@ void showServerSettingsWithValue(
                   buildField(translate('ID Server'), idCtrl, idServerMsg.value,
                       autofocus: true),
                   SizedBox(height: 8),
-                  if (!isIOS && !isWeb) ...[
-                    buildField(translate('Relay Server'), relayCtrl,
-                        relayServerMsg.value),
+                  if (showRelays) ...[
+                    RelayServersField(
+                        controller: relayCtrl,
+                        error: relayServerMsg.value,
+                        enabled: !isOptionFixed(relayServersOption)),
                     SizedBox(height: 8),
                   ],
                   buildField(
