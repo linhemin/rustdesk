@@ -68,15 +68,23 @@ pub(crate) struct Listener {
 
 impl Listener {
     pub(crate) fn new() -> Self {
+        Self::with_capacity(1)
+    }
+
+    pub(super) fn with_capacity(capacity: usize) -> Self {
         let mut ticket = [0; 32];
         randombytes::randombytes_into(&mut ticket);
-        let (sender, incoming) = mpsc::channel(1);
+        let (sender, incoming) = mpsc::channel(capacity);
         sessions().lock().unwrap().insert(ticket, sender);
         Self { ticket, incoming }
     }
 
     pub(crate) fn response(&self) -> Vec<u8> {
-        [ACCEPT, &self.ticket].concat()
+        self.response_with(ACCEPT)
+    }
+
+    pub(super) fn response_with(&self, accept: &[u8]) -> Vec<u8> {
+        [accept, &self.ticket].concat()
     }
 }
 
@@ -109,34 +117,7 @@ impl Mode {
         };
         let (ticket, connect) = (*ticket, dial());
         Some(SetupTask(tokio::spawn(async move {
-            let attempt = async {
-                let (stream, kcp, label) = connect.await?;
-                let mut socket = into_socket(stream)?;
-                let kind = match label {
-                    "TCP" => 1,
-                    "UDP" => 2,
-                    "IPv6" => 3,
-                    _ => bail!("Unexpected native transport"),
-                };
-                socket
-                    .send_raw([ticket.as_slice(), &id.to_be_bytes(), &[kind]].concat())
-                    .await?;
-                let answer = socket
-                    .next_timeout(4_000)
-                    .await
-                    .ok_or_else(|| anyhow!("Path attachment timed out"))??;
-                if answer.as_ref() != BOUND {
-                    bail!("Peer declined path attachment");
-                }
-                #[cfg(target_os = "ios")]
-                crate::ios_p2p_diagnostics::record_milestone("native-upgrade", "peer confirmed session attachment");
-                Ok(Lane {
-                    io: Relay::new(socket),
-                    label,
-                    _kcp: kcp,
-                    _closed: None,
-                })
-            };
+            let attempt = async { attach(ticket, id, connect.await?).await };
             // Includes rendezvous, the bounded UDP probe window and the authenticated attachment.
             let budget = if crate::get_udp_punch_enabled() { 75_000 } else { 45_000 };
             let lane = match hbb_common::timeout(budget, attempt).await {
@@ -157,6 +138,38 @@ impl Mode {
             let _ = events.send(super::SetupEvent::Native(id, lane)).await;
         })))
     }
+}
+
+pub(super) async fn attach(
+    ticket: Ticket,
+    id: u64,
+    (stream, kcp, label): (Stream, Option<KcpStream>, &'static str),
+) -> ResultType<Lane> {
+    let mut socket = into_socket(stream)?;
+    let kind = match label {
+        "TCP" => 1,
+        "UDP" => 2,
+        "IPv6" => 3,
+        _ => bail!("Unexpected native transport"),
+    };
+    socket
+        .send_raw([ticket.as_slice(), &id.to_be_bytes(), &[kind]].concat())
+        .await?;
+    let answer = socket
+        .next_timeout(4_000)
+        .await
+        .ok_or_else(|| anyhow!("Path attachment timed out"))??;
+    if answer.as_ref() != BOUND {
+        bail!("Peer declined path attachment");
+    }
+    #[cfg(target_os = "ios")]
+    crate::ios_p2p_diagnostics::record_milestone("native-upgrade", "peer confirmed session attachment");
+    Ok(Lane {
+        io: Relay::new(socket),
+        label,
+        _kcp: kcp,
+        _closed: None,
+    })
 }
 
 pub(crate) async fn accept(stream: Stream) -> ResultType<oneshot::Receiver<()>> {

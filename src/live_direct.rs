@@ -21,6 +21,7 @@ use std::{collections::VecDeque, future::pending, net::IpAddr};
 
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) mod native;
+pub(crate) mod parallel;
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const PUNCH_CAPABILITY: &str = "rustdesk_live_direct_punch_v1";
 pub(crate) const FULL_CAPABILITY: &str = "rustdesk_lite_full_punch_v2";
@@ -234,14 +235,29 @@ impl Role {
 }
 
 pub(crate) fn wrap(stream: &mut Stream, role: Role) -> ResultType<watch::Receiver<Path>> {
-    wrap_with(stream, role, None)
+    wrap_with(stream, role, None, None)
 }
 
 pub(crate) fn wrap_native(stream: &mut Stream, mode: native::Mode) -> ResultType<watch::Receiver<Path>> {
-    wrap_with(stream, Role::Answerer, Some(mode))
+    wrap_with(stream, Role::Answerer, Some(mode), None)
 }
 
-fn wrap_with(stream: &mut Stream, role: Role, native: Option<native::Mode>) -> ResultType<watch::Receiver<Path>> {
+pub(crate) async fn accept_parallel(stream: &mut Stream) -> ResultType<()> {
+    let listener = native::Listener::with_capacity(2);
+    stream.send_raw(listener.response_with(parallel::ACCEPT)).await?;
+    wrap_with(stream, Role::Answerer, Some(native::Mode::Listen(listener)), Some(parallel::Race::default()))?;
+    Ok(())
+}
+
+pub(crate) fn wrap_parallel(
+    stream: &mut Stream, role: Role, ticket: [u8; 32], dials: parallel::Dials,
+) -> ResultType<watch::Receiver<Path>> {
+    #[cfg(target_os = "ios")]
+    crate::ios_p2p_diagnostics::record_milestone("relay-upgrade-parallel", "parallel direct attempts enabled");
+    wrap_with(stream, role, None, Some(parallel::Race::caller(ticket, dials)))
+}
+
+fn wrap_with(stream: &mut Stream, role: Role, native: Option<native::Mode>, parallel: Option<parallel::Race>) -> ResultType<watch::Receiver<Path>> {
     if !supported_transport(stream) {
         bail!("A live direct path requires an encrypted TCP session");
     }
@@ -271,7 +287,7 @@ fn wrap_with(stream: &mut Stream, role: Role, native: Option<native::Mode>) -> R
     let relay = std::mem::replace(tcp, app);
     let (path, status) = watch::channel(None);
     tokio::spawn(async move {
-        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), role, path, native).await {
+        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), role, path, native, parallel).await {
             log::debug!("Live direct bridge closed: {err}");
         }
     });
@@ -1679,6 +1695,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parallel_upgrade_uses_the_first_verified_lane_and_keeps_the_relay() {
+        let (mut controller, mut controlled) = encrypted_pair().await;
+        let listener = native::Listener::with_capacity(2);
+        let ticket = listener.response_with(parallel::ACCEPT)[parallel::ACCEPT.len()..].try_into().unwrap();
+        let mut host_path = wrap_with(
+            &mut controlled, Role::Answerer, Some(native::Mode::Listen(listener)),
+            Some(parallel::Race::default()),
+        ).unwrap();
+        let (release, ready) = watch::channel(false);
+        let tcp: native::Dial = Box::new(move || {
+            let mut ready = ready.clone();
+            async move {
+                ready.wait_for(|released| *released).await?;
+                let (caller, host) = encrypted_pair().await;
+                tokio::spawn(async move { native::accept(host).await.unwrap().await.ok(); });
+                Ok((caller, None, "TCP"))
+            }.boxed()
+        });
+        let udp: native::Dial = Box::new(|| async {
+            let (caller, mut host) = encrypted_pair().await;
+            tokio::spawn(async move {
+                host.next().await;
+                host.send_raw(b"invalid attachment reply".to_vec()).await.unwrap();
+            });
+            Ok((caller, None, "UDP"))
+        }.boxed());
+        let mut path = wrap_parallel(
+            &mut controller, Role::Answerer, ticket, [Some(tcp), Some(udp)],
+        ).unwrap();
+        controller.send_raw(b"relay input".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"relay input");
+        controlled.send_raw(b"relay video".to_vec()).await.unwrap();
+        assert_eq!(&controller.next_timeout(3_000).await.unwrap().unwrap()[..], b"relay video");
+        release.send_replace(true);
+        timeout(Duration::from_secs(8), async {
+            path.changed().await.unwrap();
+            host_path.changed().await.unwrap();
+        }).await.unwrap();
+        assert_eq!(*path.borrow(), Some("TCP"));
+        assert_eq!(*host_path.borrow(), Some("TCP"));
+        controller.send_raw(b"direct input".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"direct input");
+        controlled.send_raw(b"direct video".to_vec()).await.unwrap();
+        assert_eq!(&controller.next_timeout(3_000).await.unwrap().unwrap()[..], b"direct video");
+    }
+
+    #[tokio::test]
+    async fn parallel_upgrade_can_select_webrtc_while_native_is_pending() {
+        let (mut controller, mut controlled) = encrypted_pair().await;
+        let listener = native::Listener::with_capacity(2);
+        let ticket = listener.response_with(parallel::ACCEPT)[parallel::ACCEPT.len()..].try_into().unwrap();
+        let mut host_path = wrap_with(
+            &mut controlled, Role::Answerer, Some(native::Mode::Listen(listener)),
+            Some(parallel::Race::default()),
+        ).unwrap();
+        let waiting: native::Dial = Box::new(|| pending().boxed());
+        let mut path = wrap_parallel(
+            &mut controller, Role::Offerer { trickle: true }, ticket, [Some(waiting), None],
+        ).unwrap();
+        timeout(Duration::from_secs(30), async {
+            path.changed().await.unwrap();
+            host_path.changed().await.unwrap();
+        }).await.unwrap();
+        assert_eq!(*path.borrow(), Some("WebRTC"));
+        assert_eq!(*host_path.borrow(), Some("WebRTC"));
+        controller.send_raw(b"webrtc input".to_vec()).await.unwrap();
+        assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"webrtc input");
+    }
+
+    #[tokio::test]
     async fn a_slow_direct_path_is_kept_and_a_dead_one_returns_to_relay() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -1902,6 +1988,7 @@ async fn run(
     role: Role,
     path: watch::Sender<Path>,
     mut native: Option<native::Mode>,
+    mut parallel: Option<parallel::Race>,
 ) -> ResultType<()> {
     // App TX and RX can both exceed the pipe buffer (e.g. video and a clipboard image).
     // Pump them independently so an inbound delivery never blocks draining the app's writes.
@@ -1925,14 +2012,15 @@ async fn run(
     let mut setup: Option<Attempt> = None;
     let mut attempt = 0;
     let offer_mode = role.offer_mode();
-    let offerer = offer_mode.is_some() || matches!(native, Some(native::Mode::Call(..)));
+    let offerer = offer_mode.is_some() || matches!(native, Some(native::Mode::Call(..)))
+        || parallel.as_ref().is_some_and(parallel::Race::is_caller);
     let mut native_task = None;
     let mut retries = RetrySchedule::default();
     let mut flaps = 0;
     let mut accepted_lite = None;
     let mut full_plan = None;
     let mut last_lite_step = None;
-    let mut next_attempt = Instant::now() + Duration::from_secs(1);
+    let mut next_attempt = Instant::now() + Duration::from_secs(u64::from(parallel.is_none()));
     let mut direct: Option<Direct> = None;
     let mut direct_write: Option<BoxFuture<'static, (bool, ResultType<()>)>> = None;
     let mut first_relay_data = None;
@@ -1973,7 +2061,7 @@ async fn run(
                         }
                     }
                     Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER | LITE_OFFER | FULL_OFFER), number, data))
-                        if native.is_none() && !offerer && direct.is_none() && number > attempt
+                        if (native.is_none() || parallel.is_some()) && !offerer && direct.is_none() && number > attempt
                             && data.len() <= MAX_SDP + usize::from(kind == FULL_OFFER) * 2
                             && if kind == FULL_OFFER {
                                 accepted_lite == number.checked_sub(1) && WebRTCStream::has_expanded_udp_observer()
@@ -2081,6 +2169,27 @@ async fn run(
                             control.receive(kind, data, offerer);
                         }
                     }
+                    Some((parallel::SELECT, number, [])) if !offerer && direct.is_none() => {
+                        if let Some(race) = parallel.as_mut() {
+                            race.request(number);
+                        }
+                    }
+                    Some((parallel::SELECTED, number, [])) if offerer && direct.is_none() => {
+                        if let Some(race) = parallel.as_mut() {
+                            direct = race.take(number);
+                            if direct.is_some() {
+                                setup = None;
+                            }
+                        }
+                    }
+                    Some((RESET, number, [])) if parallel.is_some() => {
+                        if let Some(race) = parallel.as_mut() {
+                            race.reset(number);
+                        }
+                        if direct.as_ref().is_some_and(|route| route.id == number) {
+                            relay_pending(&relay, &mut direct, &mut seq, &path, None).await?;
+                        }
+                    }
                     Some((RESET, number, [])) if number == attempt => {
                         setup = None;
                         relay_pending(&relay, &mut direct, &mut seq, &path, None).await?;
@@ -2180,11 +2289,22 @@ async fn run(
                     None => pending().await,
                 }
             } => {
-                if direct.is_none() && id > attempt {
+                if let Some(race) = parallel.as_mut() {
+                    if direct.is_none() {
+                        race.verify(id, Lane::Native(lane), false);
+                    }
+                } else if direct.is_none() && id > attempt {
                     attempt = id;
                     direct = Some(Direct::new(id, Lane::Native(lane)));
                 }
             }
+            _ = async {
+                if let Some(race) = parallel.as_mut().filter(|race| race.is_checking()) {
+                    race.checked().await;
+                } else {
+                    pending::<()>().await;
+                }
+            }, if !switching => {}
             Some(event) = events.recv() => match event {
                 SetupEvent::Native(id, lane) => {
                     native_task = None;
@@ -2239,7 +2359,13 @@ async fn run(
                         }
                     }
                     if let Some(rtc) = rtc {
-                        direct = Some(Direct::new(id, Lane::WebRtc(rtc)));
+                        if let Some(race) = parallel.as_mut() {
+                            if direct.is_none() {
+                                race.verify(id, Lane::WebRtc(rtc), offerer);
+                            }
+                        } else {
+                            direct = Some(Direct::new(id, Lane::WebRtc(rtc)));
+                        }
                     } else if offerer {
                         if current.mode.needs_full_retry(stage) {
                             let reported = current.punch.as_ref().map(|p| *p.status.borrow());
@@ -2288,19 +2414,33 @@ async fn run(
                         relay_pending(&relay, &mut direct, &mut seq, &path, reason).await?;
                     }
                 }
+                if let Some(race) = parallel.as_mut() {
+                    if direct.is_none() && established.is_none() {
+                        race.start_native(now);
+                    }
+                }
                 if let Some(mode @ native::Mode::Call(..)) = &native {
                     if direct.is_none() && established.is_none() && now >= next_attempt && native_task.is_none() {
                         attempt += 1;
                         native_task = mode.start(attempt, event_tx.clone());
                     }
                 } else if let Some(mode) = offer_mode {
-                    if direct.is_none() && established.is_none() && Instant::now() >= next_attempt && setup.is_none() {
+                    if direct.is_none() && established.is_none() && now >= next_attempt && setup.is_none()
+                        && !parallel.as_ref().is_some_and(parallel::Race::rtc_busy) {
                         attempt += 1;
                         // Only an authenticated peer advertising the new capability can enter full mode.
                         let mode = retries.next(mode, attempt);
                         let plan = if mode == OfferMode::Full { full_plan.take() } else { None };
                         setup = Some(make_attempt(&event_tx, attempt, None, mode, plan, last_lite_step));
                     }
+                }
+            }
+        }
+        if direct.is_none() {
+            if let Some(race) = parallel.as_mut() {
+                direct = race.advance(&relay, offerer).await?;
+                if direct.is_some() {
+                    setup = None;
                 }
             }
         }
@@ -2326,6 +2466,9 @@ async fn run(
             direct_write = None;
             if let Some(since) = established.filter(|_| offerer) {
                 next_attempt = next_attempt.max(Instant::now() + relay_hold(&mut flaps, since.elapsed()));
+                if let Some(race) = parallel.as_mut() {
+                    race.defer_native(next_attempt);
+                }
             }
         }
     }

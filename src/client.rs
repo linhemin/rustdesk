@@ -576,6 +576,45 @@ impl Client {
             })
         })
     }
+
+    fn native_parallel_dials(
+        interface: impl Interface, key: &str, token: &str, original_pk: Option<Vec<u8>>, server: String,
+    ) -> crate::live_direct::parallel::Dials {
+        let other_server = interface.get_lch().read().unwrap().other_server.clone();
+        let (peer, key, token) = match other_server {
+            Some((id, _, key)) => (id, key, String::new()),
+            None => (interface.get_id(), key.to_owned(), token.to_owned()),
+        };
+        let enabled = [tcp_punch_allowed(), crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled()];
+        [false, true].map(|udp| {
+            let (peer, key, token, server) = (peer.clone(), key.clone(), token.clone(), server.clone());
+            let (interface, original_pk) = (interface.clone(), original_pk.clone());
+            enabled[usize::from(udp)].then(|| -> crate::live_direct::native::Dial {
+                Box::new(move || {
+                    let (peer, key, token, server) = (peer.clone(), key.clone(), token.clone(), server.clone());
+                    let (interface, original_pk) = (interface.clone(), original_pk.clone());
+                    Box::pin(async move {
+                        if interface.is_policy_relay() || !crate::live_direct::native::enabled() {
+                            bail!("Direct transport is disabled");
+                        }
+                        let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only: udp, ..Default::default() };
+                        let ((stream, direct, pk, kcp, label), _, _) = if udp {
+                            Self::start_via_rendezvous(
+                                &peer, &key, &token, ConnType::DEFAULT_CONN, interface, server, Vec::new(), true, &permission,
+                            ).await?
+                        } else {
+                            Self::_start_inner(peer, key, token, ConnType::DEFAULT_CONN, interface,
+                                (None, None), None, None, None, server, Vec::new(), true, &permission).await?
+                        };
+                        if !direct || !stream.is_secured() || pk.is_none() || pk != original_pk {
+                            bail!("Native path does not match the authenticated session");
+                        }
+                        Ok((stream, kcp, label))
+                    })
+                })
+            })
+        })
+    }
     const CLIENT_CLIPBOARD_NAME: &'static str = "client-clipboard";
 
     /// Start a new connection.

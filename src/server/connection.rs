@@ -1066,6 +1066,16 @@ impl Connection {
                             Ok(bytes) => {
                                 last_recv_time = Instant::now();
                                 conn.session_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
+                                if bytes.as_ref() == crate::live_direct::parallel::START {
+                                    if !live_direct_started && conn.can_try_live_direct() && crate::live_direct::native::enabled() {
+                                        if crate::live_direct::accept_parallel(&mut conn.stream).await.is_err() {
+                                            conn.on_close("Parallel direct negotiation could not start", true).await;
+                                            break;
+                                        }
+                                        live_direct_started = true;
+                                    }
+                                    continue;
+                                }
                                 if bytes.as_ref() == crate::live_direct::native::START {
                                     if !live_direct_started && conn.can_try_live_transport() && crate::live_direct::native::enabled() {
                                         let listener = crate::live_direct::native::Listener::new();
@@ -2128,6 +2138,9 @@ impl Connection {
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if self.can_try_live_transport() && crate::live_direct::native::enabled() {
             platform_additions.insert(crate::live_direct::native::CAPABILITY.into(), json!(true));
+            if self.can_try_live_direct() {
+                platform_additions.insert(crate::live_direct::parallel::CAPABILITY.into(), json!(true));
+            }
         }
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if !platform_additions.is_empty() {
