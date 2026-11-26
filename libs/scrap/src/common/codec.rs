@@ -1282,6 +1282,17 @@ impl Quality {
     }
 }
 
+pub(super) fn capture_frame_timing_ms(last_pts: Option<i64>, ms: i64) -> (i64, u32) {
+    // Real-time rate control budgets bits per frame from its display duration.
+    // Reuse the capture cadence without assigning a whole idle gap to one frame.
+    let duration = match last_pts.map(|last| ms.saturating_sub(last)) {
+        Some(interval @ 1..=250) => interval.clamp(8, 67) as u32,
+        _ => 17,
+    };
+    let pts = last_pts.map_or(ms, |last| ms.max(last.saturating_add(1)));
+    (pts, duration)
+}
+
 pub fn base_bitrate(width: u32, height: u32) -> u32 {
     const RESOLUTION_PRESETS: &[(u32, u32, u32)] = &[
         (640, 480, 400),     // VGA, 307k pixels

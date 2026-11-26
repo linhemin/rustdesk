@@ -6,7 +6,7 @@
 
 include!(concat!(env!("OUT_DIR"), "/aom_ffi.rs"));
 
-use crate::codec::base_bitrate;
+use crate::codec::{base_bitrate, capture_frame_timing_ms};
 use crate::{codec::EncoderApi, EncodeFrame, STRIDE_ALIGN};
 use crate::{common::GoogleImage, generate_call_macro, generate_call_ptr_macro, Error, Result};
 use crate::{EncodeInput, EncodeYuvFormat, Pixfmt};
@@ -50,6 +50,7 @@ pub struct AomEncoderConfig {
 
 pub struct AomEncoder {
     ctx: aom_codec_ctx_t,
+    last_pts: Option<i64>,
     width: usize,
     height: usize,
     i444: bool,
@@ -225,6 +226,7 @@ impl EncoderApi for AomEncoder {
                 webrtc::set_controls(&mut ctx, &c)?;
                 Ok(Self {
                     ctx,
+                    last_pts: None,
                     width: config.width as _,
                     height: config.height as _,
                     i444,
@@ -310,8 +312,7 @@ impl AomEncoder {
             stride_align as _,
             data.as_ptr() as _,
         ));
-        let pts = webrtc::kTimeBaseDen / 1000 * ms;
-        let duration = webrtc::kTimeBaseDen / 1000;
+        let (pts, duration) = capture_frame_timing_ms(self.last_pts, ms);
         call_aom!(aom_codec_encode(
             &mut self.ctx,
             &image,
@@ -319,6 +320,7 @@ impl AomEncoder {
             duration as _, // Duration
             0,             // Flags
         ));
+        self.last_pts = Some(pts);
 
         Ok(EncodeFrames {
             ctx: &mut self.ctx,
@@ -588,3 +590,42 @@ impl Drop for Image {
 }
 
 unsafe impl Send for aom_codec_ctx_t {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn realtime_av1_packets_keep_capture_timing_and_a_bounded_idle_budget() {
+        let mut encoder = AomEncoder::new(
+            crate::codec::EncoderCfg::AOM(AomEncoderConfig {
+                width: 128,
+                height: 64,
+                quality: 4.0,
+                keyframe_interval: None,
+            }),
+            true,
+        )
+        .unwrap();
+        let yuv = vec![128; 128 * 64 * 3];
+        for (ms, pts, duration) in [
+            (0, 0, 17),
+            (16, 16, 16),
+            (33, 33, 17),
+            (66, 66, 33),
+            (100, 100, 34),
+            (200, 200, 67),
+            (10_000, 10_000, 17),
+            (10_000, 10_001, 17),
+            (9_990, 10_002, 17),
+            (10_010, 10_010, 8),
+        ] {
+            let frames = encoder.encode(ms, &yuv, STRIDE_ALIGN).unwrap();
+            let mut iter = frames.iter;
+            let packet = unsafe { aom_codec_get_cx_data(frames.ctx, &mut iter).as_ref() }.unwrap();
+            assert_eq!(packet.kind, aom_codec_cx_pkt_kind::AOM_CODEC_CX_FRAME_PKT);
+            let frame = unsafe { &packet.data.frame };
+            assert_eq!((frame.pts, frame.duration), (pts, duration));
+        }
+    }
+}

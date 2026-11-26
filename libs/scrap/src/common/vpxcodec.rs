@@ -8,7 +8,7 @@ use hbb_common::log;
 use hbb_common::ResultType;
 use base::message_proto::{Chroma, EncodedVideoFrame, EncodedVideoFrames, VideoFrame};
 
-use crate::codec::{base_bitrate, realtime_codec_thread_num, EncoderApi};
+use crate::codec::{base_bitrate, capture_frame_timing_ms, realtime_codec_thread_num, EncoderApi};
 use crate::{EncodeInput, EncodeYuvFormat, GoogleImage, Pixfmt, STRIDE_ALIGN};
 
 use super::vpx::{vp8e_enc_control_id::*, vpx_codec_err_t::*, *};
@@ -45,6 +45,7 @@ impl Default for VpxVideoCodecId {
 
 pub struct VpxEncoder {
     ctx: vpx_codec_ctx_t,
+    last_pts: Option<i64>,
     width: usize,
     height: usize,
     id: VpxVideoCodecId,
@@ -174,6 +175,7 @@ impl EncoderApi for VpxEncoder {
 
                 Ok(Self {
                     ctx,
+                    last_pts: None,
                     width: config.width as _,
                     height: config.height as _,
                     id: config.codec,
@@ -245,7 +247,7 @@ impl EncoderApi for VpxEncoder {
 }
 
 impl VpxEncoder {
-    pub fn encode<'a>(&'a mut self, pts: i64, data: &[u8], stride_align: usize) -> Result<EncodeFrames<'a>> {
+    pub fn encode<'a>(&'a mut self, ms: i64, data: &[u8], stride_align: usize) -> Result<EncodeFrames<'a>> {
         let bpp = if self.i444 { 24 } else { 12 };
         if data.len() < self.width * self.height * bpp / 8 {
             return Err(Error::FailedCall("len not enough".to_string()));
@@ -266,14 +268,16 @@ impl VpxEncoder {
             data.as_ptr() as _,
         ));
 
+        let (pts, duration) = capture_frame_timing_ms(self.last_pts, ms);
         call_vpx!(vpx_codec_encode(
             &mut self.ctx,
             &image,
             pts as _,
-            1, // Duration
+            duration as _,
             0, // Flags
             VPX_DL_REALTIME as _,
         ));
+        self.last_pts = Some(pts);
 
         Ok(EncodeFrames {
             ctx: &mut self.ctx,
@@ -287,7 +291,7 @@ impl VpxEncoder {
             &mut self.ctx,
             ptr::null(),
             -1, // PTS
-            1,  // Duration
+            1,  // Ignored when draining without an input image.
             0,  // Flags
             VPX_DL_REALTIME as _,
         ));
@@ -614,10 +618,43 @@ impl Drop for Image {
 
 unsafe impl Send for vpx_codec_ctx_t {}
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn vpx_capture_durations_survive_flush_and_idle() {
+        use VpxVideoCodecId::{VP8, VP9};
+        fn packet_timing(mut output: EncodeFrames<'_>) -> Option<(i64, u32)> {
+            let packet = unsafe { vpx_codec_get_cx_data(output.ctx, &mut output.iter).as_ref() }?;
+            assert_eq!(packet.kind, vpx_codec_cx_pkt_kind::VPX_CODEC_CX_FRAME_PKT);
+            let frame = unsafe { &packet.data.frame };
+            Some((frame.pts, frame.duration as u32))
+        }
+        for (codec, i444) in [(VP8, false), (VP9, false), (VP9, true)] {
+            let mut encoder = VpxEncoder::new(
+                crate::codec::EncoderCfg::VPX(VpxEncoderConfig {
+                    width: 128,
+                    height: 64,
+                    codec,
+                    quality: 4.0,
+                    keyframe_interval: None,
+                }),
+                i444,
+            )
+            .unwrap();
+            let data = vec![128; 128 * 64 * 3];
+            for (ms, pts, duration) in
+                [(0, 0, 17), (33, 33, 33), (1000, 1000, 17), (1000, 1001, 17)]
+            {
+                let packet = packet_timing(encoder.encode(ms, &data, STRIDE_ALIGN).unwrap());
+                let flushed = packet_timing(encoder.flush().unwrap());
+                assert_eq!(packet.or(flushed), Some((pts, duration)), "{codec:?} at {ms}");
+            }
+        }
+    }
+
+    #[cfg(windows)]
     #[test]
     fn vp8_cbr_keeps_frames_during_desktop_scrolling() {
         const WIDTH: usize = 1920;
