@@ -2407,7 +2407,7 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                   title: Text(translate('Relay servers')),
                   subtitle: Text(relaySummary(configuredRelayText()),
                       maxLines: 2, overflow: TextOverflow.ellipsis),
-                  onTap: locked || isOptionFixed(relayServersOption)
+                  onTap: locked
                       ? null
                       : () async {
                           if (await editRelayServers(context) && mounted)

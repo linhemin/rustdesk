@@ -894,5 +894,17 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Enter up to eight relay servers", ""),
         ("Invalid relay server address", ""),
         ("Leave the ID server empty to use the public ID server.", ""),
+        ("Relay server address", ""),
+        ("Relay public key", ""),
+        ("Use the ID server public key", ""),
+        ("Custom public key", ""),
+        ("Add relay server", ""),
+        ("Leave the relay list empty to use only direct connections.", ""),
+        ("Enter a 32-byte Ed25519 public key in standard Base64", ""),
+        ("Conflicting public keys for the same relay server", ""),
+        ("Relay nodes", ""),
+        ("Managed by your administrator", ""),
+        ("Public key source", ""),
+        ("Both devices must use the same relay address and public key.", ""),
     ].iter().cloned().collect();
 }

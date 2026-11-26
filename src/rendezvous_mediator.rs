@@ -695,7 +695,8 @@ impl RendezvousMediator {
         if last.0 == addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
         }
-        let common = crate::p2p::relay_list::intersection(&crate::p2p::relay_list::configured(), rr.session_relays.as_ref());
+        let configured = crate::p2p::relay_list::configured_for(&crate::get_key(true).await);
+        let common = crate::p2p::relay_list::intersection(&configured, rr.session_relays.as_ref());
         if crate::direct_only_enabled() || Self::check_relay_request(&rr, &common).is_err() {
             let mut message = Message::new();
             message.set_relay_response(RelayResponse {
@@ -746,8 +747,8 @@ impl RendezvousMediator {
         mut meta: ConnectionMeta,
     ) -> ResultType<()> {
         let peer_addr = AddrMangle::decode(&socket_addr);
-        let signaling_only = signaling_only || !common.contains(&relay_server)
-            || !crate::p2p::relay_list::allows(&relay_server);
+        let signaling_only = signaling_only || !common.contains(&relay_server);
+        let id_key = crate::get_key(true).await;
         log::info!(
             "create_relay requested from {:?}, relay_server: {}, uuid: {}, secure: {}",
             peer_addr,
@@ -760,9 +761,9 @@ impl RendezvousMediator {
         let ws_grant = if secure && !signaling_only && !force_relay && crate::live_direct::responder_enabled()
             && hbb_common::websocket::check_ws(&self.host).starts_with("wss://") {
             let host = self.host.clone();
+            let id_key = id_key.clone();
             Some(tokio::spawn(async move {
-                let key = crate::get_key(true).await;
-                crate::p2p::regional_relay::ws_direct_grant(&host, &key).await
+                crate::p2p::regional_relay::ws_direct_grant(&host, &id_key).await
             }))
         } else { None };
         let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
@@ -777,8 +778,7 @@ impl RendezvousMediator {
         let carries_answer = !webrtc_sdp_answer.is_empty();
         let mut signed_grant = false;
         if carries_answer || eligible {
-            let key = crate::get_key(true).await;
-            let exchange = crate::secure_tcp_with_direct_permission(&mut socket, &key, true);
+            let exchange = crate::secure_tcp_with_direct_permission(&mut socket, &id_key, true);
             // Pre-KX servers wait for RelayResponse first. Don't delay an ordinary relay
             // for their full handshake timeout when we only wanted the optional policy.
             let exchange = if carries_answer {
@@ -820,17 +820,18 @@ impl RendezvousMediator {
             && (signed_grant || (meta.direct_retry_permitted
                 && WebRTCStream::endpoint_declares_direct_only(&webrtc_sdp_answer)));
         let mut msg_out = Message::new();
+        let route = if signaling_only { None } else { crate::p2p::relay_list::resolve(&relay_server, &id_key) };
         let mut rr = RelayResponse {
             socket_addr: socket_addr.into(),
             session_relays: Some(SessionRelayList { servers: common, ..Default::default() }).into(),
-            prefer_relay_start: !signaling_only && relay_start_token.is_some(),
+            prefer_relay_start: route.is_some() && relay_start_token.is_some(),
             relay_start_token: relay_start_token.unwrap_or_default(),
             version: crate::VERSION.to_owned(),
             socket_addr_v6,
             webrtc_sdp_answer,
             ..Default::default()
         };
-        if !signaling_only {
+        if route.is_some() {
             rr.uuid = uuid.clone();
             rr.relay_server = relay_server.clone();
         }
@@ -839,12 +840,10 @@ impl RendezvousMediator {
         }
         msg_out.set_relay_response(rr);
         socket.send(&msg_out).await?;
-        if signaling_only {
-            return Ok(());
-        }
+        let Some(route) = route else { return Ok(()) };
         crate::create_relay_connection(
             server,
-            relay_server,
+            route,
             uuid,
             peer_addr,
             secure,
@@ -1583,9 +1582,10 @@ impl RendezvousMediator {
         if direct_only || crate::direct_only_enabled() {
             return (Vec::new(), String::new());
         }
-        let common = crate::p2p::relay_list::intersection(&crate::p2p::relay_list::configured(), offered);
+        let id_key = crate::get_key(true).await;
+        let common = crate::p2p::relay_list::intersection(&crate::p2p::relay_list::configured_for(&id_key), offered);
         let selected = if common.len() > 1 {
-            crate::p2p::regional_relay::choose_common(&common, samples, &crate::get_key(true).await, is_ipv4(&self.addr)).await
+            crate::p2p::regional_relay::choose_common(&common, samples, &id_key, is_ipv4(&self.addr)).await
         } else {
             common.first().cloned()
         };

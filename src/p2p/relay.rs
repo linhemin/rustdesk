@@ -158,7 +158,7 @@ mod quic {
     }
 
     pub(super) async fn connect(server: &str, pk: [u8; 32]) -> ResultType<FramedStream> {
-        // RFC 8410 SubjectPublicKeyInfo for the key already trusted for rendezvous.
+        // RFC 8410 SubjectPublicKeyInfo for the selected relay's Ed25519 key.
         let mut spki = vec![
             0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0,
         ];

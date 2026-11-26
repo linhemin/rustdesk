@@ -17,7 +17,7 @@ use hbb_common::{
     allow_err,
     anyhow::Context,
     bail,
-    config::{Config, CONNECT_TIMEOUT, RELAY_PORT},
+    config::{Config, CONNECT_TIMEOUT},
     log,
     protobuf::{Enum, Message as _},
     rendezvous_proto::*,
@@ -413,9 +413,9 @@ pub(crate) async fn accept_connection(
     }
 }
 
-pub async fn create_relay_connection(
+pub(crate) async fn create_relay_connection(
     server: ServerPtr,
-    relay_server: String,
+    route: crate::p2p::relay_list::Route,
     uuid: String,
     peer_addr: SocketAddr,
     secure: bool,
@@ -425,7 +425,7 @@ pub async fn create_relay_connection(
 ) {
     if let Err(err) = create_relay_connection_(
         server,
-        relay_server,
+        route,
         uuid.clone(),
         peer_addr,
         secure,
@@ -446,7 +446,7 @@ pub async fn create_relay_connection(
 
 async fn create_relay_connection_(
     server: ServerPtr,
-    relay_server: String,
+    route: crate::p2p::relay_list::Route,
     uuid: String,
     peer_addr: SocketAddr,
     secure: bool,
@@ -454,13 +454,10 @@ async fn create_relay_connection_(
     mut meta: ConnectionMeta,
     ws_grant: Option<tokio::task::JoinHandle<bool>>,
 ) -> ResultType<()> {
-    // The proxy's address family does not constrain the relay target.
-    let relay_server = crate::check_port(relay_server, RELAY_PORT);
-    let licence_key = crate::get_key(true).await;
-    let (mut stream, _) = crate::p2p::relay::connect(relay_server, &licence_key, ipv4).await?;
+    let (mut stream, _) = crate::p2p::relay::connect(route.address, &route.key, ipv4).await?;
     let mut msg_out = RendezvousMessage::new();
     msg_out.set_request_relay(RequestRelay {
-        licence_key,
+        licence_key: route.key,
         uuid,
         ..Default::default()
     });

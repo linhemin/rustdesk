@@ -1,6 +1,5 @@
 use hbb_common::{
     anyhow::{anyhow, ensure},
-    config::RELAY_PORT,
     futures_util::{stream::FuturesUnordered, StreamExt},
     protobuf::Message as _,
     rendezvous_proto::{
@@ -18,7 +17,7 @@ use hbb_common::{
 };
 use std::sync::Mutex;
 
-use super::relay_list::{self, MAX_RELAYS};
+use super::relay_list::{self, Route, MAX_RELAYS};
 const MAX_FRAME: usize = 4096;
 const DIRECTORY_DOMAIN: &[u8] = b"RustDesk regional relay directory v1\0";
 const CACHE_TIME: Duration = Duration::from_secs(30);
@@ -27,8 +26,7 @@ const MEASURE_WINDOW: Duration = Duration::from_millis(1200);
 
 // Separate concurrent TCP and ICE offers share the same background measurements.
 struct Entry {
-    nodes: Vec<String>,
-    key: String,
+    nodes: Vec<Route>,
     ipv4: bool,
     started: Instant,
     result: watch::Receiver<(Vec<RegionalRelaySample>, bool)>,
@@ -41,28 +39,27 @@ pub(super) fn network_changed() {
 }
 
 fn refresh(key: &str, ipv4: bool) -> Option<watch::Receiver<(Vec<RegionalRelaySample>, bool)>> {
-    let nodes = relay_list::configured();
+    let nodes = relay_list::routes(key);
     if nodes.len() < 2 {
         return None;
     }
     let mut cache = CACHE.lock().unwrap();
-    if let Some(entry) = cache.as_ref().filter(|e| {
-        e.nodes == nodes && e.key == key && e.ipv4 == ipv4 && e.started.elapsed() < CACHE_TIME
-    }) {
+    if let Some(entry) = cache
+        .as_ref()
+        .filter(|e| e.nodes == nodes && e.ipv4 == ipv4 && e.started.elapsed() < CACHE_TIME)
+    {
         return Some(entry.result.clone());
     }
     let (tx, rx) = watch::channel((Vec::new(), false));
     *cache = Some(Entry {
         nodes: nodes.clone(),
-        key: key.to_owned(),
         ipv4,
         started: Instant::now(),
         result: rx.clone(),
     });
-    let key = key.to_owned();
     tokio::spawn(async move {
         let mut pending: FuturesUnordered<_> =
-            nodes.iter().map(|name| measure(name, &key, ipv4)).collect();
+            nodes.iter().map(|node| measure(node, ipv4)).collect();
         let _ = timeout(MEASURE_WINDOW, async {
             while let Some(sample) = pending.next().await {
                 if let Ok(sample) = sample {
@@ -184,9 +181,8 @@ mod ws_grant_tests {
     }
 }
 
-async fn measure(name: &str, key: &str, ipv4: bool) -> ResultType<RegionalRelaySample> {
-    let endpoint = crate::check_port(name, RELAY_PORT);
-    let (mut stream, _) = super::relay::connect(endpoint, key, ipv4).await?;
+async fn measure(node: &Route, ipv4: bool) -> ResultType<RegionalRelaySample> {
+    let (mut stream, _) = super::relay::connect(node.address.clone(), &node.key, ipv4).await?;
     stream.set_max_packet_length(128);
     let nonce = hbb_common::rand::random::<u64>().max(1);
     let mut ping = RendezvousMessage::new();
@@ -201,7 +197,7 @@ async fn measure(name: &str, key: &str, ipv4: bool) -> ResultType<RegionalRelayS
         "Relay echo mismatch"
     );
     Ok(RegionalRelaySample {
-        relay_server: name.to_owned(),
+        relay_server: node.id.clone(),
         connect_ms: start.elapsed().as_millis().max(1) as u32,
         ..Default::default()
     })
@@ -297,9 +293,13 @@ mod tests {
                 stream.send(&response).await.unwrap();
             }
         });
-        let name = address.to_string();
-        assert!(measure(&name, "", true).await.is_err());
-        assert_eq!(measure(&name, "", true).await.unwrap().relay_server, name);
+        let node = Route {
+            id: "sample.relay-id.invalid:21117".into(),
+            address: address.to_string(),
+            key: String::new(),
+        };
+        assert!(measure(&node, true).await.is_err());
+        assert_eq!(measure(&node, true).await.unwrap().relay_server, node.id);
         echo.await.unwrap();
     }
 

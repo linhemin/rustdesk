@@ -386,7 +386,7 @@ impl DirectRetryPermission {
         }
     }
 
-    fn agrees_to_relay(&self, offered: &[String], answer: Option<&SessionRelayList>, selected: &str) -> bool {
+    fn agrees_to_relay(&self, offered: &[String], answer: Option<&SessionRelayList>, selected: &str, id_key: &str) -> bool {
         let common = crate::p2p::relay_list::intersection(offered, answer.filter(|a| a.packed_hashes.is_empty()));
         if common.is_empty() {
             if !self.direct_only && self.server_requires_direct.set(()).is_ok() {
@@ -394,7 +394,7 @@ impl DirectRetryPermission {
             }
             return false;
         }
-        !self.direct_only && common.iter().any(|entry| entry == selected) && crate::p2p::relay_list::allows(selected)
+        !self.direct_only && common.iter().any(|entry| entry == selected) && crate::p2p::relay_list::resolve(selected, id_key).is_some()
     }
 
     fn observe_refusal(&self, reason: &str) {
@@ -671,7 +671,7 @@ impl Client {
         interface.update_direct(None);
         interface.update_received(false);
         let mut permission = DirectRetryPermission {
-            direct_only: crate::direct_only_enabled() || crate::p2p::relay_list::configured().is_empty(),
+            direct_only: crate::direct_only_enabled() || crate::p2p::relay_list::is_empty(),
             ..Default::default()
         };
         let mut retried_punch = false;
@@ -710,7 +710,10 @@ impl Client {
             }
             if result.is_err() && permission.relay_start.accepted() && !permission.direct_only {
                 let retry = permission.relay_start.ordinary_retry();
-                let direct_only = retry.offered(crate::p2p::relay_list::configured()).is_empty();
+                let login = interface.get_lch();
+                let login = login.read().unwrap();
+                let id_key = login.other_server.as_ref().map_or(key, |(_, _, key)| key.as_str());
+                let direct_only = retry.offered(crate::p2p::relay_list::configured_for(id_key)).is_empty();
                 permission = DirectRetryPermission { relay_start: retry, direct_only, ..Default::default() };
                 continue;
             }
@@ -1037,7 +1040,7 @@ impl Client {
             secure_tcp(&mut socket, key).await?;
         }
         let offered = if direct_permission.direct_only { Vec::new() } else {
-            direct_permission.relay_start.offered(crate::p2p::relay_list::configured())
+            direct_permission.relay_start.offered(crate::p2p::relay_list::configured_for(key))
         };
         let mut request = RendezvousMessage::new();
         request.set_punch_hole_request(PunchHoleRequest {
@@ -1069,7 +1072,7 @@ impl Client {
             bail!("Invalid LAN listener");
         }
         let mut stream = iface.connect(SocketAddr::from((address, listener.port())), 0, 1_000).await?;
-        if direct_permission.agrees_to_relay(&offered, reply.session_relays.as_ref(), &reply.relay_server) {
+        if direct_permission.agrees_to_relay(&offered, reply.session_relays.as_ref(), &reply.relay_server, key) {
             direct_permission.relay_start.agreed(server, &reply.relay_server, &reply.pk);
         }
         let pk = Self::secure_connection(peer, reply.pk.into(), key, &mut stream).await?;
@@ -1355,7 +1358,7 @@ impl Client {
         let mut exchanged = false;
         let mut handshake_grant = false;
         let local_relays = if direct_permission.direct_only { Vec::new() } else {
-            direct_permission.relay_start.offered(crate::p2p::relay_list::configured())
+            direct_permission.relay_start.offered(crate::p2p::relay_list::configured_for(&key))
         };
         if carries_offer || ((!local_relays.is_empty() || udp.0.is_some() || direct_permission.websocket_path_ticket.is_some()) && !key.is_empty()) {
             // An offer puts both sides' ICE candidates, every interface address of both
@@ -1615,7 +1618,7 @@ impl Client {
                             // A TCP accept on this UDP mapping would discard a live KCP probe.
                             allow_tcp_punch &= !ph.is_udp;
                             websocket_path = allow_tcp_punch && websocket_marker.is_some() && ph.websocket_path;
-                            if direct_permission.agrees_to_relay(&local_relays, ph.session_relays.as_ref(), &ph.relay_server) {
+                            if direct_permission.agrees_to_relay(&local_relays, ph.session_relays.as_ref(), &ph.relay_server, &key) {
                                 direct_permission.relay_start.agreed(&rendezvous_server, &ph.relay_server, &ph.pk);
                                 relay_server = ph.relay_server;
                             }
@@ -1685,7 +1688,7 @@ impl Client {
                             direct_permission.observe_refusal(&rr.refuse_reason);
                             bail!(rr.refuse_reason);
                         }
-                        let approved = direct_permission.agrees_to_relay(&local_relays, rr.session_relays.as_ref(), &rr.relay_server);
+                        let approved = direct_permission.agrees_to_relay(&local_relays, rr.session_relays.as_ref(), &rr.relay_server, &key);
                         if approved {
                             direct_permission.relay_start.agreed(&rendezvous_server, &rr.relay_server, rr.pk());
                         }
@@ -1695,7 +1698,9 @@ impl Client {
                         if approved && prefer_relay_start && rr.prefer_relay_start && !rr.pk().is_empty() {
                             direct_permission.relay_start.accept(&rr.relay_server);
                             drop(webrtc_offerer.take());
-                            return relay_start::open(&peer, &key, conn_type, my_addr.is_ipv4(), rr, rendezvous_server).await;
+                            let route = crate::p2p::relay_list::resolve(&rr.relay_server, &key)
+                                .context("The agreed relay is no longer configured")?;
+                            return relay_start::open(&peer, &key, conn_type, my_addr.is_ipv4(), rr, rendezvous_server, route).await;
                         }
                         log::info!(
                             "relay requested from peer, time used: {:?}, relay_server: {}",
@@ -2080,7 +2085,7 @@ impl Client {
         // Guard the offerer for the whole of connect(): any early return — cancellation during the
         // awaits below, the relay override, or a secure_connection failure — closes its pc via the
         // guard's drop. Disarmed only once WebRTC is the confirmed winning, secured transport.
-        let direct_only = direct_permission.direct_only || !crate::p2p::relay_list::allows(relay_server);
+        let direct_only = direct_permission.direct_only || crate::p2p::relay_list::resolve(relay_server, key).is_none();
         if direct_only && interface.is_policy_relay() {
             bail!("Forced relay requires a common configured relay server");
         }
@@ -2285,10 +2290,11 @@ impl Client {
             let switch = interface.get_switch_code();
             let udp = async {
                 let (uuid, _) = Self::relay_pair_id(peer_id, relay_server, rendezvous_server, true, key, token, &switch).await?;
-                let endpoint = check_port(relay_server, RELAY_PORT);
-                let mut stream = crate::p2p::relay::connect_udp(&endpoint, key).await
+                let route = crate::p2p::relay_list::resolve(relay_server, key)
+                    .context("The agreed relay is no longer configured")?;
+                let mut stream = crate::p2p::relay::connect_udp(&route.address, &route.key).await
                     .ok_or_else(|| anyhow!("UDP relay unavailable"))?;
-                Self::join_relay(&mut stream, peer_id, uuid, key, conn_type).await?;
+                Self::join_relay(&mut stream, peer_id, uuid, route.key, conn_type).await?;
                 let pk = Self::secure_connection(peer_id, signed.to_vec(), key, &mut stream).await?;
                 if pk.is_none() || !stream.is_secured() { bail!("Unverified relay peer"); }
                 Ok((stream, pk, "QUIC"))
@@ -2564,7 +2570,7 @@ impl Client {
         peer: &str, relay_server: &str, rendezvous_server: &str, secure: bool,
         key: &str, token: &str, switch_code: &str,
     ) -> ResultType<(String, bool)> {
-        if !crate::p2p::relay_list::allows(relay_server) {
+        if crate::p2p::relay_list::resolve(relay_server, key).is_none() {
             bail!("Relay endpoint is outside the local configuration");
         }
         let offered = vec![relay_server.to_owned()];
@@ -2614,7 +2620,7 @@ impl Client {
                     }
                     if rs.uuid != uuid || rs.relay_server != relay_server ||
                         !crate::p2p::relay_list::intersection(&offered, rs.session_relays.as_ref().filter(|a| a.packed_hashes.is_empty())).contains(&rs.relay_server)
-                        || !crate::p2p::relay_list::allows(relay_server) {
+                        || crate::p2p::relay_list::resolve(relay_server, key).is_none() {
                         bail!("Peer did not confirm the requested relay pairing");
                     }
                     succeed = true;
@@ -2628,28 +2634,33 @@ impl Client {
         Ok((uuid, ipv4))
     }
 
-    /// Create a relay connection to the server.
     async fn create_relay(
         peer: &str,
         uuid: String,
-        relay_server: String,
-        key: &str,
+        relay_id: String,
+        id_key: &str,
         conn_type: ConnType,
         ipv4: bool,
     ) -> ResultType<(Stream, &'static str)> {
+        let route = crate::p2p::relay_list::resolve(&relay_id, id_key)
+            .context("The agreed relay is no longer configured")?;
+        Self::dial_relay(peer, uuid, route, conn_type, ipv4).await
+    }
+
+    async fn dial_relay(
+        peer: &str, uuid: String, route: crate::p2p::relay_list::Route, conn_type: ConnType, ipv4: bool,
+    ) -> ResultType<(Stream, &'static str)> {
         crate::common::check_relay_uuid(&uuid)?;
-        // The proxy's address family does not constrain the relay target.
-        let relay_server = check_port(relay_server, RELAY_PORT);
-        let (mut conn, transport) = crate::p2p::relay::connect(relay_server, key, ipv4)
+        let (mut conn, transport) = crate::p2p::relay::connect(route.address, &route.key, ipv4)
             .await.with_context(|| "Failed to connect to relay server")?;
-        Self::join_relay(&mut conn, peer, uuid, key, conn_type).await?;
+        Self::join_relay(&mut conn, peer, uuid, route.key, conn_type).await?;
         Ok((conn, transport))
     }
 
-    async fn join_relay(conn: &mut Stream, peer: &str, uuid: String, key: &str, conn_type: ConnType) -> ResultType<()> {
+    async fn join_relay(conn: &mut Stream, peer: &str, uuid: String, relay_key: String, conn_type: ConnType) -> ResultType<()> {
         let mut msg_out = RendezvousMessage::new();
         msg_out.set_request_relay(RequestRelay {
-            licence_key: key.to_owned(),
+            licence_key: relay_key,
             id: peer.to_owned(),
             uuid,
             conn_type: conn_type.into(),
@@ -7080,7 +7091,7 @@ async fn direct_only_declines_legacy_relay_without_contacting_hbbr() {
         res = attempt => assert_eq!(res.err().unwrap().to_string(), DIRECT_ONLY_UNAVAILABLE),
         _ = tokio::time::sleep(Duration::from_secs(20)) => panic!("no policy decision"),
     }
-    assert_eq!(signaling.await.unwrap(), !crate::direct_only_enabled() && !crate::p2p::relay_list::configured().is_empty());
+    assert_eq!(signaling.await.unwrap(), !crate::direct_only_enabled() && !crate::p2p::relay_list::is_empty());
 }
 
 #[cfg(test)]

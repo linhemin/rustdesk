@@ -894,5 +894,17 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Enter up to eight relay servers", "最多可輸入八個不同的中繼伺服器"),
         ("Invalid relay server address", "中繼伺服器位址無效"),
         ("Leave the ID server empty to use the public ID server.", "ID 伺服器留空時使用公共 ID 伺服器。"),
+        ("Relay server address", "中繼伺服器位址"),
+        ("Relay public key", "中繼公鑰"),
+        ("Use the ID server public key", "使用 ID 伺服器公鑰"),
+        ("Custom public key", "獨立公鑰"),
+        ("Add relay server", "新增中繼伺服器"),
+        ("Leave the relay list empty to use only direct connections.", "中繼列表留空時只允許直連。"),
+        ("Enter a 32-byte Ed25519 public key in standard Base64", "請輸入標準 Base64 編碼的 32 位元組 Ed25519 公鑰"),
+        ("Conflicting public keys for the same relay server", "同一中繼伺服器設定了不同的公鑰"),
+        ("Relay nodes", "中繼節點"),
+        ("Managed by your administrator", "由管理員管理"),
+        ("Public key source", "公鑰來源"),
+        ("Both devices must use the same relay address and public key.", "雙方設定相同的中繼位址與公鑰後即可使用中繼。"),
     ].iter().cloned().collect();
 }

@@ -2978,10 +2978,14 @@ String configuredRelayText() => relayServerText(
 
 String relaySummary(String text) {
   if (text.isEmpty) return translate('Direct connections only');
-  return text.split('\n').join(', ');
+  return parseRelayServers(text)
+      .map((e) => e.publicKey.isEmpty
+          ? e.address
+          : '${e.address} (${translate("Custom public key")})')
+      .join(', ');
 }
 
-Future<void> storeRelayServers(List<String> entries) async {
+Future<void> storeRelayServers(List<RelayEndpoint> entries) async {
   await bind.mainSetOption(key: relayServersOption, value: jsonEncode(entries));
 }
 
@@ -3016,14 +3020,10 @@ class ServerConfig {
     idServer = json['host'] ?? '';
     hasRelayServers = json.containsKey('relays') || json.containsKey('relay');
     if (json.containsKey('relays')) {
-      final relays = json['relays'];
-      if (relays is! List ||
-          !relays.every((e) => e is String && !e.contains(RegExp(r'[\r\n]')))) {
-        throw const FormatException('Invalid relay server address');
-      }
-      relayServer = parseRelayServers(relays.join('\n')).join('\n');
+      relayServer = relayDraft(relayEntriesFromJson(json['relays']));
     } else {
-      relayServer = json['relay'] ?? '';
+      final legacy = json['relay'] ?? '';
+      relayServer = legacy == '' ? '' : relayDraft(relayEntriesFromJson([legacy]));
     }
     apiServer = json['api'] ?? '';
     key = json['key'] ?? '';
@@ -3037,7 +3037,12 @@ class ServerConfig {
     if (hasRelayServers) {
       final relays = parseRelayServers(relayServer);
       config['relays'] = relays;
-      config['relay'] = relays.isEmpty ? '' : relays.first;
+      // Clients without per-relay pins can only inherit the ID server identity.
+      config['relay'] = relays
+              .where((e) => e.publicKey.isEmpty || e.publicKey == key.trim())
+              .map((e) => e.address)
+              .firstOrNull ??
+          '';
     }
     config['api'] = apiServer.trim();
     config['key'] = key.trim();
@@ -3672,7 +3677,7 @@ Future<bool> setServerConfig(
   }
 
   config.idServer = removeEndSlash(config.idServer.trim());
-  final List<String> relays;
+  final List<RelayEndpoint> relays;
   try {
     relays = config.hasRelayServers && !isWeb
         ? parseRelayServers(config.relayServer)
@@ -3686,7 +3691,7 @@ Future<bool> setServerConfig(
     }
     return false;
   }
-  if (config.hasRelayServers && !isWeb) config.relayServer = relays.join('\n');
+  if (config.hasRelayServers && !isWeb) config.relayServer = relayDraft(relays);
   config.apiServer = removeEndSlash(config.apiServer.trim());
   config.key = config.key.trim();
   if (controllers != null) {

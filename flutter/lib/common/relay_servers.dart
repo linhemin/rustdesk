@@ -2,45 +2,104 @@ import 'dart:convert';
 
 const relayServersOption = 'relay-servers';
 
-/// Old installations have one relay address. An explicit empty list takes precedence.
+class RelayEndpoint {
+  const RelayEndpoint(this.address, [this.publicKey = '']);
+
+  final String address;
+  final String publicKey;
+
+  Object toJson() =>
+      publicKey.isEmpty ? address : {'address': address, 'key': publicKey};
+}
+
+bool isEd25519PublicKey(String value) =>
+    RegExp(r'^[A-Za-z0-9+/]{43}=$').hasMatch(value) &&
+    base64Encode(base64Decode(value)) == value;
+
+// A text draft also accepts the address-only format used by the previous editor.
+String relayDraft(Iterable<RelayEndpoint> entries) =>
+    entries.any((e) => e.publicKey.isNotEmpty)
+        ? jsonEncode(entries.toList())
+        : entries.map((e) => e.address).join('\n');
+
+List<RelayEndpoint> relayEntriesFromJson(dynamic value) {
+  if (value is! List || value.length > 8) {
+    throw const FormatException('Enter up to eight relay servers');
+  }
+  final rows = <RelayEndpoint>[];
+  for (final row in value) {
+    if (row is String) {
+      rows.add(RelayEndpoint(row));
+    } else if (row is Map &&
+        row['address'] is String &&
+        row.keys.every((k) => k == 'address' || k == 'key')) {
+      if (row.containsKey('key') && row['key'] is! String) {
+        throw const FormatException(
+            'Enter a 32-byte Ed25519 public key in standard Base64');
+      }
+      rows.add(RelayEndpoint(row['address'], row['key'] ?? ''));
+    } else {
+      throw const FormatException('Invalid relay server address');
+    }
+  }
+  return _checkedRelayEntries(rows);
+}
+
 String relayServerText(String stored, String legacy) {
   try {
     final value = stored.isEmpty
         ? [if (legacy.trim().isNotEmpty) legacy]
         : jsonDecode(stored);
-    if (value is List &&
-        value.length <= 8 &&
-        value.every((item) =>
-            item is String &&
-            item.trim().isNotEmpty &&
-            !item.contains(RegExp(r'[\r\n]')))) {
-      return parseRelayServers(value.join('\n')).join('\n');
-    }
+    return relayDraft(relayEntriesFromJson(value));
   } on FormatException {
-    // A malformed explicit list never enables a legacy endpoint.
+    // An explicitly invalid list must never fall back to another identity.
+    return '';
   }
-  return '';
 }
 
-List<String> parseRelayServers(String text) {
-  final result = <String>[];
-  final seen = <String>{};
-  for (final input in const LineSplitter().convert(text)) {
-    final entry = input.trim();
-    if (entry.isEmpty) continue;
-    final key = _endpointKey(entry);
-    if (key == null) {
-      throw FormatException('Invalid relay server address', entry);
+List<RelayEndpoint> parseRelayServers(String text) {
+  // A bracketed IPv6 address is also valid in the previous multiline format.
+  final data = text.trim();
+  if (data.startsWith('[{') || data.startsWith('["') || data == '[]') {
+    return relayEntriesFromJson(jsonDecode(data));
+  }
+  return _checkedRelayEntries(const LineSplitter()
+      .convert(text)
+      .where((s) => s.trim().isNotEmpty)
+      .map((s) => RelayEndpoint(s)));
+}
+
+List<RelayEndpoint> _checkedRelayEntries(Iterable<RelayEndpoint> rows) {
+  final result = <String, RelayEndpoint>{};
+  for (final row in rows) {
+    final entry = row.address.trim();
+    if (entry.isEmpty || row.address.contains(RegExp(r'[\r\n]'))) {
+      throw const FormatException('Invalid relay server address');
     }
-    if (seen.add(key)) result.add(entry);
+    final endpoint = relayEndpointKey(entry);
+    if (endpoint == null) {
+      throw const FormatException('Invalid relay server address');
+    }
+    final pin = row.publicKey.trim();
+    if (row.publicKey.contains(RegExp(r'[\r\n]')) ||
+        (pin.isNotEmpty && !isEd25519PublicKey(pin))) {
+      throw const FormatException(
+          'Enter a 32-byte Ed25519 public key in standard Base64');
+    }
+    final previous = result[endpoint];
+    if (previous != null && previous.publicKey != pin) {
+      throw const FormatException(
+          'Conflicting public keys for the same relay server');
+    }
+    result.putIfAbsent(endpoint, () => RelayEndpoint(entry, pin));
     if (result.length > 8) {
       throw const FormatException('Enter up to eight relay servers');
     }
   }
-  return result;
+  return result.values.toList();
 }
 
-String? _endpointKey(String entry) {
+String? relayEndpointKey(String entry) {
   if (entry.length > 255 ||
       entry.codeUnits.any((c) => c > 127) ||
       RegExp(r'[\s\\?#@\x00-\x1f\x7f]').hasMatch(entry)) return null;
@@ -74,6 +133,9 @@ String? _endpointKey(String entry) {
     } else {
       host = host.toLowerCase();
       if (host.endsWith('.')) host = host.substring(0, host.length - 1);
+      if (host == 'relay-id.invalid' || host.endsWith('.relay-id.invalid')) {
+        return null;
+      }
       if (host.length > 253 ||
           host.split('.').any((s) =>
               !RegExp(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$').hasMatch(s))) {

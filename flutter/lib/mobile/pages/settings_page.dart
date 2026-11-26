@@ -1025,12 +1025,9 @@ class _SettingsState extends State<_SettingsContent>
           leading: const Icon(Icons.hub_outlined),
           description: Text(relaySummary(configuredRelayText()),
               maxLines: 2, overflow: TextOverflow.ellipsis),
-          onPressed: isOptionFixed(relayServersOption)
-              ? null
-              : (context) async {
-                  if (await editRelayServers(context) && mounted)
-                    setState(() {});
-                },
+          onPressed: (context) async {
+            if (await editRelayServers(context) && mounted) setState(() {});
+          },
         ),
     ];
     final network = _networkTiles(disabledSettings, incomingOnly, outgoingOnly);
