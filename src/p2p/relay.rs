@@ -1,23 +1,31 @@
 use hbb_common::{
-    config::{use_ws, Config, CONNECT_TIMEOUT},
-    socket_client::{connect_tcp, ipv4_to_ipv6},
-    websocket::{check_ws, is_ws_endpoint},
+    config::{Config, CONNECT_TIMEOUT},
+    socket_client::connect_tcp_local,
+    websocket::{is_ws_endpoint, WsFramedStream},
     ResultType, Stream,
 };
 
 pub(crate) async fn connect(
     server: String,
     _key: &str,
-    ipv4: bool,
+    _ipv4: bool,
 ) -> ResultType<(Stream, &'static str)> {
-    let ws = is_ws_endpoint(&check_ws(&server));
-    let tcp_endpoint = ipv4_to_ipv6(server.clone(), ipv4 || (Config::is_proxy() && ws));
+    // A negotiated relay identifies an exact endpoint. The global signalling
+    // WebSocket setting must not remap its port or substitute another path.
+    if is_ws_endpoint(&server) {
+        let ws = if server.starts_with("wss://") {
+            WsFramedStream::new_verified_wss(&server, CONNECT_TIMEOUT).await?
+        } else {
+            WsFramedStream::new(&server, None, CONNECT_TIMEOUT).await?
+        };
+        return Ok((Stream::WebSocket(ws), "WebSocket"));
+    }
     let tcp = async {
-        let stream = connect_tcp(tcp_endpoint, CONNECT_TIMEOUT).await?;
-        Ok((stream, if use_ws() || ws { "WebSocket" } else { "Relay" }))
+        let stream = connect_tcp_local(server.as_str(), None, CONNECT_TIMEOUT).await?;
+        Ok((stream, "Relay"))
     };
     #[cfg(feature = "udp-relay")]
-    if !ws && !Config::is_proxy() && !crate::is_udp_disabled() {
+    if !Config::is_proxy() && !crate::is_udp_disabled() {
         let quic = async { connect_udp(&server, _key).await.map(|stream| (stream, "QUIC")) };
         return with_tcp_fallback(quic, tcp).await;
     }
@@ -44,7 +52,7 @@ async fn with_tcp_fallback<T>(
 
 #[cfg(feature = "udp-relay")]
 pub(crate) async fn connect_udp(server: &str, key: &str) -> Option<Stream> {
-    if Config::is_proxy() || is_ws_endpoint(&check_ws(server)) || crate::is_udp_disabled() {
+    if Config::is_proxy() || is_ws_endpoint(server) || crate::is_udp_disabled() {
         return None;
     }
     let pk = crate::decode64(key).ok()?.try_into().ok()?;

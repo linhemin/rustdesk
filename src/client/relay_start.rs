@@ -1,4 +1,4 @@
-use super::{Client, PeerConnection};
+use super::{path_rtt, Client, PeerConnection};
 use hbb_common::{
     bail,
     config::RELAY_PORT,
@@ -40,7 +40,38 @@ pub(super) async fn open(
 pub(super) struct RelayStart {
     requested: OnceLock<()>,
     accepted: OnceLock<String>,
-    failed_relay: Option<String>,
+    failed_relays: Vec<String>,
+    agreement: OnceLock<Agreement>,
+}
+
+pub(super) struct Agreement {
+    rendezvous: String,
+    endpoint: String,
+    signed_identity: Vec<u8>,
+}
+
+// Only the winning connection proceeds to desktop login. The direct is held throughout the
+// relay pairing and authentication; an unreachable node may delay login by at most this budget.
+pub(super) async fn compare_direct(
+    connection: &mut PeerConnection, frames: &mut path_rtt::InitialFrames, agreement: &Agreement,
+    peer: &str, key: &str, token: &str, switch_code: &str,
+) -> ResultType<()> {
+    let Some(identity) = connection.0.2.as_ref() else { return Ok(()) };
+    let setup = async {
+        let (mut stream, label) = Client::request_relay(peer, agreement.endpoint.clone(),
+            &agreement.rendezvous, true, key, token, ConnType::DEFAULT_CONN, switch_code).await?;
+        let actual = Client::secure_connection(peer, agreement.signed_identity.clone(), key, &mut stream).await?;
+        if !stream.is_secured() || actual.as_ref() != Some(identity) {
+            bail!("Standby relay did not authenticate the same peer");
+        }
+        Ok::<_, hbb_common::anyhow::Error>((stream, label))
+    };
+    let Ok(Ok((mut relay, label))) = hbb_common::timeout(750, setup).await else { return Ok(()) };
+    if path_rtt::prefer_alternate(&mut connection.0.0, &mut relay, frames).await? {
+        connection.0 = (relay, false, Some(identity.clone()), None, label);
+        connection.2 = false;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -56,13 +87,17 @@ mod tests {
     };
 
     #[test]
-    fn a_failed_bootstrap_retries_ordinary_punch_with_the_other_measured_region() {
+    fn failed_regions_are_excluded_from_later_offers_even_without_measurements() {
         let first = RelayStart::default();
         assert!(first.request());
         assert!(!first.request());
         first.accept("tokyo.example:21117");
         let retry = first.ordinary_retry();
-        assert!(!retry.request());
+        assert!(retry.request());
+        let offered = ["tokyo.example:21117", "fuzhou.example:21117", "sz.example:21117"].map(str::to_owned);
+        assert_eq!(retry.offered(offered.to_vec()), &offered[1..]);
+        retry.accept(&offered[1]);
+        assert_eq!(retry.ordinary_retry().offered(offered.to_vec()), &offered[2..]);
         let samples = ["tokyo.example", "fuzhou.example"]
             .into_iter()
             .map(|name| RegionalRelaySample {
@@ -143,8 +178,21 @@ mod tests {
 }
 
 impl RelayStart {
+    pub(super) fn agreed(&self, rendezvous: &str, endpoint: &str, signed_identity: &[u8]) {
+        if !signed_identity.is_empty() {
+            let _ = self.agreement.set(Agreement {
+                rendezvous: rendezvous.to_owned(), endpoint: endpoint.to_owned(),
+                signed_identity: signed_identity.to_vec(),
+            });
+        }
+    }
+
+    pub(super) fn agreement(&self, rendezvous: &str) -> Option<&Agreement> {
+        self.agreement.get().filter(|agreement| agreement.rendezvous == rendezvous)
+    }
+
     pub(super) fn request(&self) -> bool {
-        self.failed_relay.is_none() && self.requested.set(()).is_ok()
+        self.requested.set(()).is_ok()
     }
 
     pub(super) fn requested(&self) -> bool {
@@ -160,19 +208,25 @@ impl RelayStart {
     }
 
     pub(super) fn ordinary_retry(&self) -> Self {
-        Self {
-            failed_relay: self.accepted.get().cloned(),
-            ..Self::default()
+        let mut failed_relays = self.failed_relays.clone();
+        if let Some(endpoint) = self.accepted.get() {
+            if !failed_relays.contains(endpoint) {
+                failed_relays.push(endpoint.clone());
+            }
         }
+        Self { failed_relays, ..Self::default() }
+    }
+
+    pub(super) fn offered(&self, mut endpoints: Vec<String>) -> Vec<String> {
+        endpoints.retain(|endpoint| !self.failed_relays.contains(endpoint));
+        endpoints
     }
 
     pub(super) fn remaining(
         &self,
         mut samples: Vec<RegionalRelaySample>,
     ) -> Vec<RegionalRelaySample> {
-        if let Some(failed) = &self.failed_relay {
-            samples.retain(|s| crate::check_port(&s.relay_server, RELAY_PORT) != *failed);
-        }
+        samples.retain(|s| !self.failed_relays.contains(&crate::check_port(&s.relay_server, RELAY_PORT)));
         samples
     }
 }

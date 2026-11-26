@@ -111,16 +111,16 @@ pub(super) async fn prefer_alternate(
     let (lan_rtt, other_rtt) =
         tokio::join!(measure(lan, frames), measure(other, &mut other_frames));
     if matches!((&lan_rtt, &other_rtt), (Sample::Closed, Sample::Closed)) {
-        hbb_common::bail!("Both direct connections closed before login");
+        hbb_common::bail!("Both peer connections closed before login");
     }
     let use_other = choose_alternate(&lan_rtt, &other_rtt);
     if let (Sample::Echo(lan), Sample::Echo(alternate)) = (&lan_rtt, &other_rtt) {
         log::info!(
-            "Authenticated peer RTT: physical LAN {lan:?}, other direct {alternate:?}; selected {}",
+            "Authenticated peer RTT: first path {lan:?}, alternate path {alternate:?}; selected {}",
             if use_other {
-                "other direct"
+                "alternate"
             } else {
-                "physical LAN"
+                "first"
             }
         );
     }

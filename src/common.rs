@@ -2493,11 +2493,6 @@ pub async fn secure_tcp_required(conn: &mut Stream, key: &str) -> ResultType<()>
         .map(|_| ())
 }
 
-pub(crate) async fn secure_regional_directory(conn: &mut Stream, key: &str) -> ResultType<bool> {
-    let policy = secure_tcp_impl(conn, key, true, false).await?;
-    Ok(conn.is_secured() && policy.regional_relay_directory)
-}
-
 pub(crate) async fn secure_punch_policy(conn: &mut Stream, key: &str) -> ResultType<(bool, bool)> {
     let policy = secure_tcp_impl(conn, key, true, true).await?;
     Ok((policy.session_direct, policy.regional_relay_directory))

@@ -1,6 +1,6 @@
 use hbb_common::{
     anyhow::{anyhow, ensure},
-    config::{Config, RELAY_PORT},
+    config::RELAY_PORT,
     futures_util::{stream::FuturesUnordered, StreamExt},
     protobuf::Message as _,
     rendezvous_proto::{
@@ -13,130 +13,81 @@ use hbb_common::{
         sync::watch,
         time::{timeout, Duration, Instant},
     },
-    websocket::{check_ws, is_ws_endpoint, WsFramedStream},
+    websocket::{check_ws, WsFramedStream},
     ResultType, Stream,
 };
-use std::{collections::VecDeque, sync::Mutex};
+use std::sync::Mutex;
 
-const MAX_RELAYS: usize = 8;
+use super::relay_list::{self, MAX_RELAYS};
 const MAX_FRAME: usize = 4096;
 const DIRECTORY_DOMAIN: &[u8] = b"RustDesk regional relay directory v1\0";
 const CACHE_TIME: Duration = Duration::from_secs(30);
 const BUDGET: Duration = Duration::from_millis(2100);
 const MEASURE_WINDOW: Duration = Duration::from_millis(1200);
 
-#[derive(Clone, Default)]
-enum Progress {
-    #[default]
-    Discovering,
-    Measuring,
-    Done(Vec<RegionalRelaySample>),
-}
-
+// Separate concurrent TCP and ICE offers share the same background measurements.
 struct Entry {
-    host: String,
+    nodes: Vec<String>,
     key: String,
+    ipv4: bool,
     started: Instant,
-    result: watch::Receiver<Progress>,
+    result: watch::Receiver<(Vec<RegionalRelaySample>, bool)>,
 }
-static CACHE: Mutex<VecDeque<Entry>> = Mutex::new(VecDeque::new());
+static CACHE: Mutex<Option<Entry>> = Mutex::new(None);
 
 #[cfg(target_os = "ios")]
 pub(super) fn network_changed() {
-    CACHE.lock().unwrap().clear();
+    CACHE.lock().unwrap().take();
 }
 
-// The key and exact signalling endpoint scope the operator's authority. Single-flight also
-// prevents the simultaneous TCP and ICE punch requests from multiplying relay measurements.
-fn refresh(server: &str, key: &str) -> Option<watch::Receiver<Progress>> {
-    if key.is_empty() || server.is_empty() || !Config::get_option("relay-server").is_empty() {
-        return None;
-    }
-    let route = check_ws(server);
-    if route.starts_with("ws://") {
+fn refresh(key: &str, ipv4: bool) -> Option<watch::Receiver<(Vec<RegionalRelaySample>, bool)>> {
+    let nodes = relay_list::configured();
+    if nodes.len() < 2 {
         return None;
     }
     let mut cache = CACHE.lock().unwrap();
-    cache.retain(|entry| entry.started.elapsed() < CACHE_TIME);
-    if let Some(entry) = cache
-        .iter()
-        .find(|entry| entry.host == route && entry.key == key)
-    {
+    if let Some(entry) = cache.as_ref().filter(|e| {
+        e.nodes == nodes && e.key == key && e.ipv4 == ipv4 && e.started.elapsed() < CACHE_TIME
+    }) {
         return Some(entry.result.clone());
     }
-    if cache.len() == MAX_RELAYS {
-        // Do not evict an in-flight directory and start another one on its behalf.
-        let index = cache
-            .iter()
-            .position(|e| matches!(*e.result.borrow(), Progress::Done(_)))?;
-        cache.remove(index);
-    }
-    let (tx, rx) = watch::channel(Progress::Discovering);
-    cache.push_back(Entry {
-        host: route.clone(),
+    let (tx, rx) = watch::channel((Vec::new(), false));
+    *cache = Some(Entry {
+        nodes: nodes.clone(),
         key: key.to_owned(),
+        ipv4,
         started: Instant::now(),
         result: rx.clone(),
     });
     let key = key.to_owned();
     tokio::spawn(async move {
-        let samples = match fetch(&route, &key, &tx).await {
-            Ok(samples) => samples,
-            Err(err) => {
-                hbb_common::log::trace!("Regional relay measurements unavailable: {err}");
-                Vec::new()
+        let mut pending: FuturesUnordered<_> =
+            nodes.iter().map(|name| measure(name, &key, ipv4)).collect();
+        let _ = timeout(MEASURE_WINDOW, async {
+            while let Some(sample) = pending.next().await {
+                if let Ok(sample) = sample {
+                    tx.send_modify(|state| state.0.push(sample));
+                }
             }
-        };
-        tx.send_replace(Progress::Done(samples));
+        })
+        .await;
+        tx.send_modify(|state| state.1 = true);
     });
     Some(rx)
 }
 
-pub(crate) fn prefetch(server: &str, key: &str) {
-    refresh(server, key);
+pub(crate) fn prefetch(key: &str) {
+    refresh(key, true);
 }
 
-pub(crate) async fn samples(server: &str, key: &str, advertised: bool) -> Vec<RegionalRelaySample> {
-    let Some(mut rx) = refresh(server, key) else {
+pub(crate) async fn offer_samples(key: &str, ipv4: bool) -> Vec<RegionalRelaySample> {
+    let Some(mut rx) = refresh(key, ipv4) else {
         return Vec::new();
     };
-    if !advertised && matches!(*rx.borrow_and_update(), Progress::Discovering) {
-        // A legacy or unavailable hbbs must not spend its full directory timeout on login.
-        let _ = timeout(Duration::from_millis(200), rx.changed()).await;
-    }
-    loop {
-        match rx.borrow_and_update().clone() {
-            Progress::Done(samples) => return samples,
-            Progress::Discovering if !advertised => return Vec::new(),
-            _ => {}
-        }
-        if rx.changed().await.is_err() {
-            return Vec::new();
-        }
-    }
-}
-
-fn valid_endpoint(endpoint: &str) -> bool {
-    if endpoint.is_empty() || endpoint.len() > 256 || endpoint.chars().any(char::is_whitespace) {
-        return false;
-    }
-    if is_ws_endpoint(endpoint) {
-        return url::Url::parse(endpoint).is_ok_and(|url| {
-            url.has_host()
-                && url.username().is_empty()
-                && url.password().is_none()
-                && url.fragment().is_none()
-                && url.query().is_none()
-        });
-    }
-    endpoint
-        .bytes()
-        .all(|ch| ch.is_ascii_alphanumeric() || b".-:[]".contains(&ch))
-        && url::Url::parse(&format!(
-            "tcp://{}",
-            crate::check_port(endpoint, RELAY_PORT)
-        ))
-        .is_ok_and(|url| url.has_host() && url.port().is_some_and(|port| port != 0))
+    // A slow or older hbbr can still be paired. Its missing echo must not block the first image.
+    let _ = timeout(Duration::from_millis(300), rx.wait_for(|state| state.1)).await;
+    let samples = rx.borrow().0.clone();
+    samples
 }
 
 async fn read(stream: &mut Stream) -> ResultType<Union> {
@@ -233,50 +184,6 @@ mod ws_grant_tests {
     }
 }
 
-async fn fetch(
-    server: &str,
-    key: &str,
-    status: &watch::Sender<Progress>,
-) -> ResultType<Vec<RegionalRelaySample>> {
-    let start = Instant::now();
-    let (reply, ipv4) = timeout(BUDGET, async {
-        if server.starts_with("wss://") {
-            return signed_ws_directory(server, key).await;
-        }
-        let mut stream = crate::p2p::connect_rendezvous(server, None, 1500).await?;
-        if !crate::secure_regional_directory(&mut stream, key).await? {
-            return Ok((RegionalRelayDirectory::default(), false));
-        }
-        status.send_replace(Progress::Measuring);
-        Ok((query(&mut stream, 0).await?, stream.local_addr().is_ipv4()))
-    })
-    .await??;
-    if reply.relay_servers.len() < 2 {
-        return Ok(Vec::new());
-    }
-    status.send_replace(Progress::Measuring);
-    let mut pending = FuturesUnordered::new();
-    let mut unique = Vec::new();
-    for name in &reply.relay_servers {
-        if valid_endpoint(name) && !unique.contains(&name) {
-            unique.push(name);
-            pending.push(measure(name, key, ipv4));
-        }
-    }
-    let mut measured = Vec::new();
-    let window = MEASURE_WINDOW.min(BUDGET.saturating_sub(start.elapsed()));
-    let _ = timeout(window, async {
-        while let Some(sample) = pending.next().await {
-            if let Ok(sample) = sample {
-                measured.push(sample)
-            }
-        }
-    })
-    .await;
-    measured.sort_by_key(|s| s.connect_ms);
-    Ok(measured)
-}
-
 async fn measure(name: &str, key: &str, ipv4: bool) -> ResultType<RegionalRelaySample> {
     let endpoint = crate::check_port(name, RELAY_PORT);
     let (mut stream, _) = super::relay::connect(endpoint, key, ipv4).await?;
@@ -323,24 +230,19 @@ fn best_common<'a>(
         .map(|(_, name)| name)
 }
 
-pub(crate) async fn host_choice(server: &str, offered: &[RegionalRelaySample]) -> Option<String> {
-    if offered.is_empty()
-        || offered.len() > MAX_RELAYS
-        || !Config::get_option("relay-server").is_empty()
-    {
-        return None;
+pub(crate) async fn choose_common(
+    common: &[String],
+    offered: &[RegionalRelaySample],
+    key: &str,
+    ipv4: bool,
+) -> Option<String> {
+    let first = common.first()?;
+    if common.len() == 1 || offered.is_empty() {
+        return Some(first.clone());
     }
-    let key = crate::get_key(true).await;
-    let host = samples(server, &key, true).await;
-    let best = best_common(offered, &host)?;
-    hbb_common::throttled_log!(
-        Duration::from_secs(15),
-        info,
-        "Regional relay selected using measurements from both peers ({} controller, {} host)",
-        offered.len(),
-        host.len()
-    );
-    Some(best.to_owned())
+    let mut host = offer_samples(key, ipv4).await;
+    host.retain(|s| common.contains(&s.relay_server));
+    Some(best_common(offered, &host).unwrap_or(first).to_owned())
 }
 
 #[cfg(test)]

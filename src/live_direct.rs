@@ -993,7 +993,7 @@ fn make_attempt(
                 bail!("Timed ICE requires a candidate-free trickle offer");
             }
             let mut rtc =
-                Rtc(WebRTCStream::new_with_punch_profile(offer.as_deref().unwrap_or(""), false, rtc_timeout, mode.grouped(), plan.map_or(0, |plan| plan.capacity(offerer))).await?);
+                Rtc(WebRTCStream::new_direct_with_punch_profile(offer.as_deref().unwrap_or(""), rtc_timeout, mode.grouped(), plan.map_or(0, |plan| plan.capacity(offerer))).await?);
             let outbound_first = cfg!(target_os = "windows") && !offerer
                 && mode == OfferMode::Coordinated && id % 2 == 1;
             let (events, _advertisements) = if outbound_first {

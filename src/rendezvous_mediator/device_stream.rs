@@ -10,25 +10,6 @@ pub(super) struct Proof {
     operator: sign::PublicKey,
 }
 
-pub(super) fn sibling_relay(endpoint: &str) -> Option<String> {
-    let mut url = url::Url::parse(endpoint).ok()?;
-    if !matches!(url.scheme(), "ws" | "wss") || url.path() != "/ws/id" {
-        return None;
-    }
-    url.set_path("/ws/relay");
-    Some(url.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn explicit_wss_relay_keeps_the_operator_domain_and_tls_port() {
-        assert_eq!(super::sibling_relay("wss://rd.example:8443/ws/id").as_deref(),
-            Some("wss://rd.example:8443/ws/relay"));
-        assert_eq!(super::sibling_relay("rd.example:21116"), None);
-    }
-}
-
 pub(super) async fn connect(host: &str, key: &str) -> ResultType<(Stream, Option<Proof>)> {
     let route = check_ws(host);
     let mut trusted_wss = false;

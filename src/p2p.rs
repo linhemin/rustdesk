@@ -6,6 +6,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 pub(crate) mod observer_policy;
 pub(crate) mod ordinary_udp;
 pub(crate) mod relay;
+pub(crate) mod relay_list;
 pub(crate) mod regional_relay;
 pub(crate) mod udp_paths;
 pub(crate) mod probe_report;

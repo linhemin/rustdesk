@@ -41,7 +41,7 @@ impl Samples {
 }
 
 pub(super) fn faster(candidate: Duration, incumbent: Duration) -> bool {
-    incumbent.saturating_sub(candidate) >= (incumbent / 10).max(Duration::from_millis(5))
+    incumbent.saturating_sub(candidate) >= (incumbent / 10).max(Duration::from_millis(1))
 }
 
 struct Round {
@@ -328,6 +328,8 @@ mod tests {
         assert_eq!(incumbent, Duration::from_millis(100));
         assert!(!faster(Duration::from_millis(95), incumbent));
         assert!(faster(Duration::from_millis(80), incumbent));
+        assert!(faster(Duration::from_millis(1), Duration::from_millis(4)));
+        assert!(!faster(Duration::from_micros(600), Duration::from_micros(850)));
         assert!(relay
             .score(now + SAMPLE_LIFETIME + Duration::from_secs(1))
             .is_none());

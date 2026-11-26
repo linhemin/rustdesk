@@ -386,8 +386,19 @@ impl DirectRetryPermission {
         }
     }
 
+    fn agrees_to_relay(&self, offered: &[String], answer: Option<&SessionRelayList>, selected: &str) -> bool {
+        let common = crate::p2p::relay_list::intersection(offered, answer.filter(|a| a.packed_hashes.is_empty()));
+        if common.is_empty() {
+            if !self.direct_only && self.server_requires_direct.set(()).is_ok() {
+                native_stage("session-relays", "no common relay confirmed; trying direct transports");
+            }
+            return false;
+        }
+        !self.direct_only && common.iter().any(|entry| entry == selected) && crate::p2p::relay_list::allows(selected)
+    }
+
     fn observe_refusal(&self, reason: &str) {
-        if reason == DIRECT_ONLY_REQUIRED {
+        if matches!(reason, DIRECT_ONLY_REQUIRED | "No mutually configured relay") {
             let _ = self.server_requires_direct.set(());
         }
     }
@@ -400,7 +411,7 @@ impl DirectRetryPermission {
     }
 
     fn record_answer(&self, server: &str, authenticated_direct_offer: bool, answer: &str) {
-        if authenticated_direct_offer && WebRTCStream::endpoint_declares_all_ice(answer) {
+        if authenticated_direct_offer && WebRTCStream::endpoint_declares_direct_only(answer) {
             let _ = self.permitted.set(server.to_owned());
         }
     }
@@ -660,7 +671,7 @@ impl Client {
         interface.update_direct(None);
         interface.update_received(false);
         let mut permission = DirectRetryPermission {
-            direct_only: crate::direct_only_enabled(),
+            direct_only: crate::direct_only_enabled() || crate::p2p::relay_list::configured().is_empty(),
             ..Default::default()
         };
         let mut retried_punch = false;
@@ -680,9 +691,9 @@ impl Client {
             .await;
             if !permission.direct_only
                 && permission.server_requires_direct.get().is_some()
-                && !matches!(&result, Ok(((_, true, ..), ..)))
+                && result.is_err()
             {
-                // Build a fresh offer without TURN before the enforcing hbbs will forward it.
+                // Retry without relay-start so both devices run ordinary direct attempts.
                 permission = DirectRetryPermission {
                     direct_only: true,
                     ..Default::default()
@@ -698,9 +709,9 @@ impl Client {
                 continue;
             }
             if result.is_err() && permission.relay_start.accepted() && !permission.direct_only {
-                permission = DirectRetryPermission {
-                    relay_start: permission.relay_start.ordinary_retry(), ..Default::default()
-                };
+                let retry = permission.relay_start.ordinary_retry();
+                let direct_only = retry.offered(crate::p2p::relay_list::configured()).is_empty();
+                permission = DirectRetryPermission { relay_start: retry, direct_only, ..Default::default() };
                 continue;
             }
             break result;
@@ -714,7 +725,18 @@ impl Client {
                     return Err(err);
                 }
             }
-            Ok(x) => {
+            Ok(mut x) => {
+                if conn_type == ConnType::DEFAULT_CONN && x.0.1 && x.0.0.is_secured()
+                    && !interface.is_policy_relay() {
+                    if let (Some(frames), Some(agreement)) =
+                        (initial_frames.as_deref_mut(), permission.relay_start.agreement(&x.1.1)) {
+                        let other = interface.get_lch().read().unwrap().other_server.clone();
+                        let (peer, key, token) = other.as_ref().map(|(p, _, k)| (p.as_str(), k.as_str(), ""))
+                            .unwrap_or((peer, key, token));
+                        relay_start::compare_direct(&mut x, frames, agreement, peer, key, token,
+                            &interface.get_switch_code()).await?;
+                    }
+                }
                 // Set x.2 to true only in the connect() function to indicate that direct_failures needs to be updated; everywhere else it should be set to false.
                 if x.2 {
                     let direct_failures = interface.get_lch().read().unwrap().direct_failures;
@@ -744,6 +766,9 @@ impl Client {
     ) -> ResultType<PeerConnection> {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
+        }
+        if interface.is_policy_relay() && (hbb_common::is_ip_str(peer) || hbb_common::is_domain_port_str(peer)) {
+            bail!("Forced relay requires a peer ID and a common configured relay server");
         }
         // to-do: remember the port for each peer, so that we can retry easier
         if hbb_common::is_ip_str(peer) {
@@ -856,7 +881,7 @@ impl Client {
         direct_permission: &DirectRetryPermission,
     ) -> ResultType<PeerConnection> {
         if !direct_permission.direct_only && conn_type == ConnType::DEFAULT_CONN {
-            crate::p2p::regional_relay::prefetch(&rendezvous_server, key);
+            crate::p2p::regional_relay::prefetch(key);
         }
         let ws_signaling = hbb_common::websocket::is_ws_endpoint(&rendezvous_server);
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
@@ -916,15 +941,8 @@ impl Client {
         // When this request carries an offer, `_start_inner` keeps its rendezvous socket solely
         // for trickle signaling; a separate offer-less request owns any TCP punch attempt.
         let webrtc_offerer = if !direct_permission.native_upgrade && Self::should_create_webrtc_offerer(&interface) {
-            // ICE policy follows relay-by-POLICY, not force_relay: under WebSocket the
-            // latter is set for the classic paths, but ICE opens its own sockets and may
-            // still go direct - that is the only P2P path ws deployments have.
-            let offer = if direct_permission.direct_only {
-                crate::p2p::observer_policy::prepare_direct_ice(&rendezvous_server, key).await;
-                WebRTCStream::new_direct_only("", CONNECT_TIMEOUT).await
-            } else {
-                WebRTCStream::new("", interface.is_policy_relay(), CONNECT_TIMEOUT).await
-            };
+            crate::p2p::observer_policy::prepare_direct_ice(&rendezvous_server, key).await;
+            let offer = WebRTCStream::new_direct_only("", CONNECT_TIMEOUT).await;
             match offer {
                 Ok(stream) => Some(stream),
                 Err(err) => {
@@ -1018,6 +1036,9 @@ impl Client {
         if !token.is_empty() {
             secure_tcp(&mut socket, key).await?;
         }
+        let offered = if direct_permission.direct_only { Vec::new() } else {
+            direct_permission.relay_start.offered(crate::p2p::relay_list::configured())
+        };
         let mut request = RendezvousMessage::new();
         request.set_punch_hole_request(PunchHoleRequest {
             id: peer.to_owned(),
@@ -1025,6 +1046,10 @@ impl Client {
             token: token.to_owned(),
             version: crate::VERSION.to_owned(),
             lan_probe: true,
+            relay_samples: if offered.len() > 1 {
+                direct_permission.relay_start.remaining(crate::p2p::regional_relay::offer_samples(key, socket.local_addr().is_ipv4()).await)
+            } else { Vec::new() },
+            session_relays: Some(SessionRelayList { servers: offered.clone(), ..Default::default() }).into(),
             direct_only: direct_permission.direct_only,
             ..Default::default()
         });
@@ -1044,6 +1069,9 @@ impl Client {
             bail!("Invalid LAN listener");
         }
         let mut stream = iface.connect(SocketAddr::from((address, listener.port())), 0, 1_000).await?;
+        if direct_permission.agrees_to_relay(&offered, reply.session_relays.as_ref(), &reply.relay_server) {
+            direct_permission.relay_start.agreed(server, &reply.relay_server, &reply.pk);
+        }
         let pk = Self::secure_connection(peer, reply.pk.into(), key, &mut stream).await?;
         if pk.is_none() || !stream.is_secured() {
             bail!("LAN peer identity could not be verified");
@@ -1056,23 +1084,8 @@ impl Client {
         !session_key.is_empty() && ice.session_key == session_key && !ice.candidate.is_empty()
     }
 
-    /// Whether to build a WebRTC offerer for this connection.
-    ///
-    /// A SOCKS proxy rules it out: ICE binds its own UDP sockets and speaks STUN directly, past
-    /// the proxy and with the real IP. Relay-by-policy without TURN rules it out too, since
-    /// Relay-only ICE can then gather nothing. WebSocket does not: it tunnels only the signaling
-    /// and relay legs, so the offer keeps full ICE and direct is exactly what it is there for.
     fn should_create_webrtc_offerer(interface: &impl Interface) -> bool {
-        if !crate::get_webrtc_enabled() {
-            return false;
-        }
-        if Config::is_proxy() {
-            return false;
-        }
-        if interface.is_policy_relay() && !WebRTCStream::has_turn_server() {
-            return false;
-        }
-        true
+        crate::get_webrtc_enabled() && !Config::is_proxy() && !interface.is_policy_relay()
     }
 
     /// Max ICE candidates buffered during the punch window before the answer is applied.
@@ -1341,8 +1354,10 @@ impl Client {
         let udp_nat_wait_from = Instant::now();
         let mut exchanged = false;
         let mut handshake_grant = false;
-        let mut regional_directory = false;
-        if carries_offer || ((udp.0.is_some() || direct_permission.websocket_path_ticket.is_some()) && !key.is_empty()) {
+        let local_relays = if direct_permission.direct_only { Vec::new() } else {
+            direct_permission.relay_start.offered(crate::p2p::relay_list::configured())
+        };
+        if carries_offer || ((!local_relays.is_empty() || udp.0.is_some() || direct_permission.websocket_path_ticket.is_some()) && !key.is_empty()) {
             // An offer puts both sides' ICE candidates, every interface address of both
             // machines, on this socket, so it goes out only once the server's key exchange has
             // encrypted it. When the server does not complete one, an hbbs from before the
@@ -1350,10 +1365,9 @@ impl Client {
             // socket since the failed exchange may have consumed a message on this one. Degrade
             // to no WebRTC, never to WebRTC signalling in the clear.
             match crate::secure_punch_policy(&mut socket, &key).await {
-                Ok((signed_grant, directory)) => {
+                Ok((signed_grant, _)) => {
                     exchanged = true;
                     handshake_grant = signed_grant;
-                    regional_directory = directory;
                 }
                 Err(err) => {
                     log::warn!(
@@ -1453,8 +1467,7 @@ impl Client {
         let authenticated_direct_offer = exchanged
             && socket.is_secured()
             && !interface.is_policy_relay()
-            && (WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_offer)
-                || WebRTCStream::endpoint_declares_direct_only(&webrtc_sdp_offer));
+            && WebRTCStream::endpoint_declares_direct_only(&webrtc_sdp_offer);
         // Every direct transport this round carries, not one of them: a round can carry several
         // at once (a NAT port and an offer and a v6 address), and since the TCP punch became a
         // switch it can carry none — a single name had to misreport both. `relay` is not a punch,
@@ -1485,11 +1498,12 @@ impl Client {
         }
         let allow_relay_ice = hbb_common::websocket::check_ws(&rendezvous_server).starts_with("wss://")
             && !interface.is_policy_relay() && !direct_permission.direct_only && crate::live_direct::enabled();
-        let prefer_relay_start = !direct_permission.direct_only && (!interface.is_force_relay() || allow_relay_ice)
+        let prefer_relay_start = !local_relays.is_empty() && (!interface.is_force_relay() || allow_relay_ice)
             && !key.is_empty() && conn_type == ConnType::DEFAULT_CONN
             && (crate::live_direct::enabled() || crate::live_direct::native::enabled())
             && direct_permission.relay_start.request();
         msg_out.set_punch_hole_request(PunchHoleRequest {
+            session_relays: Some(SessionRelayList { servers: local_relays.clone(), ..Default::default() }).into(),
             prefer_relay_start,
             allow_relay_ice,
             websocket_path_ticket: websocket_marker.as_ref().map(|tag| tag.to_vec()).unwrap_or_default().into(),
@@ -1503,17 +1517,14 @@ impl Client {
             udp_mapping_tickets: udp_candidates.tickets.clone().into(),
             udp_lan_endpoint: udp.0.as_ref().map(|s| udp_candidates.lan_offer(s)).unwrap_or_default(),
             udp_observed_ipv4: udp_candidates.observed_ipv4,
-            relay_samples: if !direct_permission.direct_only && conn_type == ConnType::DEFAULT_CONN {
+            relay_samples: if local_relays.len() > 1 && conn_type == ConnType::DEFAULT_CONN {
                 direct_permission.relay_start.remaining(
-                    crate::p2p::regional_relay::samples(&rendezvous_server, &key, regional_directory).await)
+                    crate::p2p::regional_relay::offer_samples(&key, my_addr.is_ipv4()).await)
             } else { Vec::new() },
-            force_relay: (ws_signaling || interface.is_force_relay()) && !direct_permission.direct_only,
+            force_relay: interface.is_policy_relay() || Config::is_proxy(),
             direct_only: direct_permission.direct_only,
             socket_addr_v6: ipv6.1.unwrap_or_default(),
             switch_code,
-            // The offer's envelope itself declares its ICE policy (`ice_policy: "all"` under
-            // pure ws), telling the controlled side its answer may gather every candidate
-            // type despite force_relay instead of requiring TURN.
             webrtc_sdp_offer,
             ..Default::default()
         });
@@ -1604,8 +1615,11 @@ impl Client {
                             // A TCP accept on this UDP mapping would discard a live KCP probe.
                             allow_tcp_punch &= !ph.is_udp;
                             websocket_path = allow_tcp_punch && websocket_marker.is_some() && ph.websocket_path;
+                            if direct_permission.agrees_to_relay(&local_relays, ph.session_relays.as_ref(), &ph.relay_server) {
+                                direct_permission.relay_start.agreed(&rendezvous_server, &ph.relay_server, &ph.pk);
+                                relay_server = ph.relay_server;
+                            }
                             signed_id_pk = ph.pk.into();
-                            relay_server = ph.relay_server;
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
                             feedback = ph.feedback;
                             webrtc_sdp_answer = ph.webrtc_sdp_answer;
@@ -1671,7 +1685,14 @@ impl Client {
                             direct_permission.observe_refusal(&rr.refuse_reason);
                             bail!(rr.refuse_reason);
                         }
-                        if prefer_relay_start && rr.prefer_relay_start && !rr.pk().is_empty() {
+                        let approved = direct_permission.agrees_to_relay(&local_relays, rr.session_relays.as_ref(), &rr.relay_server);
+                        if approved {
+                            direct_permission.relay_start.agreed(&rendezvous_server, &rr.relay_server, rr.pk());
+                        }
+                        if !approved && interface.is_policy_relay() {
+                            bail!("Forced relay requires a common configured relay server");
+                        }
+                        if approved && prefer_relay_start && rr.prefer_relay_start && !rr.pk().is_empty() {
                             direct_permission.relay_start.accept(&rr.relay_server);
                             drop(webrtc_offerer.take());
                             return relay_start::open(&peer, &key, conn_type, my_addr.is_ipv4(), rr, rendezvous_server).await;
@@ -1755,8 +1776,9 @@ impl Client {
                         // coordinates a FRESH uuid via the rendezvous server, so it works even if
                         // the raced create_relay already consumed the original uuid pairing.
                         let relay_server_rr = rr.relay_server.clone();
-                        let direct_only = direct_permission.direct_only;
+                        let direct_only = !approved;
                         if !direct_only {
+                            let relay_endpoint = relay_server_rr.clone();
                             let fut = Self::create_relay(
                                 &peer,
                                 rr.uuid,
@@ -1767,7 +1789,10 @@ impl Client {
                             );
                             connect_futures.push(
                                 async move {
-                                    let (conn, transport) = fut.await?;
+                                    let (conn, transport) = fut.await.map_err(|err| {
+                                        direct_permission.relay_start.accept(&relay_endpoint);
+                                        err
+                                    })?;
                                     Ok((conn, None, transport, false))
                                 }
                                 .boxed(),
@@ -1783,16 +1808,10 @@ impl Client {
                             let mut raced = webrtc;
                             let webrtc_fut = async move {
                                 raced.wait_connected(CONNECT_TIMEOUT).await?;
-                                // Resolve relayed-ness here, not from the label: WebRTC is only a
-                                // P2P path when ICE nominated a non-TURN pair, and the race has to
-                                // know which it got. Committing a TURN pair as if it were direct
-                                // cancels a genuine direct attempt still in flight — the same
-                                // inversion the preference window exists to prevent, one level up.
-                                let relayed = raced.is_relayed().await.unwrap_or(true);
-                                if direct_only && relayed {
+                                if raced.is_relayed().await != Some(false) {
                                     bail!(DIRECT_ONLY_UNAVAILABLE);
                                 }
-                                Ok((Stream::WebRTC(raced), None, "WebRTC", !relayed))
+                                Ok((Stream::WebRTC(raced), None, "WebRTC", true))
                             }
                             .boxed();
                             let relay_only = interface.is_policy_relay();
@@ -1845,7 +1864,7 @@ impl Client {
                                 drop(webrtc_guard.take());
                                 let (mut relay_conn, relay_type) = Self::request_relay(
                                     &peer,
-                                    relay_server_rr,
+                                    relay_server_rr.clone(),
                                     &rendezvous_server,
                                     !signed_id_pk.is_empty(),
                                     &key,
@@ -1855,6 +1874,7 @@ impl Client {
                                 )
                                 .await
                                 .map_err(|relay_e| {
+                                    direct_permission.relay_start.accept(&relay_server_rr);
                                     anyhow!(
                                         "WebRTC secure failed ({}); relay fallback also failed: {}",
                                         e,
@@ -2060,7 +2080,10 @@ impl Client {
         // Guard the offerer for the whole of connect(): any early return — cancellation during the
         // awaits below, the relay override, or a secure_connection failure — closes its pc via the
         // guard's drop. Disarmed only once WebRTC is the confirmed winning, secured transport.
-        let direct_only = direct_permission.direct_only;
+        let direct_only = direct_permission.direct_only || !crate::p2p::relay_list::allows(relay_server);
+        if direct_only && interface.is_policy_relay() {
+            bail!("Forced relay requires a common configured relay server");
+        }
         let mut webrtc_guard = webrtc_offerer.map(OffererGuard::new);
         let direct_failures = interface.get_lch().read().unwrap().direct_failures;
         let mut connect_timeout = 0;
@@ -2175,19 +2198,13 @@ impl Client {
                 let webrtc_timeout = connect_timeout.max(Self::relay_fallback_delay_ms());
                 async move {
                     raced.wait_connected(webrtc_timeout).await?;
-                    // Resolve the pair here: a TURN win is relayed, not direct, and must be held
-                    // behind still-racing direct attempts rather than committed as P2P.
-                    let relayed = raced.is_relayed().await.unwrap_or(true);
-                    if direct_only && relayed {
+                    if raced.is_relayed().await != Some(false) {
                         bail!(DIRECT_ONLY_UNAVAILABLE);
                     }
-                    Ok((Stream::WebRTC(raced), None, "WebRTC", !relayed))
+                    Ok((Stream::WebRTC(raced), None, "WebRTC", true))
                 }
                 .boxed()
             });
-        // Prefer P2P: a direct result wins outright, a relayed WebRTC (TURN) is held for the
-        // window so a direct punch can still land. Falls back to plain select_ok when only one
-        // kind is present.
         let attempted_direct = webrtc_fut.is_some() || !direct_futures.is_empty();
         let mut preverified = None;
         let direct_result = match (webrtc_fut, direct_futures.is_empty()) {
@@ -2224,10 +2241,7 @@ impl Client {
         // webrtc_guard stays armed across the relay override and secure_connection below; it is
         // disarmed only at the successful return when WebRTC is the kept transport.
 
-        // Keep a WebRTC win instead of replacing it with the RustDesk relay: under relay-by-
-        // policy the pc was built with Relay-only ICE (TURN configured), which already honors
-        // the relay requirement, and under ws-forced relay a direct full-ICE connection is the
-        // preferred outcome, not a violation.
+        // WebSocket signaling can still establish a verified direct ICE path.
         if (interface.is_force_relay() && typ != "WebRTC") || conn.is_err() {
             if direct_only {
                 if attempted_direct && conn.is_err() {
@@ -2249,6 +2263,7 @@ impl Client {
                 )
                 .await.map(|(stream, relay_type)| { typ = relay_type; stream });
                 if let Err(e) = conn {
+                    direct_permission.relay_start.accept(relay_server);
                     // this direct is mainly used by on_establish_connection_error, so we update it here before bail
                     interface.update_direct(Some(false));
                     bail!("Failed to connect via relay server: {}", e);
@@ -2269,10 +2284,10 @@ impl Client {
             let signed = &signed_id_pk;
             let switch = interface.get_switch_code();
             let udp = async {
+                let (uuid, _) = Self::relay_pair_id(peer_id, relay_server, rendezvous_server, true, key, token, &switch).await?;
                 let endpoint = check_port(relay_server, RELAY_PORT);
                 let mut stream = crate::p2p::relay::connect_udp(&endpoint, key).await
                     .ok_or_else(|| anyhow!("UDP relay unavailable"))?;
-                let (uuid, _) = Self::relay_pair_id(peer_id, relay_server, rendezvous_server, true, key, token, &switch).await?;
                 Self::join_relay(&mut stream, peer_id, uuid, key, conn_type).await?;
                 let pk = Self::secure_connection(peer_id, signed.to_vec(), key, &mut stream).await?;
                 if pk.is_none() || !stream.is_secured() { bail!("Unverified relay peer"); }
@@ -2336,6 +2351,7 @@ impl Client {
                         }
                     }
                     Err(relay_e) => {
+                        direct_permission.relay_start.accept(relay_server);
                         interface.update_direct(Some(direct));
                         bail!(
                             "WebRTC secure failed ({}); relay fallback also failed: {}",
@@ -2356,14 +2372,8 @@ impl Client {
             }
         };
         if typ == "WebRTC" {
-            // WebRTC through a TURN server (force_relay, or a TURN pair winning under All
-            // policy) is relayed traffic; report the direct flag accordingly. An unknown answer
-            // counts as relayed — claiming a P2P path needs evidence of one.
-            if conn.webrtc_relayed().await.unwrap_or(true) {
-                if direct_only {
-                    bail!(DIRECT_ONLY_UNAVAILABLE);
-                }
-                direct = false;
+            if conn.webrtc_relayed().await != Some(false) {
+                bail!(DIRECT_ONLY_UNAVAILABLE);
             }
             // Secured: disarm so the returned conn keeps the pc alive.
             if let Some(guard) = webrtc_guard.take() {
@@ -2554,6 +2564,10 @@ impl Client {
         peer: &str, relay_server: &str, rendezvous_server: &str, secure: bool,
         key: &str, token: &str, switch_code: &str,
     ) -> ResultType<(String, bool)> {
+        if !crate::p2p::relay_list::allows(relay_server) {
+            bail!("Relay endpoint is outside the local configuration");
+        }
+        let offered = vec![relay_server.to_owned()];
         let mut succeed = false;
         let mut uuid = "".to_owned();
         let mut ipv4 = true;
@@ -2580,6 +2594,7 @@ impl Client {
                 secure,
             );
             msg_out.set_request_relay(RequestRelay {
+                session_relays: Some(SessionRelayList { servers: offered.clone(), ..Default::default() }).into(),
                 id: peer.to_owned(),
                 token: token.to_owned(),
                 uuid: uuid.clone(),
@@ -2596,6 +2611,11 @@ impl Client {
                 if let Some(rendezvous_message::Union::RelayResponse(rs)) = msg_in.union {
                     if !rs.refuse_reason.is_empty() {
                         bail!(rs.refuse_reason);
+                    }
+                    if rs.uuid != uuid || rs.relay_server != relay_server ||
+                        !crate::p2p::relay_list::intersection(&offered, rs.session_relays.as_ref().filter(|a| a.packed_hashes.is_empty())).contains(&rs.relay_server)
+                        || !crate::p2p::relay_list::allows(relay_server) {
+                        bail!("Peer did not confirm the requested relay pairing");
                     }
                     succeed = true;
                     break;
@@ -6552,11 +6572,13 @@ mod webrtc_race_tests {
         let permission = DirectRetryPermission::default();
         assert_eq!(permission.decision("hbbs-a"), None);
         permission.record_exchange("hbbs-a", false);
-        permission.record_answer("hbbs-a", false, &endpoint("all"));
+        permission.record_answer("hbbs-a", false, &endpoint("direct_only"));
         permission.record_answer("hbbs-a", true, "");
         permission.record_answer("hbbs-a", true, &endpoint("relay"));
         assert_eq!(permission.decision("hbbs-a"), Some(false));
         permission.record_answer("hbbs-a", true, &endpoint("all"));
+        assert_eq!(permission.decision("hbbs-a"), Some(false));
+        permission.record_answer("hbbs-a", true, &endpoint("direct_only"));
         assert_eq!(permission.decision("hbbs-a"), Some(true));
         assert_eq!(permission.decision("hbbs-b"), None);
         let next_round = DirectRetryPermission::default();
@@ -7058,7 +7080,7 @@ async fn direct_only_declines_legacy_relay_without_contacting_hbbr() {
         res = attempt => assert_eq!(res.err().unwrap().to_string(), DIRECT_ONLY_UNAVAILABLE),
         _ = tokio::time::sleep(Duration::from_secs(20)) => panic!("no policy decision"),
     }
-    assert_eq!(signaling.await.unwrap(), !crate::direct_only_enabled());
+    assert_eq!(signaling.await.unwrap(), !crate::direct_only_enabled() && !crate::p2p::relay_list::configured().is_empty());
 }
 
 #[cfg(test)]

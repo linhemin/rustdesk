@@ -53,35 +53,6 @@ fn connection_meta(
     }
 }
 
-// Relays this peer put in its punch replies, from its `relay-server` option or a rendezvous
-// server. A genuine RequestRelay echoes one back; this bounds where a request can send this peer,
-// it does not authenticate the request.
-static REPORTED_RELAYS: std::sync::Mutex<VecDeque<(String, Instant)>> =
-    std::sync::Mutex::new(VecDeque::new());
-const MAX_REPORTED_RELAYS: usize = 32;
-// Far longer than a controller's direct attempts before it asks for the relay, yet a relay
-// dropped from the configuration stops being accepted.
-const REPORTED_RELAY_TTL: Duration = Duration::from_secs(600);
-
-fn remember_reported_relay(relay_server: &str, now: Instant) {
-    let relay_server = check_port(relay_server, config::RELAY_PORT);
-    let mut relays = REPORTED_RELAYS.lock().unwrap();
-    relays.retain(|(r, at)| {
-        *r != relay_server && now.saturating_duration_since(*at) < REPORTED_RELAY_TTL
-    });
-    if relays.len() >= MAX_REPORTED_RELAYS {
-        relays.pop_front();
-    }
-    relays.push_back((relay_server, now));
-}
-
-fn is_reported_relay(relay_server: &str, now: Instant) -> bool {
-    let relay_server = check_port(relay_server, config::RELAY_PORT);
-    REPORTED_RELAYS.lock().unwrap().iter().any(|(r, at)| {
-        *r == relay_server && now.saturating_duration_since(*at) < REPORTED_RELAY_TTL
-    })
-}
-
 lazy_static::lazy_static! {
     static ref SOLVING_PK_MISMATCH: Mutex<String> = Default::default();
     static ref LAST_MSG: Mutex<(SocketAddr, Instant)> = Mutex::new((SocketAddr::new([0; 4].into(), 0), Instant::now()));
@@ -718,19 +689,22 @@ impl RendezvousMediator {
     }
 
     async fn handle_request_relay(&self, rr: RequestRelay, server: ServerPtr) -> ResultType<()> {
-        if crate::direct_only_enabled() {
-            return Ok(());
-        }
-        if let Err(err) = self.check_relay_request(&rr, Instant::now()) {
-            hbb_common::throttled_log!(PUNCH_LOG_INTERVAL, warn, "Ignored relay request: {}", err);
-            return Ok(());
-        }
         let addr = AddrMangle::decode(&rr.socket_addr);
         let last = *LAST_RELAY_MSG.lock().await;
         *LAST_RELAY_MSG.lock().await = (addr, Instant::now());
-        // skip duplicate relay request messages
         if last.0 == addr && last.1.elapsed().as_millis() < 100 {
             return Ok(());
+        }
+        let common = crate::p2p::relay_list::intersection(&crate::p2p::relay_list::configured(), rr.session_relays.as_ref());
+        if crate::direct_only_enabled() || Self::check_relay_request(&rr, &common).is_err() {
+            let mut message = Message::new();
+            message.set_relay_response(RelayResponse {
+                socket_addr: rr.socket_addr,
+                session_relays: Some(SessionRelayList::default()).into(),
+                refuse_reason: "No mutually configured relay".into(),
+                ..Default::default()
+            });
+            return connect_tcp(&*self.host, CONNECT_TIMEOUT).await?.send(&message).await;
         }
         let meta = connection_meta(
             rr.control_permissions.into_option(),
@@ -740,6 +714,7 @@ impl RendezvousMediator {
         self.create_relay(
             rr.socket_addr.into(),
             rr.relay_server,
+            common,
             rr.uuid,
             server,
             rr.secure,
@@ -758,6 +733,7 @@ impl RendezvousMediator {
         &self,
         socket_addr: Vec<u8>,
         relay_server: String,
+        common: Vec<String>,
         uuid: String,
         server: ServerPtr,
         secure: bool,
@@ -770,6 +746,8 @@ impl RendezvousMediator {
         mut meta: ConnectionMeta,
     ) -> ResultType<()> {
         let peer_addr = AddrMangle::decode(&socket_addr);
+        let signaling_only = signaling_only || !common.contains(&relay_server)
+            || !crate::p2p::relay_list::allows(&relay_server);
         log::info!(
             "create_relay requested from {:?}, relay_server: {}, uuid: {}, secure: {}",
             peer_addr,
@@ -840,22 +818,23 @@ impl RendezvousMediator {
         // we can only trust the specific pairing for which we sent a direct ICE answer.
         meta.direct_retry_permitted = eligible && socket.is_secured()
             && (signed_grant || (meta.direct_retry_permitted
-                && WebRTCStream::endpoint_declares_all_ice(&webrtc_sdp_answer)));
+                && WebRTCStream::endpoint_declares_direct_only(&webrtc_sdp_answer)));
         let mut msg_out = Message::new();
         let mut rr = RelayResponse {
             socket_addr: socket_addr.into(),
-            prefer_relay_start: relay_start_token.is_some(),
+            session_relays: Some(SessionRelayList { servers: common, ..Default::default() }).into(),
+            prefer_relay_start: !signaling_only && relay_start_token.is_some(),
             relay_start_token: relay_start_token.unwrap_or_default(),
             version: crate::VERSION.to_owned(),
             socket_addr_v6,
             webrtc_sdp_answer,
             ..Default::default()
         };
+        if !signaling_only {
+            rr.uuid = uuid.clone();
+            rr.relay_server = relay_server.clone();
+        }
         if initiate {
-            if !signaling_only {
-                rr.uuid = uuid.clone();
-                rr.relay_server = relay_server.clone();
-            }
             rr.set_id(Config::get_id());
         }
         msg_out.set_relay_response(rr);
@@ -900,10 +879,13 @@ impl RendezvousMediator {
         // The caller learns our interface address from its LAN discovery response.
         let port = listener.local_addr()?.port();
         let mut msg = Message::new();
+        let (common, selected) = self.session_relay(request.direct_only, request.session_relays.as_ref(), &request.relay_samples).await;
         let meta = connection_meta(request.control_permissions.into_option(), request.controlled_context.into_option());
         msg.set_local_addr(LocalAddr {
             id: Config::get_id(),
             socket_addr: request.socket_addr,
+            session_relays: Some(SessionRelayList { servers: common, ..Default::default() }).into(),
+            relay_server: selected,
             local_addr: AddrMangle::encode(SocketAddr::from(([0, 0, 0, 0], port))).into(),
             version: crate::VERSION.to_owned(),
             lan_probe: true,
@@ -942,15 +924,8 @@ impl RendezvousMediator {
             return Ok(());
         }
         let peer_addr_v6 = hbb_common::AddrMangle::decode(&fla.socket_addr_v6);
-        let direct_only = fla.direct_only || crate::direct_only_enabled();
-        let relay_server = if direct_only {
-            String::new()
-        } else {
-            let relay = self.get_relay_server(crate::p2p::regional_relay::host_choice(&self.host, &fla.relay_samples)
-                .await.unwrap_or_else(|| fla.relay_server.clone()));
-            remember_reported_relay(&relay, Instant::now());
-            relay
-        };
+        let (common, relay_server) = self.session_relay(fla.direct_only, fla.session_relays.as_ref(), &fla.relay_samples).await;
+        let direct_only = relay_server.is_empty();
         let relay = use_ws() || Config::is_proxy();
         let mut socket_addr_v6 = Default::default();
         let meta = connection_meta(
@@ -973,6 +948,7 @@ impl RendezvousMediator {
                     fla.clone(),
                     server.clone(),
                     relay_server.clone(),
+                    common.clone(),
                     socket_addr_v6.clone(),
                     meta.clone(),
                 )
@@ -987,6 +963,7 @@ impl RendezvousMediator {
         self.create_relay(
             fla.socket_addr.into(),
             relay_server,
+            common,
             uuid,
             server,
             true,
@@ -1006,6 +983,7 @@ impl RendezvousMediator {
         fla: FetchLocalAddr,
         server: ServerPtr,
         relay_server: String,
+        common: Vec<String>,
         socket_addr_v6: bytes::Bytes,
         meta: ConnectionMeta,
     ) -> ResultType<()> {
@@ -1033,6 +1011,7 @@ impl RendezvousMediator {
             id: Config::get_id(),
             socket_addr: AddrMangle::encode(peer_addr).into(),
             local_addr: AddrMangle::encode(local_addr).into(),
+            session_relays: Some(SessionRelayList { servers: common, ..Default::default() }).into(),
             relay_server,
             version: crate::VERSION.to_owned(),
             socket_addr_v6,
@@ -1053,7 +1032,6 @@ impl RendezvousMediator {
     async fn spawn_webrtc_answerer(
         &self,
         ph: &PunchHole,
-        relay_only_ice: bool,
         server: ServerPtr,
         peer_addr: SocketAddr,
         meta: ConnectionMeta,
@@ -1067,11 +1045,8 @@ impl RendezvousMediator {
             );
             return Ok(String::new());
         };
-        if WebRTCStream::endpoint_declares_direct_only(&ph.webrtc_sdp_offer) {
-            crate::p2p::observer_policy::prepare_direct_ice(&self.host, &crate::get_key(true).await).await;
-        }
-        let mut stream =
-            WebRTCStream::new(&ph.webrtc_sdp_offer, relay_only_ice, CONNECT_TIMEOUT).await?;
+        crate::p2p::observer_policy::prepare_direct_ice(&self.host, &crate::get_key(true).await).await;
+        let mut stream = WebRTCStream::new_direct_only(&ph.webrtc_sdp_offer, CONNECT_TIMEOUT).await?;
         let answer = stream.local_endpoint().to_owned();
         let session_key = stream.session_key().to_owned();
         let return_route = ph.socket_addr.clone();
@@ -1258,13 +1233,9 @@ impl RendezvousMediator {
             ph.control_permissions.clone().into_option(),
             ph.controlled_context.clone().into_option(),
         );
-        // The controller's force_relay alone does not say whether ICE must be Relay-only; its
-        // offer envelope does. `ice_policy: "all"` means the relay was forced by the transport
-        // (ws), so answer with full ICE and let a direct pair form.
+        let (common, relay_server) = self.session_relay(ph.direct_only, ph.session_relays.as_ref(), &ph.relay_samples).await;
+        let direct_only = relay_server.is_empty();
         let strict_offer = WebRTCStream::endpoint_declares_direct_only(&ph.webrtc_sdp_offer);
-        let direct_only = ph.direct_only || strict_offer || crate::direct_only_enabled();
-        let webrtc_relay_only =
-            !strict_offer && ph.force_relay && !WebRTCStream::endpoint_declares_all_ice(&ph.webrtc_sdp_offer);
         // No enable-webrtc check here: it is LocalConfig, which the UI process writes and never
         // syncs over IPC, so this (server) process would read the private-server default of "N"
         // and refuse to answer in exactly the self-hosted deployments the transport is for.
@@ -1274,14 +1245,11 @@ impl RendezvousMediator {
             && (!use_ws() || hbb_common::websocket::check_ws(&self.host).starts_with("wss://"))
             && (ph.webrtc_sdp_offer.is_empty() || ph.relay_start_token.len() == 16)
             && (crate::live_direct::responder_enabled() || crate::live_direct::native::enabled());
-        let webrtc_viable = !prefer_relay_start && !ph.webrtc_sdp_offer.is_empty()
-            && (!direct_only || strict_offer)
-            && !Config::is_proxy()
-            && (!webrtc_relay_only || WebRTCStream::has_turn_server());
+        let webrtc_viable = !prefer_relay_start && strict_offer && !Config::is_proxy()
+            && (!ph.force_relay || ph.allow_relay_ice);
         let webrtc_sdp_answer = if webrtc_viable {
             self.spawn_webrtc_answerer(
                 &ph,
-                webrtc_relay_only,
                 server.clone(),
                 peer_addr,
                 meta.clone(),
@@ -1323,14 +1291,6 @@ impl RendezvousMediator {
             )
             .await;
         }
-        let relay_server = if direct_only {
-            String::new()
-        } else {
-            let relay = self.get_relay_server(crate::p2p::regional_relay::host_choice(&self.host, &ph.relay_samples)
-                .await.unwrap_or(ph.relay_server));
-            remember_reported_relay(&relay, Instant::now());
-            relay
-        };
         // for ensure, websocket go relay directly
         // A symmetric NAT can relay the legacy transports but deliberately not WebRTC: the answer
         // built above rides along on the relay request, and ICE probes the candidate pairs rather
@@ -1349,11 +1309,12 @@ impl RendezvousMediator {
             let uuid = Uuid::new_v4().to_string();
             let mut meta = meta;
             meta.direct_retry_permitted = !relay
-                && WebRTCStream::endpoint_declares_all_ice(&ph.webrtc_sdp_offer);
+                && strict_offer;
             return self
                 .create_relay(
                     ph.socket_addr.into(),
                     relay_server,
+                    common,
                     uuid,
                     server,
                     true,
@@ -1370,6 +1331,7 @@ impl RendezvousMediator {
         use hbb_common::protobuf::Enum;
         let nat_type = NatType::from_i32(Config::get_nat_type()).unwrap_or(NatType::UNKNOWN_NAT);
         let msg_punch = PunchHoleSent {
+            session_relays: Some(SessionRelayList { servers: common, ..Default::default() }).into(),
             websocket_path: websocket_tag.is_some(),
             socket_addr: ph.socket_addr,
             id: Config::get_id(),
@@ -1550,6 +1512,7 @@ impl RendezvousMediator {
         let uuid = hbb_common::get_uuid();
         let id = Config::get_id();
         msg_out.set_register_pk(RegisterPk {
+            supports_session_relays: true,
             stream_nonce: match &socket {
                 Sink::RegisterStream(_, nonce) => bytes::Bytes::copy_from_slice(*nonce),
                 _ => Default::default(),
@@ -1602,6 +1565,7 @@ impl RendezvousMediator {
         let mut msg_out = Message::new();
         let serial = Config::get_serial();
         msg_out.set_register_peer(RegisterPeer {
+            supports_session_relays: true,
             id,
             serial,
             lan_probe: Self::lan_probe_interface().is_some(),
@@ -1613,28 +1577,25 @@ impl RendezvousMediator {
         Ok(())
     }
 
-    fn get_relay_server(&self, provided_by_rendezvous_server: String) -> String {
-        let mut relay_server = Config::get_option("relay-server");
-        if relay_server.is_empty() {
-            relay_server = provided_by_rendezvous_server;
+    async fn session_relay(
+        &self, direct_only: bool, offered: Option<&SessionRelayList>, samples: &[RegionalRelaySample],
+    ) -> (Vec<String>, String) {
+        if direct_only || crate::direct_only_enabled() {
+            return (Vec::new(), String::new());
         }
-        if relay_server.is_empty() {
-            relay_server = device_stream::sibling_relay(&self.host)
-                .unwrap_or_else(|| crate::increase_port(&self.host, 1));
-        }
-        relay_server
+        let common = crate::p2p::relay_list::intersection(&crate::p2p::relay_list::configured(), offered);
+        let selected = if common.len() > 1 {
+            crate::p2p::regional_relay::choose_common(&common, samples, &crate::get_key(true).await, is_ipv4(&self.addr)).await
+        } else {
+            common.first().cloned()
+        };
+        (common, selected.unwrap_or_default())
     }
 
-    fn check_relay_request(&self, rr: &RequestRelay, now: Instant) -> ResultType<()> {
+    fn check_relay_request(rr: &RequestRelay, common: &[String]) -> ResultType<()> {
         crate::common::check_relay_uuid(&rr.uuid)?;
-        if !is_reported_relay(&rr.relay_server, now)
-            && check_port(&rr.relay_server, config::RELAY_PORT)
-                != check_port(self.get_relay_server(String::new()), config::RELAY_PORT)
-        {
-            bail!(
-                "relay server {:?} was not offered by this peer",
-                rr.relay_server
-            );
+        if !common.contains(&rr.relay_server) {
+            bail!("Relay endpoint is outside the session relay intersection");
         }
         Ok(())
     }
@@ -2207,71 +2168,21 @@ mod tests {
     }
 
     #[test]
-    fn relay_request_must_name_a_relay_this_peer_offered() {
-        let host: std::net::SocketAddr = "127.0.0.1:21116".parse().unwrap();
-        let mediator = RendezvousMediator {
-            addr: host.into_target_addr().unwrap(),
-            host: host.to_string(),
-            host_prefix: String::new(),
-            keep_alive: 0,
-        };
-        let now = Instant::now();
-        super::remember_reported_relay("reported-relay.example", now);
-        let request = |relay_server: &str, uuid: &str| super::RequestRelay {
-            relay_server: relay_server.to_owned(),
-            uuid: uuid.to_owned(),
+    fn relay_pair_requires_both_lists_and_a_valid_pairing_id() {
+        let endpoint = "common.example:21117".to_owned();
+        let configured = vec![endpoint.clone()];
+        let request = super::RequestRelay {
+            relay_server: endpoint.clone(),
+            uuid: "e4c181d0-41c7-4ae6-8ef0-36581b6b2b12".to_owned(),
             ..Default::default()
         };
-        let uuid = "e4c181d0-41c7-4ae6-8ef0-36581b6b2b12";
-        let reported = request("reported-relay.example:21117", uuid);
-        assert!(mediator.check_relay_request(&reported, now).is_ok());
-        let unknown = request("other-host.example:21117", uuid);
-        assert!(mediator.check_relay_request(&unknown, now).is_err());
-        let bad_uuid = request("reported-relay.example", "a\r\nb");
-        assert!(mediator.check_relay_request(&bad_uuid, now).is_err());
-        let fallback = request(&mediator.get_relay_server(String::new()), uuid);
-        assert!(mediator.check_relay_request(&fallback, now).is_ok());
-        let expired = now + super::REPORTED_RELAY_TTL;
-        assert!(mediator.check_relay_request(&reported, expired).is_err());
-        // Not at `expired`: an insert that late would purge what parallel tests just reported.
-        super::remember_reported_relay(
-            "reported-relay.example",
-            now + super::REPORTED_RELAY_TTL / 2,
-        );
-        assert!(mediator.check_relay_request(&reported, expired).is_ok());
-    }
-
-    #[test]
-    fn reported_relay_is_refused_once_it_expires() {
-        let reported_at = Instant::now();
-        super::remember_reported_relay("expiring-relay.example", reported_at);
-        let just_before = reported_at + super::REPORTED_RELAY_TTL - Duration::from_secs(1);
-        assert!(super::is_reported_relay(
-            "expiring-relay.example:21117",
-            just_before
-        ));
-        let expired = reported_at + super::REPORTED_RELAY_TTL;
-        assert!(!super::is_reported_relay(
-            "expiring-relay.example:21117",
-            expired
-        ));
-    }
-
-    #[test]
-    fn reporting_a_relay_again_restarts_its_expiry() {
-        let first = Instant::now();
-        let again = first + super::REPORTED_RELAY_TTL / 2;
-        super::remember_reported_relay("refreshed-relay.example", first);
-        super::remember_reported_relay("refreshed-relay.example", again);
-        let past_first = first + super::REPORTED_RELAY_TTL;
-        assert!(super::is_reported_relay(
-            "refreshed-relay.example",
-            past_first
-        ));
-        let past_again = again + super::REPORTED_RELAY_TTL;
-        assert!(!super::is_reported_relay(
-            "refreshed-relay.example",
-            past_again
-        ));
+        for offer in [None, Some(vec![]), Some(vec!["unknown.example:21117".to_owned()])] {
+            let message = offer.map(|servers| super::SessionRelayList { servers, ..Default::default() });
+            let common = crate::p2p::relay_list::intersection(&configured, message.as_ref());
+            assert!(RendezvousMediator::check_relay_request(&request, &common).is_err());
+        }
+        assert!(RendezvousMediator::check_relay_request(&request, &configured).is_ok());
+        let bad_id = super::RequestRelay { uuid: String::new(), ..request };
+        assert!(RendezvousMediator::check_relay_request(&bad_id, &configured).is_err());
     }
 }

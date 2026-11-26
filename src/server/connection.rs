@@ -5532,7 +5532,10 @@ impl Connection {
         //
         // We can add a (Vec<conn_id>, input device) to avoid this.
         // But it's not necessary now and we have to consider two audio services(client, server).
-        crate::audio_service::set_voice_call_input_device(None, true);
+        // A pre-login path probe never owns the voice input of an active desktop.
+        if self.authorized {
+            crate::audio_service::set_voice_call_input_device(None, true);
+        }
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
         if lock
             && self.lock_after_session_end
