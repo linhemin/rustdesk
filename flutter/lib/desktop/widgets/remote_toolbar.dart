@@ -202,6 +202,19 @@ IconData _toolbarCollapseIcon(_ToolbarEdge edge, bool isCollapsed) {
   }
 }
 
+Offset _toolbarSubmenuOffset(_ToolbarEdge edge) {
+  switch (edge) {
+    case _ToolbarEdge.top:
+      return const Offset(0, 8);
+    case _ToolbarEdge.bottom:
+      return const Offset(0, -8);
+    case _ToolbarEdge.left:
+      return const Offset(8, 0);
+    case _ToolbarEdge.right:
+      return const Offset(-8, 0);
+  }
+}
+
 class _ToolbarDockingOptions {
   _ToolbarDockingOptions({
     required this.edge,
@@ -345,13 +358,14 @@ class _ToolbarTheme {
 
   static final double buttonSize =
       nativeDesktop ? DesktopSessionStyle.buttonSize : 32;
-  static final double buttonHMargin = nativeDesktop ? 3 : 2;
-  static final double buttonVMargin = nativeDesktop ? 5 : 6;
+  static final double buttonHMargin = nativeDesktop ? 1.5 : 2;
+  static final double buttonVMargin = nativeDesktop ? 4 : 6;
   static final double iconRadius =
       nativeDesktop ? DesktopSessionStyle.buttonRadius : 8;
   static const double elevation = 3;
 
-  static double dividerSpaceToAction = isWindows ? 8 : 14;
+  static double dividerSpaceToAction =
+      nativeDesktop ? 10 : (isWindows ? 8 : 14);
 
   static const double menuBorderRadius = 12;
   static EdgeInsets menuPadding = isWindows
@@ -401,6 +415,9 @@ class _ToolbarTheme {
     backgroundColor: MaterialStatePropertyAll(Colors.transparent),
     padding: MaterialStatePropertyAll(EdgeInsets.zero),
     overlayColor: MaterialStatePropertyAll(Colors.transparent),
+    minimumSize: nativeDesktop ? MaterialStatePropertyAll(Size.zero) : null,
+    tapTargetSize:
+        nativeDesktop ? MaterialTapTargetSize.shrinkWrap : null,
   );
 }
 
@@ -1040,13 +1057,19 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
 
 class _PinMenu extends StatelessWidget {
   final ToolbarState state;
-  const _PinMenu({Key? key, required this.state}) : super(key: key);
+  final bool compact;
+  const _PinMenu({Key? key, required this.state, this.compact = false})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return Obx(
       () => _IconMenuButton(
         assetName: state.pin ? "assets/pinned.svg" : "assets/unpinned.svg",
+        nativeIcon: state.pin ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+        active: state.pin,
+        muted: !state.pin,
+        compact: compact,
         tooltip: state.pin ? 'Unpin Toolbar' : 'Pin Toolbar',
         onPressed: state.switchPin,
         color:
@@ -1061,13 +1084,18 @@ class _PinMenu extends StatelessWidget {
 
 class _MobileActionMenu extends StatelessWidget {
   final FFI ffi;
-  const _MobileActionMenu({Key? key, required this.ffi}) : super(key: key);
+  final bool compact;
+  const _MobileActionMenu({Key? key, required this.ffi, this.compact = false})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     if (!ffi.ffiModel.isPeerAndroid) return Offstage();
     return Obx(() => _IconMenuButton(
           assetName: 'assets/actions_mobile.svg',
+          nativeIcon: Icons.smartphone_rounded,
+          active: ffi.dialogManager.mobileActionsOverlayVisible.isTrue,
+          compact: compact,
           tooltip: 'Mobile Actions',
           onPressed: () => ffi.dialogManager.setMobileActionsOverlayVisible(
               !ffi.dialogManager.mobileActionsOverlayVisible.value),
@@ -1113,11 +1141,13 @@ class _MonitorCycle {
 class _MainMonitorSwitchButton extends StatelessWidget {
   final String id;
   final FFI ffi;
+  final bool compact;
 
   const _MainMonitorSwitchButton({
     Key? key,
     required this.id,
     required this.ffi,
+    this.compact = false,
   }) : super(key: key);
 
   @override
@@ -1126,6 +1156,18 @@ class _MainMonitorSwitchButton extends StatelessWidget {
     return Obx(() {
       if (cycle.total < 2) return const Offstage();
       final label = cycle.label;
+      if (_ToolbarTheme.nativeDesktop) {
+        return _IconMenuButton(
+          nativeIcon: Icons.swap_horiz_rounded,
+          icon: const Icon(Icons.swap_horiz_rounded),
+          label: '$label/${cycle.total}',
+          tooltip: cycle.tooltip,
+          compact: compact,
+          color: _ToolbarTheme.commandColor,
+          hoverColor: _ToolbarTheme.hoverBlueColor,
+          onPressed: cycle.next,
+        );
+      }
 
       return _IconMenuButton(
         tooltip: cycle.tooltip,
@@ -1184,6 +1226,11 @@ class _MonitorMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (_ToolbarTheme.nativeDesktop) {
+      return showMonitorsToolbar
+          ? _buildNativeMultiMonitorStrip(context)
+          : Obx(() => buildMonitorMenu(context));
+    }
     final child = showMonitorsToolbar
         ? buildMultiMonitorMenu(context)
         : Obx(() => buildMonitorMenu(context));
@@ -1195,14 +1242,110 @@ class _MonitorMenu extends StatelessWidget {
     );
   }
 
+  Widget _buildNativeMultiMonitorStrip(BuildContext context) {
+    final pi = ffi.ffiModel.pi;
+    final isHorizontal = _isHorizontalEdge(edge);
+    return Obx(() {
+      final curDisplay = CurrentDisplayState.find(id).value;
+      final theme = Theme.of(context);
+      final indices = <int>[
+        for (int i = 0; i < pi.displays.length; i++) i,
+        if (supportIndividualWindows && pi.displays.length > 1) kAllDisplayValue,
+      ];
+      return Container(
+        margin: EdgeInsets.symmetric(
+          horizontal: isHorizontal
+              ? _ToolbarTheme.buttonHMargin
+              : _ToolbarTheme.buttonVMargin,
+          vertical: isHorizontal
+              ? _ToolbarTheme.buttonVMargin
+              : _ToolbarTheme.buttonHMargin,
+        ),
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: WorkspaceStyle.elevatedSurface(context),
+          borderRadius: BorderRadius.circular(DesktopSessionStyle.buttonRadius),
+          border: Border.all(color: theme.dividerColor, width: 1),
+        ),
+        child: Flex(
+          direction: isHorizontal ? Axis.horizontal : Axis.vertical,
+          mainAxisSize: MainAxisSize.min,
+          children: indices.map((i) {
+            final isAll = i == kAllDisplayValue;
+            final selected = curDisplay == i;
+            final text = isAll ? '*' : '${i + 1}';
+            return Tooltip(
+              message: isAll
+                  ? translate('All monitors')
+                  : translate('#{${i + 1}} monitor'),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => onPressed(i, pi, true),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    curve: Curves.easeOut,
+                    height: DesktopSessionStyle.buttonSize - 6,
+                    constraints: const BoxConstraints(minWidth: 24),
+                    padding: const EdgeInsets.symmetric(horizontal: 7),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? theme.colorScheme.primary
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: isAll
+                        ? Icon(
+                            Icons.grid_view_rounded,
+                            size: 13,
+                            color: selected
+                                ? Colors.white
+                                : theme.colorScheme.onSurface.withOpacity(0.82),
+                          )
+                        : Text(
+                            text,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              height: 1.0,
+                              fontWeight: FontWeight.w600,
+                              color: selected
+                                  ? Colors.white
+                                  : theme.colorScheme.onSurface
+                                      .withOpacity(0.82),
+                            ),
+                          ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      );
+    });
+  }
+
   Widget buildMonitorMenu(BuildContext context) {
+    final cycle = _MonitorCycle(id, ffi);
+    if (_ToolbarTheme.nativeDesktop) {
+      return _IconSubmenuButton(
+          tooltip: 'Select Monitor',
+          label: '${cycle.label}/${cycle.total}',
+          nativeIcon: Icons.monitor_rounded,
+          icon: const Icon(Icons.monitor_rounded),
+          edge: edge,
+          compact: !_isHorizontalEdge(edge),
+          ffi: ffi,
+          color: _ToolbarTheme.commandColor,
+          hoverColor: _ToolbarTheme.hoverBlueColor,
+          menuChildrenGetter: (_) => [buildMonitorSubmenuWidget(context)]);
+    }
     final width = SimpleWrapper<double>(0);
     final monitorsIcon =
         globalMonitorsWidget(width, Colors.white, Colors.black38);
     return _IconSubmenuButton(
         tooltip: 'Select Monitor',
-        label:
-            '${translate('Display')} ${_MonitorCycle(id, ffi).label} / ${_MonitorCycle(id, ffi).total}',
         icon: monitorsIcon,
         ffi: ffi,
         width: width.value,
@@ -1411,16 +1554,26 @@ class _ControlMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
   final ToolbarState state;
-  _ControlMenu(
-      {Key? key, required this.id, required this.ffi, required this.state})
-      : super(key: key);
+  final _ToolbarEdge edge;
+  final bool compact;
+  _ControlMenu({
+    Key? key,
+    required this.id,
+    required this.ffi,
+    required this.state,
+    this.edge = _ToolbarEdge.top,
+    this.compact = false,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return _IconSubmenuButton(
         tooltip: 'Control Actions',
-        label: 'More',
+        label: translate('More'),
+        nativeIcon: Icons.more_horiz_rounded,
         svg: "assets/actions.svg",
+        edge: edge,
+        compact: compact,
         color: _ToolbarTheme.commandColor,
         hoverColor: _ToolbarTheme.hoverBlueColor,
         ffi: ffi,
@@ -1824,11 +1977,16 @@ class _DisplayMenu extends StatefulWidget {
   final FFI ffi;
   final ToolbarState state;
   final Function(bool) setFullscreen;
-  const _DisplayMenu(
-      {required this.id,
-      required this.ffi,
-      required this.state,
-      required this.setFullscreen});
+  final _ToolbarEdge edge;
+  final bool compact;
+  const _DisplayMenu({
+    required this.id,
+    required this.ffi,
+    required this.state,
+    required this.setFullscreen,
+    this.edge = _ToolbarEdge.top,
+    this.compact = false,
+  });
 
   @override
   State<_DisplayMenu> createState() => _DisplayMenuState();
@@ -1930,8 +2088,11 @@ class _DisplayMenuState extends State<_DisplayMenu> {
 
     return _IconSubmenuButton(
       tooltip: 'Display Settings',
-      label: 'Image Quality',
+      label: translate('Image Quality'),
+      nativeIcon: Icons.tune_rounded,
       svg: "assets/display.svg",
+      edge: widget.edge,
+      compact: widget.compact,
       ffi: widget.ffi,
       color: _ToolbarTheme.commandColor,
       hoverColor: _ToolbarTheme.hoverBlueColor,
@@ -2683,10 +2844,14 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
 class _KeyboardMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
+  final _ToolbarEdge edge;
+  final bool compact;
   _KeyboardMenu({
     Key? key,
     required this.id,
     required this.ffi,
+    this.edge = _ToolbarEdge.top,
+    this.compact = false,
   }) : super(key: key);
 
   PeerInfo get pi => ffi.ffiModel.pi;
@@ -2711,8 +2876,11 @@ class _KeyboardMenu extends StatelessWidget {
 
     return _IconSubmenuButton(
         tooltip: 'Keyboard Settings',
-        label: 'Control Actions',
+        label: translate('Keyboard'),
+        nativeIcon: Icons.keyboard_rounded,
         svg: "assets/keyboard_mouse.svg",
+        edge: edge,
+        compact: compact,
         ffi: ffi,
         color: _ToolbarTheme.commandColor,
         hoverColor: _ToolbarTheme.hoverBlueColor,
@@ -2957,10 +3125,14 @@ class _KeyboardMenu extends StatelessWidget {
 class _ChatMenu extends StatefulWidget {
   final String id;
   final FFI ffi;
+  final _ToolbarEdge edge;
+  final bool compact;
   _ChatMenu({
     Key? key,
     required this.id,
     required this.ffi,
+    this.edge = _ToolbarEdge.top,
+    this.compact = false,
   }) : super(key: key);
 
   @override
@@ -2979,7 +3151,10 @@ class _ChatMenuState extends State<_ChatMenu> {
       return _IconSubmenuButton(
           tooltip: 'Chat',
           key: chatButtonKey,
+          nativeIcon: Icons.chat_bubble_outline_rounded,
           svg: 'assets/chat.svg',
+          edge: widget.edge,
+          compact: widget.compact,
           ffi: widget.ffi,
           color: _ToolbarTheme.commandColor,
           hoverColor: _ToolbarTheme.hoverBlueColor,
@@ -3031,10 +3206,14 @@ class _ChatMenuState extends State<_ChatMenu> {
 class _VoiceCallMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
+  final _ToolbarEdge edge;
+  final bool compact;
   _VoiceCallMenu({
     Key? key,
     required this.id,
     required this.ffi,
+    this.edge = _ToolbarEdge.top,
+    this.compact = false,
   }) : super(key: key);
 
   @override
@@ -3084,7 +3263,12 @@ class _VoiceCallMenu extends StatelessWidget {
           case VoiceCallStatus.connected:
             return _IconSubmenuButton(
               tooltip: 'Voice call',
+              nativeIcon: Icons.call_rounded,
+              active: true,
+              accentColor: WorkspaceStyle.success(context),
               svg: 'assets/voice_call.svg',
+              edge: edge,
+              compact: compact,
               color: _ToolbarTheme.blueColor,
               hoverColor: _ToolbarTheme.hoverBlueColor,
               menuChildrenGetter: menuChildrenGetter,
@@ -3100,6 +3284,9 @@ class _VoiceCallMenu extends StatelessWidget {
   Widget buildCallWaiting(BuildContext context) {
     return _IconMenuButton(
       assetName: "assets/call_wait.svg",
+      nativeIcon: Icons.phone_in_talk_rounded,
+      destructive: true,
+      compact: compact,
       tooltip: "Waiting",
       onPressed: () => bind.sessionCloseVoiceCall(sessionId: ffi.sessionId),
       color: _ToolbarTheme.redColor,
@@ -3109,7 +3296,8 @@ class _VoiceCallMenu extends StatelessWidget {
 }
 
 class _RecordMenu extends StatelessWidget {
-  const _RecordMenu({Key? key}) : super(key: key);
+  final bool compact;
+  const _RecordMenu({Key? key, this.compact = false}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -3122,6 +3310,12 @@ class _RecordMenu extends StatelessWidget {
     if (!visible) return Offstage();
     return _IconMenuButton(
       assetName: 'assets/rec.svg',
+      nativeIcon: recordingModel.start
+          ? Icons.fiber_manual_record_rounded
+          : Icons.radio_button_checked_rounded,
+      label: recordingModel.start ? 'REC' : null,
+      compact: compact,
+      destructive: recordingModel.start,
       tooltip: recordingModel.start
           ? 'Stop session recording'
           : 'Start session recording',
@@ -3139,15 +3333,22 @@ class _RecordMenu extends StatelessWidget {
 class _CloseMenu extends StatelessWidget {
   final String id;
   final FFI ffi;
-  const _CloseMenu({Key? key, required this.id, required this.ffi})
-      : super(key: key);
+  final bool compact;
+  const _CloseMenu({
+    Key? key,
+    required this.id,
+    required this.ffi,
+    this.compact = false,
+  }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return _IconMenuButton(
       assetName: 'assets/close.svg',
-      tooltip: 'Close',
-      label: 'Disconnect',
+      nativeIcon: Icons.close_rounded,
+      tooltip: _ToolbarTheme.nativeDesktop ? 'Disconnect' : 'Close',
+      label: translate('Disconnect'),
+      compact: compact,
       destructive: true,
       onPressed: () async {
         if (await showConnEndAuditDialogCloseCanceled(ffi: ffi)) {
@@ -3164,6 +3365,7 @@ class _CloseMenu extends StatelessWidget {
 class _IconMenuButton extends StatefulWidget {
   final String? assetName;
   final Widget? icon;
+  final IconData? nativeIcon;
   final String tooltip;
   final String? label;
   final Color color;
@@ -3173,11 +3375,15 @@ class _IconMenuButton extends StatefulWidget {
   final double? vMargin;
   final bool topLevel;
   final bool destructive;
+  final bool active;
+  final bool muted;
+  final bool compact;
   final double? width;
   const _IconMenuButton({
     Key? key,
     this.assetName,
     this.icon,
+    this.nativeIcon,
     required this.tooltip,
     this.label,
     required this.color,
@@ -3187,6 +3393,9 @@ class _IconMenuButton extends StatefulWidget {
     this.vMargin,
     this.topLevel = true,
     this.destructive = false,
+    this.active = false,
+    this.muted = false,
+    this.compact = false,
     this.width,
   }) : super(key: key);
 
@@ -3199,7 +3408,58 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
 
   @override
   Widget build(BuildContext context) {
-    assert(widget.assetName != null || widget.icon != null);
+    assert(widget.assetName != null ||
+        widget.icon != null ||
+        widget.nativeIcon != null);
+    if (_ToolbarTheme.nativeDesktop &&
+        (widget.nativeIcon != null || widget.topLevel)) {
+      final translatedTooltip =
+          widget.tooltip.isEmpty ? '' : translate(widget.tooltip);
+      final showLabel =
+          !widget.compact && widget.label != null && widget.label!.isNotEmpty;
+      final effectiveTooltip = translatedTooltip.isEmpty ||
+              (showLabel && translatedTooltip == widget.label)
+          ? ''
+          : translatedTooltip;
+      final pillIcon = widget.nativeIcon != null
+          ? Icon(widget.nativeIcon!)
+          : (widget.icon ??
+              SvgPicture.asset(
+                widget.assetName!,
+                width: DesktopSessionStyle.iconSize,
+                height: DesktopSessionStyle.iconSize,
+              ));
+      final pill = SessionToolbarPillVisual(
+        icon: pillIcon,
+        label: widget.label,
+        compact: widget.compact,
+        hover: hover,
+        active: widget.active,
+        destructive: widget.destructive,
+        muted: widget.muted,
+      );
+      Widget button = MenuItemButton(
+        style: _ToolbarTheme.defaultMenuButtonStyle,
+        onHover: (value) => setState(() {
+          hover = value;
+        }),
+        onPressed: widget.onPressed,
+        child: effectiveTooltip.isEmpty
+            ? pill
+            : Tooltip(message: effectiveTooltip, child: pill),
+      ).marginSymmetric(
+        horizontal: widget.hMargin ??
+            (widget.compact
+                ? _ToolbarTheme.buttonVMargin
+                : _ToolbarTheme.buttonHMargin),
+        vertical: widget.vMargin ??
+            (widget.compact
+                ? _ToolbarTheme.buttonHMargin
+                : _ToolbarTheme.buttonVMargin),
+      );
+      return widget.topLevel ? MenuBar(children: [button]) : button;
+    }
+
     final colors = _ToolbarTheme.buttonColors(
         context, widget.color, widget.hoverColor,
         hover: hover,
@@ -3213,9 +3473,7 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
           height: _ToolbarTheme.buttonSize,
         );
     var button = SizedBox(
-      width: _ToolbarTheme.nativeDesktop && widget.label != null
-          ? null
-          : widget.width ?? _ToolbarTheme.buttonSize,
+      width: widget.width ?? _ToolbarTheme.buttonSize,
       height: _ToolbarTheme.buttonSize,
       child: MenuItemButton(
           style: ButtonStyle(
@@ -3226,40 +3484,24 @@ class _IconMenuButtonState extends State<_IconMenuButton> {
                 hover = value;
               }),
           onPressed: widget.onPressed,
-          child: Tooltip(
-            message: translate(widget.tooltip),
-            child: Material(
-                type: MaterialType.transparency,
-                child: Ink(
-                    decoration: BoxDecoration(
-                      borderRadius:
-                          BorderRadius.circular(_ToolbarTheme.iconRadius),
-                      color: colors.background,
-                    ),
-                    child: _ToolbarTheme.nativeDesktop && widget.label != null
-                        ? Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 10),
-                            child:
-                                Row(mainAxisSize: MainAxisSize.min, children: [
-                              IconTheme(
-                                  data: IconThemeData(color: colors.foreground),
-                                  child: SizedBox.square(
-                                      dimension: 18, child: icon)),
-                              const SizedBox(width: 6),
-                              Text(translate(widget.label!),
-                                  style: TextStyle(
-                                      fontSize: 12, color: colors.foreground)),
-                            ]),
-                          )
-                        : icon)),
-          )),
+          child: Material(
+              type: MaterialType.transparency,
+              child: Ink(
+                  decoration: BoxDecoration(
+                    borderRadius:
+                        BorderRadius.circular(_ToolbarTheme.iconRadius),
+                    color: colors.background,
+                  ),
+                  child: icon))),
     ).marginSymmetric(
         horizontal: widget.hMargin ?? _ToolbarTheme.buttonHMargin,
         vertical: widget.vMargin ?? _ToolbarTheme.buttonVMargin);
-    button = Tooltip(
-      message: translate(widget.tooltip),
-      child: button,
-    );
+    if (widget.tooltip.isNotEmpty) {
+      button = Tooltip(
+        message: translate(widget.tooltip),
+        child: button,
+      );
+    }
     if (widget.topLevel) {
       return MenuBar(children: [button]);
     } else {
@@ -3273,17 +3515,23 @@ class _IconSubmenuButton extends StatefulWidget {
   final String? label;
   final String? svg;
   final Widget? icon;
+  final IconData? nativeIcon;
   final Color color;
   final Color hoverColor;
   final List<Widget> Function(_IconSubmenuButtonState state) menuChildrenGetter;
   final MenuStyle? menuStyle;
   final FFI? ffi;
   final double? width;
+  final _ToolbarEdge edge;
+  final bool compact;
+  final bool active;
+  final Color? accentColor;
 
   _IconSubmenuButton({
     Key? key,
     this.svg,
     this.icon,
+    this.nativeIcon,
     required this.tooltip,
     this.label,
     required this.color,
@@ -3292,6 +3540,10 @@ class _IconSubmenuButton extends StatefulWidget {
     this.ffi,
     this.menuStyle,
     this.width,
+    this.edge = _ToolbarEdge.top,
+    this.compact = false,
+    this.active = false,
+    this.accentColor,
   }) : super(key: key);
 
   @override
@@ -3300,6 +3552,7 @@ class _IconSubmenuButton extends StatefulWidget {
 
 class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
   bool hover = false;
+  bool menuOpen = false;
 
   @override // discard @protected
   void setState(VoidCallback fn) {
@@ -3308,7 +3561,65 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
 
   @override
   Widget build(BuildContext context) {
-    assert(widget.svg != null || widget.icon != null);
+    assert(widget.svg != null ||
+        widget.icon != null ||
+        widget.nativeIcon != null);
+    if (_ToolbarTheme.nativeDesktop) {
+      final translatedTooltip =
+          widget.tooltip.isEmpty ? '' : translate(widget.tooltip);
+      final showLabel =
+          !widget.compact && widget.label != null && widget.label!.isNotEmpty;
+      final effectiveTooltip = translatedTooltip.isEmpty ||
+              (showLabel && translatedTooltip == widget.label)
+          ? ''
+          : translatedTooltip;
+      final pillIcon = widget.nativeIcon != null
+          ? Icon(widget.nativeIcon!)
+          : (widget.icon ??
+              SvgPicture.asset(
+                widget.svg!,
+                width: DesktopSessionStyle.iconSize,
+                height: DesktopSessionStyle.iconSize,
+              ));
+      final pill = SessionToolbarPillVisual(
+        icon: pillIcon,
+        label: widget.label,
+        compact: widget.compact,
+        hover: hover,
+        active: widget.active,
+        open: menuOpen,
+        hasDropdown: showLabel,
+        accentColor: widget.accentColor,
+      );
+      final button = SubmenuButton(
+        alignmentOffset: _toolbarSubmenuOffset(widget.edge),
+        menuStyle: widget.menuStyle ?? _ToolbarTheme.defaultMenuStyle(context),
+        style: _ToolbarTheme.defaultMenuButtonStyle,
+        onOpen: () => setState(() => menuOpen = true),
+        onClose: () => setState(() => menuOpen = false),
+        onHover: (value) => setState(() {
+          hover = value;
+        }),
+        child: effectiveTooltip.isEmpty
+            ? pill
+            : Tooltip(message: effectiveTooltip, child: pill),
+        menuChildren: widget
+            .menuChildrenGetter(this)
+            .map((e) => _buildPointerTrackWidget(e, widget.ffi))
+            .toList(),
+      );
+      return MenuBar(children: [
+        button.marginSymmetric(
+          horizontal: widget.compact
+              ? _ToolbarTheme.buttonVMargin
+              : _ToolbarTheme.buttonHMargin,
+          vertical: widget.compact
+              ? _ToolbarTheme.buttonHMargin
+              : _ToolbarTheme.buttonVMargin,
+        ),
+      ]);
+    }
+
     final colors = _ToolbarTheme.buttonColors(
         context, widget.color, widget.hoverColor,
         hover: hover, hasAsset: widget.svg != null);
@@ -3320,9 +3631,7 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
           height: _ToolbarTheme.buttonSize,
         );
     final button = SizedBox(
-        width: _ToolbarTheme.nativeDesktop && widget.label != null
-            ? null
-            : widget.width ?? _ToolbarTheme.buttonSize,
+        width: widget.width ?? _ToolbarTheme.buttonSize,
         height: _ToolbarTheme.buttonSize,
         child: SubmenuButton(
             menuStyle:
@@ -3341,27 +3650,7 @@ class _IconSubmenuButtonState extends State<_IconSubmenuButton> {
                               BorderRadius.circular(_ToolbarTheme.iconRadius),
                           color: colors.background,
                         ),
-                        child: _ToolbarTheme.nativeDesktop &&
-                                widget.label != null
-                            ? Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 10),
-                                child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      SizedBox.square(
-                                          dimension: 18, child: icon),
-                                      const SizedBox(width: 6),
-                                      Text(translate(widget.label!),
-                                          style: TextStyle(
-                                              fontSize: 12,
-                                              color: colors.foreground)),
-                                      const SizedBox(width: 2),
-                                      Icon(Icons.expand_more_rounded,
-                                          size: 14, color: colors.foreground),
-                                    ]),
-                              )
-                            : icon))),
+                        child: icon))),
             menuChildren: widget
                 .menuChildrenGetter(this)
                 .map((e) => _buildPointerTrackWidget(e, widget.ffi))
