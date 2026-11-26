@@ -81,6 +81,7 @@ const RTC_TIMEOUT: u64 = 18_000;
 const LITE_TIMEOUT: u64 = 12_000;
 const LITE_IDLE_WINDOW: Duration = Duration::from_secs(5);
 const CHECK_STAGE: &str = "ICE/DTLS/data-channel checks";
+const NON_DIRECT_STAGE: &str = "verify direct selected pair";
 const EMPTY_POOL_STAGE: &str = "full UDP port pool exhausted";
 const TCP53_STAGE: &str = "configured TCP 53 gate refused full punching";
 static NEGOTIATIONS: Semaphore = Semaphore::const_new(8);
@@ -135,6 +136,10 @@ enum OfferMode {
 }
 
 impl OfferMode {
+    fn needs_full_retry(self, stage: &str) -> bool {
+        self == Self::Lite && matches!(stage, CHECK_STAGE | NON_DIRECT_STAGE)
+    }
+
     fn timed(self) -> bool {
         matches!(self, Self::Timed | Self::Grouped | Self::Lite | Self::Full)
     }
@@ -191,7 +196,7 @@ impl RetrySchedule {
     }
 
     fn failed(&mut self, mode: OfferMode, stage: &str) -> Duration {
-        if mode == OfferMode::Lite && stage == CHECK_STAGE {
+        if mode.needs_full_retry(stage) {
             self.next_profile = Some(OfferMode::Full);
             return Duration::from_millis(250);
         }
@@ -1219,7 +1224,7 @@ fn make_attempt(
                 }
             }
             connected?;
-            stage = "verify direct selected pair";
+            stage = NON_DIRECT_STAGE;
             if rtc.0.is_relayed().await != Some(false) {
                 bail!("ICE did not select a direct candidate pair");
             }
@@ -1417,6 +1422,14 @@ mod tests {
         let mut retries = RetrySchedule::default();
         assert!(retries.failed(OfferMode::Full, TCP53_STAGE) >= Duration::from_secs(3));
         assert!(retries.next(OfferMode::Full, 3) == OfferMode::Lite);
+    }
+
+    #[test]
+    fn lite_ice_that_only_connects_via_relay_retries_with_full_probes() {
+        let mut retries = RetrySchedule::default();
+        assert!(retries.next(OfferMode::Full, 1) == OfferMode::Lite);
+        assert!(retries.failed(OfferMode::Lite, NON_DIRECT_STAGE) < Duration::from_secs(1));
+        assert!(retries.next(OfferMode::Full, 2) == OfferMode::Full);
     }
 
     #[test]
@@ -2228,7 +2241,7 @@ async fn run(
                     if let Some(rtc) = rtc {
                         direct = Some(Direct::new(id, Lane::WebRtc(rtc)));
                     } else if offerer {
-                        if current.mode == OfferMode::Lite && stage == CHECK_STAGE {
+                        if current.mode.needs_full_retry(stage) {
                             let reported = current.punch.as_ref().map(|p| *p.status.borrow());
                             let measured = |primary, counts| match primary {
                                 Some(nat) if nat != timed::Nat::Unknown => nat,

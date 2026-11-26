@@ -459,19 +459,19 @@ async fn check_socket(
                     }
                     continue;
                 }
-                // A session-authenticated packet from an unlisted IP cannot stop the
-                // port search until that address has answered its own challenge.
-                traffic.verified += 1;
-                if let Some((_, seen)) = extended { seen.store(true, Relaxed); }
                 if !known && peers.len() >= max_peers { continue; }
                 if buf[4] == (kind ^ 2) {
                     if !authenticated.contains(&from) { authenticated.push(from); }
                     let reply = packet(buf[4] + 1, &buf[5..13], key);
                     probe_send(&socket, &reply, from, row).await?;
-                } else if buf[4] == kind + 1 && buf[5..13] == nonce && known && !listen {
-                    socket.connect(from).await?;
-                    return Ok((socket, None));
-                } else if buf[4] != kind + 1 || buf[5..13] != nonce { continue; }
+                } else if buf[4] == kind + 1 && buf[5..13] == nonce {
+                    traffic.verified += 1;
+                    if let Some((_, seen)) = extended { seen.store(true, Relaxed); }
+                    if known && !listen {
+                        socket.connect(from).await?;
+                        return Ok((socket, None));
+                    }
+                } else { continue; }
                 // A valid packet from a different source port supplies a peer-reflexive candidate.
                 if !known { peers.push(from); probe_send(&socket, &probe, from, row).await?; }
             }
@@ -484,20 +484,25 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn udp_direct_can_recover_after_one_way_probes_from_a_translated_address() {
+    async fn udp_direct_can_recover_after_one_way_probes() {
+        recover_after_one_way_probe("127.0.0.2:0").await;
+        recover_after_one_way_probe("127.0.0.1:0").await;
+    }
+
+    async fn recover_after_one_way_probe(source: &str) {
         let initial = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let first = initial.local_addr().unwrap();
         let remote = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let target = remote.local_addr().unwrap();
-        let translated = UdpSocket::bind("127.0.0.2:0").await.unwrap();
+        let sender = UdpSocket::bind(source).await.unwrap();
         let key = auth::gen_key();
         let paths = Paths {
             local: Candidates { wide: true, ..Default::default() },
             ports: vec![u32::from(target.port())],
             key: key.clone(),
         };
-        // The first port receives a valid translated request, but its return path is broken.
-        translated.send_to(&packet(2, &[7; 8], &key), first).await.unwrap();
+        // The first port receives a valid request, but its return path is broken.
+        sender.send_to(&packet(2, &[7; 8], &key), first).await.unwrap();
         let answer = async {
             let mut data = [0; 45];
             loop {
