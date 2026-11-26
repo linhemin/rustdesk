@@ -1,4 +1,4 @@
-use super::{decode, frame, native, Direct, Lane, Relay, PATH_TIMEOUT};
+use super::{decode, frame, native, quality, Direct, Lane, Relay, PATH_TIMEOUT};
 use hbb_common::{
     bail,
     futures_util::{future::BoxFuture, stream::FuturesUnordered, FutureExt, StreamExt},
@@ -17,19 +17,31 @@ const REPLY: u8 = 35;
 const TCP: u64 = 1 << 63;
 const UDP: u64 = 1 << 62;
 const NATIVE: u64 = TCP | UDP;
+const BASELINE_WAIT: Duration = Duration::from_secs(10);
+const RECHECK: Duration = Duration::from_secs(15);
 
 pub(crate) type Dials = [Option<native::Dial>; 2];
-type Check = BoxFuture<'static, (u64, ResultType<Lane>)>;
+type Check = BoxFuture<'static, (u64, ResultType<Ready>)>;
+
+struct Ready {
+    id: u64,
+    lane: Lane,
+    samples: quality::Samples,
+    checked: Instant,
+    confirmed: bool,
+}
 
 #[derive(Default)]
 pub(super) struct Race {
     caller: Option<([u8; 32], Dials)>,
     checks: FuturesUnordered<Check>,
     pending: Vec<u64>,
-    ready: VecDeque<(u64, Lane)>,
+    ready: VecDeque<Ready>,
     selected: Option<(u64, Instant)>,
     native_attempt: u64,
     native_retry: [NativeRetry; 2],
+    rtc_after: Option<Instant>,
+    pub(super) quality: Option<quality::Monitor>,
 }
 
 #[derive(Default)]
@@ -58,17 +70,24 @@ impl Race {
         }
     }
 
+    pub(super) fn measured(mut self, enabled: bool) -> Self {
+        self.quality = enabled.then(quality::Monitor::default);
+        self
+    }
+
     pub(super) fn is_caller(&self) -> bool {
         self.caller.is_some()
     }
 
     fn busy(&self, family: u64) -> bool {
         self.pending.iter().any(|id| id & NATIVE == family)
-            || self.ready.iter().any(|(id, _)| id & NATIVE == family)
+            || self.ready.iter().any(|ready| ready.id & NATIVE == family)
     }
 
     pub(super) fn rtc_busy(&self) -> bool {
-        self.busy(0) || self.selected.is_some()
+        self.busy(0)
+            || self.selected.is_some()
+            || self.rtc_after.is_some_and(|at| Instant::now() < at)
     }
 
     pub(super) fn defer_native(&mut self, until: Instant) {
@@ -93,6 +112,7 @@ impl Race {
             let dial = dial();
             let ticket = *ticket;
             let id = self.native_attempt | family;
+            let measured = self.quality.is_some();
             self.pending.push(id);
             let attempt = async move {
                 let budget = if family == UDP { 75 } else { 45 };
@@ -100,7 +120,7 @@ impl Race {
                     native::attach(ticket, id, dial.await?).await
                 })
                 .await??;
-                verify(Lane::Native(lane), id, true).await
+                verify(Lane::Native(lane), id, true, measured).await
             };
             self.checks.push(async move { (id, attempt.await) }.boxed());
         }
@@ -115,8 +135,9 @@ impl Race {
             return;
         }
         self.pending.push(id);
+        let measured = self.quality.is_some();
         self.checks
-            .push(async move { (id, verify(lane, id, caller).await) }.boxed());
+            .push(async move { (id, verify(lane, id, caller, measured).await) }.boxed());
     }
 
     pub(super) fn is_checking(&self) -> bool {
@@ -146,22 +167,37 @@ impl Race {
             }
         }
         match result {
-            Ok(lane) => {
+            Ok(ready) => {
+                if ready.confirmed {
+                    if self.is_caller()
+                        && !self.selected.is_some_and(|(selected, _)| selected == id)
+                    {
+                        return;
+                    }
+                    self.request(id);
+                }
                 #[cfg(target_os = "ios")]
-                crate::ios_p2p_diagnostics::record_milestone(
-                    "relay-upgrade-parallel",
-                    match lane.label() {
-                        "TCP" => "TCP passed the bidirectional path check",
-                        "UDP" => "UDP passed the bidirectional path check",
-                        "IPv6" => "IPv6 passed the bidirectional path check",
-                        _ => "WebRTC passed the bidirectional path check",
-                    },
-                );
-                self.ready
-                    .retain(|(ready, _)| ready & NATIVE != id & NATIVE);
-                self.ready.push_back((id, lane));
+                if !ready.confirmed || !self.is_caller() {
+                    crate::ios_p2p_diagnostics::record_milestone(
+                        "relay-upgrade-parallel",
+                        match ready.lane.label() {
+                            "TCP" => "TCP passed the bidirectional path check",
+                            "UDP" => "UDP passed the bidirectional path check",
+                            "IPv6" => "IPv6 passed the bidirectional path check",
+                            "WebSocket" => "WebSocket passed the bidirectional path check",
+                            _ => "WebRTC passed the bidirectional path check",
+                        },
+                    );
+                }
+                self.ready.retain(|ready| ready.id & NATIVE != id & NATIVE);
+                self.ready.push_back(ready);
             }
-            Err(err) => hbb_common::log::trace!("Parallel direct candidate {id} failed: {err}"),
+            Err(err) => {
+                if self.quality.is_some() {
+                    self.reset(id);
+                }
+                hbb_common::log::trace!("Parallel direct candidate {id} failed: {err}");
+            }
         }
     }
 
@@ -176,6 +212,21 @@ impl Race {
         relay: &Relay,
         caller: bool,
     ) -> ResultType<Option<Direct>> {
+        if self.quality.is_some() {
+            if let Some((id, _)) = self.selected {
+                return Ok(self.take(id));
+            }
+            if caller {
+                if let Some(ready) = self.candidate() {
+                    let id = ready.id;
+                    self.request(id);
+                    self.pending.push(id);
+                    self.checks
+                        .push(async move { (id, confirm(ready, true).await) }.boxed());
+                }
+            }
+            return Ok(None);
+        }
         if caller {
             if let Some((id, started)) = self.selected {
                 if started.elapsed() < PATH_TIMEOUT {
@@ -184,9 +235,9 @@ impl Race {
                 self.reset(id);
                 relay.send(frame(super::RESET, id, &[])).await?;
             }
-            if let Some((id, _)) = self.ready.front() {
-                self.selected = Some((*id, Instant::now()));
-                relay.send(frame(SELECT, *id, &[])).await?;
+            if let Some(id) = self.ready.front().map(|r| r.id) {
+                self.selected = Some((id, Instant::now()));
+                relay.send(frame(SELECT, id, &[])).await?;
             }
             return Ok(None);
         }
@@ -199,41 +250,157 @@ impl Race {
         Ok(None)
     }
 
+    fn candidate(&mut self) -> Option<Ready> {
+        if self.ready.is_empty() {
+            return None;
+        }
+        let monitor = self.quality.as_ref()?;
+        let now = Instant::now();
+        let baseline = monitor.relay.score(now);
+        let mut winner = None;
+        let mut index = 0;
+        while index < self.ready.len() {
+            let ready = &self.ready[index];
+            match (ready.samples.score(now), baseline) {
+                (Some(direct), Some(relay)) if quality::faster(direct, relay) => {
+                    if winner.map_or(true, |(_, best, _)| direct < best) {
+                        winner = Some((ready.id, direct, ready.lane.label()));
+                    }
+                }
+                (_, None) if now.duration_since(ready.checked) < BASELINE_WAIT => {}
+                (direct, baseline) => {
+                    let id = ready.id;
+                    hbb_common::throttled_log!(Duration::from_secs(10), info,
+                        "Keeping relay after {} quality check: direct={direct:?} relay={baseline:?}", ready.lane.label());
+                    #[cfg(target_os = "ios")]
+                    crate::ios_p2p_diagnostics::record_path_quality(
+                        ready.lane.label(),
+                        direct,
+                        baseline,
+                        false,
+                    );
+                    self.ready.remove(index);
+                    let next = now + RECHECK;
+                    match id & NATIVE {
+                        TCP => self.native_retry[0].defer(next),
+                        UDP => self.native_retry[1].defer(next),
+                        _ => self.rtc_after = Some(next),
+                    }
+                    continue;
+                }
+            }
+            index += 1;
+        }
+        if let Some((id, score, label)) = winner {
+            hbb_common::throttled_log!(
+                Duration::from_secs(10),
+                info,
+                "Selecting {label} after quality check: direct={score:?} relay={baseline:?}"
+            );
+            #[cfg(target_os = "ios")]
+            crate::ios_p2p_diagnostics::record_path_quality(label, Some(score), baseline, true);
+            let index = self.ready.iter().position(|r| r.id == id)?;
+            return self.ready.remove(index);
+        }
+        None
+    }
+
     pub(super) fn take(&mut self, id: u64) -> Option<Direct> {
         if self.selected.map(|(selected, _)| selected) != Some(id) {
             return None;
         }
-        let index = self.ready.iter().position(|(ready, _)| *ready == id)?;
-        let (_, lane) = self.ready.remove(index)?;
+        let index = self
+            .ready
+            .iter()
+            .position(|ready| ready.id == id && (self.quality.is_none() || ready.confirmed))?;
+        let ready = self.ready.remove(index)?;
         self.selected = None;
         self.ready.clear();
         self.checks.clear();
         self.pending.clear();
-        Some(Direct::new(id, lane))
+        Some(Direct::new(id, ready.lane))
     }
 
     pub(super) fn reset(&mut self, id: u64) {
         if self.selected.is_some_and(|(selected, _)| selected == id) {
             self.selected = None;
         }
-        self.ready.retain(|(ready, _)| *ready != id);
+        self.ready.retain(|ready| ready.id != id);
     }
 }
 
-async fn verify(mut lane: Lane, id: u64, caller: bool) -> ResultType<Lane> {
-    timeout(PATH_TIMEOUT, async {
-        if caller {
-            lane.write(frame(PROBE, id, &[]), false).await.1?;
+async fn verify(mut lane: Lane, id: u64, caller: bool, measured: bool) -> ResultType<Ready> {
+    let mut samples = quality::Samples::default();
+    let payload: &[u8] = if measured { &quality::PAYLOAD } else { &[] };
+    for _ in 0..if measured { quality::COUNT } else { 1 } {
+        let started = Instant::now();
+        timeout(PATH_TIMEOUT, async {
+            if caller {
+                lane.write(frame(PROBE, id, payload), false).await.1?;
+            }
+            let expected = if caller { REPLY } else { PROBE };
+            let packet = lane.next().await.transpose()?;
+            if packet.as_deref().and_then(decode) != Some((expected, id, payload)) {
+                bail!("Parallel direct path did not answer its probe");
+            }
+            if !caller {
+                lane.write(frame(REPLY, id, payload), false).await.1?;
+            }
+            Ok::<_, hbb_common::anyhow::Error>(())
+        })
+        .await??;
+        if caller && measured {
+            let now = Instant::now();
+            samples.record(now.duration_since(started), now);
         }
-        let expected = if caller { REPLY } else { PROBE };
-        let packet = lane.next().await.transpose()?;
-        if packet.as_deref().and_then(decode) != Some((expected, id, &[][..])) {
-            bail!("Parallel direct path did not answer its probe");
+    }
+    let ready = Ready {
+        id,
+        lane,
+        samples,
+        checked: Instant::now(),
+        confirmed: false,
+    };
+    if measured && !caller {
+        confirm(ready, false).await
+    } else {
+        Ok(ready)
+    }
+}
+
+async fn confirm(mut ready: Ready, caller: bool) -> ResultType<Ready> {
+    // This lane already exchanged authenticated round trips. Keep election traffic
+    // off the relay's ordered video queue. Application data still obey the drain barrier.
+    let budget = if caller {
+        (ready.samples.score(Instant::now()).unwrap_or(PATH_TIMEOUT) * 4
+            + Duration::from_millis(500))
+        .clamp(PATH_TIMEOUT, Duration::from_secs(8))
+    } else {
+        // Retire an abandoned lane before the next attempt, even if its FIN was lost.
+        BASELINE_WAIT + PATH_TIMEOUT
+    };
+    timeout(budget, async {
+        if caller {
+            ready
+                .lane
+                .write(frame(SELECT, ready.id, &[]), false)
+                .await
+                .1?;
+        }
+        let expected = if caller { SELECTED } else { SELECT };
+        let packet = ready.lane.next().await.transpose()?;
+        if packet.as_deref().and_then(decode) != Some((expected, ready.id, &[][..])) {
+            bail!("Direct candidate selection was not confirmed");
         }
         if !caller {
-            lane.write(frame(REPLY, id, &[]), false).await.1?;
+            ready
+                .lane
+                .write(frame(SELECTED, ready.id, &[]), false)
+                .await
+                .1?;
         }
-        Ok(lane)
+        ready.confirmed = true;
+        Ok(ready)
     })
     .await?
 }

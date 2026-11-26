@@ -2333,6 +2333,7 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
 struct SignedRendezvousPolicy {
     session_direct: bool,
     p2p_feedback: bool,
+    regional_relay_directory: bool,
 }
 
 async fn secure_tcp_impl(
@@ -2347,6 +2348,12 @@ async fn secure_tcp_impl(
     // it only avoids redundant encryption between client and server.
     if use_ws() {
         return Ok(SignedRendezvousPolicy::default());
+    }
+    if let Stream::WebSocket(ws) = conn {
+        if ws.has_verified_tls() {
+            return Ok(SignedRendezvousPolicy::default());
+        }
+        bail!("A verified WSS endpoint is required for secure rendezvous");
     }
     match key_exchange(conn, key, log_on_success).await? {
         Some(permission) => Ok(permission),
@@ -2401,6 +2408,7 @@ async fn key_exchange(
                             signed_observers = params.udp_mapping_observers;
                             policy.session_direct = params.allow_session_direct;
                             policy.p2p_feedback = params.allow_p2p_feedback;
+                            policy.regional_relay_directory = params.regional_relay_directory;
                         }
                         let (asymmetric_value, symmetric_value, session_key) =
                             create_symmetric_key_msg(their_pk_b);
@@ -2483,6 +2491,16 @@ pub async fn secure_tcp_required(conn: &mut Stream, key: &str) -> ResultType<()>
     secure_tcp_with_direct_permission(conn, key, true)
         .await
         .map(|_| ())
+}
+
+pub(crate) async fn secure_regional_directory(conn: &mut Stream, key: &str) -> ResultType<bool> {
+    let policy = secure_tcp_impl(conn, key, true, false).await?;
+    Ok(conn.is_secured() && policy.regional_relay_directory)
+}
+
+pub(crate) async fn secure_punch_policy(conn: &mut Stream, key: &str) -> ResultType<(bool, bool)> {
+    let policy = secure_tcp_impl(conn, key, true, true).await?;
+    Ok((policy.session_direct, policy.regional_relay_directory))
 }
 
 #[inline]

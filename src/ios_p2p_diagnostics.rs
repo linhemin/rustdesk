@@ -171,7 +171,7 @@ fn save(path: &Path, contents: &str, seq: u64) -> std::io::Result<()> {
 }
 
 #[cfg(target_os = "ios")]
-pub(crate) use recorder::{disable, record_fallback, record_milestone, Observation};
+pub(crate) use recorder::{disable, record_fallback, record_milestone, record_path_quality, Observation};
 
 #[cfg(target_os = "ios")]
 mod recorder {
@@ -503,6 +503,23 @@ mod recorder {
         if let Some(mut observation) = Observation::new(true, "relay-fallback") {
             observation.set_stage(reason);
             observation.result = "fallback";
+        }
+    }
+
+    pub(crate) fn record_path_quality(
+        path: &'static str, direct: Option<Duration>, relay: Option<Duration>, selected: bool,
+    ) {
+        if let Some(mut observation) = Observation::new(true, "path-quality") {
+            observation.set_stage(if selected { "requested faster direct path" } else { "kept relay" });
+            observation.result = "observed";
+            let millis = |value: Option<Duration>| value.map(|v| v.as_millis().to_string())
+                .unwrap_or_else(|| "unavailable".to_owned());
+            if let Ok(mut state) = observation.progress.lock() {
+                state.latest = Some((Instant::now(), format!(
+                    "pathQuality transport={path} directScoreMs={} relayScoreMs={}",
+                    millis(direct), millis(relay)
+                )));
+            };
         }
     }
 

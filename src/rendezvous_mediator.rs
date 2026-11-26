@@ -1,3 +1,5 @@
+mod device_stream;
+
 use std::{
     collections::{hash_map::RandomState, HashMap, VecDeque},
     hash::BuildHasher,
@@ -463,8 +465,13 @@ impl RendezvousMediator {
                     match n {
                         Some(Ok((bytes, from))) => {
                             if let Ok(msg) = Message::parse_from_bytes(&bytes) {
-                                if msg.has_punch_hole() && !msg.punch_hole().udp_candidate_ports.is_empty()
-                                    && from != addr { continue; }
+                                if from != addr {
+                                    let ph = msg.punch_hole();
+                                    if !ph.udp_candidate_ports.is_empty() || !ph.relay_samples.is_empty()
+                                        || ph.prefer_relay_start || ph.allow_relay_ice
+                                        || !ph.websocket_path_ticket.is_empty()
+                                        || !msg.fetch_local_addr().relay_samples.is_empty() { continue; }
+                                }
                                 rz.handle_resp(msg.union, Sink::Framed(&mut socket, &addr), &server, &mut update_latency).await?;
                             } else {
                                 log::debug!("Non-protobuf message bytes received: {:?}", bytes);
@@ -633,9 +640,8 @@ impl RendezvousMediator {
     pub async fn start_tcp(server: ServerPtr, host: String) -> ResultType<()> {
         let host = check_port(&host, RENDEZVOUS_PORT);
         log::info!("start tcp: {}", hbb_common::websocket::check_ws(&host));
-        let mut conn = connect_tcp(host.clone(), CONNECT_TIMEOUT).await?;
         let key = crate::get_key(true).await;
-        crate::secure_tcp(&mut conn, &key).await?;
+        let (mut conn, mut proof) = device_stream::connect(&host, &key).await?;
         let mut rz = Self {
             addr: conn.local_addr().into_target_addr()?,
             host: host.clone(),
@@ -665,7 +671,12 @@ impl RendezvousMediator {
                         conn.send_bytes(bytes::Bytes::new()).await?;
                         continue; // heartbeat
                     }
-                    let msg = Message::parse_from_bytes(&bytes)?;
+                    let mut msg = Message::parse_from_bytes(&bytes)?;
+                    if msg.has_device_stream_proof() {
+                        let challenge = proof.take().ok_or_else(|| anyhow::anyhow!("Unexpected device stream challenge"))?;
+                        challenge.answer(msg.take_device_stream_proof(), &mut conn).await?;
+                        continue;
+                    }
                     rz.handle_resp(msg.union, Sink::Stream(&mut conn), &server, &mut update_latency).await?
                 }
                 _ = timer.tick() => {
@@ -679,7 +690,10 @@ impl RendezvousMediator {
                     if (!Config::get_key_confirmed() ||
                         !Config::get_host_key_confirmed(&rz.host_prefix)) &&
                         last_register_sent.map(|x| x.elapsed().as_millis() as i64).unwrap_or(REG_INTERVAL) >= REG_INTERVAL {
-                        rz.register_pk(Sink::Stream(&mut conn)).await?;
+                        rz.register_pk(match &proof {
+                            Some(proof) => Sink::RegisterStream(&mut conn, &proof.nonce),
+                            None => Sink::Stream(&mut conn),
+                        }).await?;
                         last_register_sent = Some(Instant::now());
                     }
                 }
@@ -694,6 +708,7 @@ impl RendezvousMediator {
         if (cfg!(debug_assertions) && option_env!("TEST_TCP").is_some())
             || Config::is_proxy()
             || use_ws()
+            || hbb_common::websocket::is_ws_endpoint(&host)
             || crate::is_udp_disabled()
         {
             Self::start_tcp(server, host).await
@@ -731,6 +746,7 @@ impl RendezvousMediator {
             false,
             false,
             false,
+            None,
             Default::default(),
             String::new(),
             meta,
@@ -748,6 +764,7 @@ impl RendezvousMediator {
         initiate: bool,
         signaling_only: bool,
         force_relay: bool,
+        relay_start_token: Option<bytes::Bytes>,
         socket_addr_v6: bytes::Bytes,
         webrtc_sdp_answer: String,
         mut meta: ConnectionMeta,
@@ -761,6 +778,15 @@ impl RendezvousMediator {
             secure,
         );
 
+        // Run the optional signed WSS policy query beside the existing relay setup.
+        let ws_grant = if secure && !signaling_only && !force_relay && crate::live_direct::responder_enabled()
+            && hbb_common::websocket::check_ws(&self.host).starts_with("wss://") {
+            let host = self.host.clone();
+            Some(tokio::spawn(async move {
+                let key = crate::get_key(true).await;
+                crate::p2p::regional_relay::ws_direct_grant(&host, &key).await
+            }))
+        } else { None };
         let mut socket = connect_tcp(&*self.host, CONNECT_TIMEOUT).await?;
         // A relay response carrying an answer carries this machine's ICE candidates with it, so
         // that half goes out only on an encrypted channel. A server that does not complete the
@@ -768,7 +794,7 @@ impl RendezvousMediator {
         // socket since the failed exchange may have consumed a message on this one, and the
         // controller falls back to its other transports.
         let mut webrtc_sdp_answer = webrtc_sdp_answer;
-        let eligible = secure && !force_relay && !use_ws()
+        let eligible = secure && !force_relay && !use_ws() && !matches!(socket, Stream::WebSocket(_))
             && (crate::live_direct::responder_enabled() || crate::live_direct::native::enabled());
         let carries_answer = !webrtc_sdp_answer.is_empty();
         let mut signed_grant = false;
@@ -818,6 +844,8 @@ impl RendezvousMediator {
         let mut msg_out = Message::new();
         let mut rr = RelayResponse {
             socket_addr: socket_addr.into(),
+            prefer_relay_start: relay_start_token.is_some(),
+            relay_start_token: relay_start_token.unwrap_or_default(),
             version: crate::VERSION.to_owned(),
             socket_addr_v6,
             webrtc_sdp_answer,
@@ -843,6 +871,7 @@ impl RendezvousMediator {
             secure,
             is_ipv4(&self.addr),
             meta,
+            ws_grant,
         )
         .await;
         Ok(())
@@ -917,7 +946,8 @@ impl RendezvousMediator {
         let relay_server = if direct_only {
             String::new()
         } else {
-            let relay = self.get_relay_server(fla.relay_server.clone());
+            let relay = self.get_relay_server(crate::p2p::regional_relay::host_choice(&self.host, &fla.relay_samples)
+                .await.unwrap_or_else(|| fla.relay_server.clone()));
             remember_reported_relay(&relay, Instant::now());
             relay
         };
@@ -962,7 +992,8 @@ impl RendezvousMediator {
             true,
             true,
             direct_only,
-            relay,
+            Config::is_proxy(),
+            None,
             socket_addr_v6,
             String::new(),
             meta,
@@ -1238,7 +1269,12 @@ impl RendezvousMediator {
         // syncs over IPC, so this (server) process would read the private-server default of "N"
         // and refuse to answer in exactly the self-hosted deployments the transport is for.
         // A proxy still rules it out — ICE would bypass it and leak the real IP.
-        let webrtc_viable = !ph.webrtc_sdp_offer.is_empty()
+        let prefer_relay_start = ph.prefer_relay_start && !direct_only && !Config::is_proxy()
+            && (!ph.force_relay || ph.allow_relay_ice)
+            && (!use_ws() || hbb_common::websocket::check_ws(&self.host).starts_with("wss://"))
+            && (ph.webrtc_sdp_offer.is_empty() || ph.relay_start_token.len() == 16)
+            && (crate::live_direct::responder_enabled() || crate::live_direct::native::enabled());
+        let webrtc_viable = !prefer_relay_start && !ph.webrtc_sdp_offer.is_empty()
             && (!direct_only || strict_offer)
             && !Config::is_proxy()
             && (!webrtc_relay_only || WebRTCStream::has_turn_server());
@@ -1263,7 +1299,7 @@ impl RendezvousMediator {
         // let ordinary relay traffic use the pool up. The v6 punch is not relayed with them - a
         // symmetric NAT on v4 says nothing about v6 - and its place is taken after the v4 one,
         // or it could be the last and leave the punch the peer counts on with none.
-        let relay_v4 = relay
+        let relay_v4 = prefer_relay_start || relay
             || (config::is_disable_tcp_listen() && ph.udp_port <= 0)
             || (!direct_only && symmetric_nat_requires_relay(&ph, Config::get_nat_type()));
         let punch_udp = !relay_v4 && ph.udp_port > 0;
@@ -1271,6 +1307,12 @@ impl RendezvousMediator {
         let punch_v6 = peer_addr_v6.port() > 0 && !relay;
         let (slot_udp, slot_v6) = UDP_PUNCHES.take_pair(punch_udp, punch_v6);
         let slot_tcp = punch_tcp.then(|| TCP_PUNCHES.take()).flatten();
+        let websocket_tag = if punch_tcp && slot_tcp.is_some() && ph.direct_only
+            && crate::live_direct::native::enabled() && crate::client::tcp_punch_allowed() {
+            crate::live_direct::native::websocket::active_marker(&ph.websocket_path_ticket)
+        } else {
+            None
+        };
         if punch_v6 {
             socket_addr_v6 = start_ipv6(
                 peer_addr_v6,
@@ -1284,7 +1326,8 @@ impl RendezvousMediator {
         let relay_server = if direct_only {
             String::new()
         } else {
-            let relay = self.get_relay_server(ph.relay_server);
+            let relay = self.get_relay_server(crate::p2p::regional_relay::host_choice(&self.host, &ph.relay_samples)
+                .await.unwrap_or(ph.relay_server));
             remember_reported_relay(&relay, Instant::now());
             relay
         };
@@ -1316,7 +1359,8 @@ impl RendezvousMediator {
                     true,
                     true,
                     direct_only,
-                    relay,
+                    Config::is_proxy() || (ph.force_relay && !ph.allow_relay_ice),
+                    prefer_relay_start.then_some(ph.relay_start_token),
                     socket_addr_v6.clone(),
                     webrtc_sdp_answer.clone(),
                     meta,
@@ -1326,6 +1370,7 @@ impl RendezvousMediator {
         use hbb_common::protobuf::Enum;
         let nat_type = NatType::from_i32(Config::get_nat_type()).unwrap_or(NatType::UNKNOWN_NAT);
         let msg_punch = PunchHoleSent {
+            websocket_path: websocket_tag.is_some(),
             socket_addr: ph.socket_addr,
             id: Config::get_id(),
             relay_server,
@@ -1404,7 +1449,7 @@ impl RendezvousMediator {
             );
             return Ok(());
         };
-        punch_tcp_until_connected(server, peer_addr, local_addr, meta, slot).await;
+        punch_tcp_until_connected(server, peer_addr, local_addr, meta, slot, websocket_tag).await;
         Ok(())
     }
 
@@ -1505,6 +1550,10 @@ impl RendezvousMediator {
         let uuid = hbb_common::get_uuid();
         let id = Config::get_id();
         msg_out.set_register_pk(RegisterPk {
+            stream_nonce: match &socket {
+                Sink::RegisterStream(_, nonce) => bytes::Bytes::copy_from_slice(*nonce),
+                _ => Default::default(),
+            },
             id,
             uuid: uuid.into(),
             pk: pk.into(),
@@ -1570,7 +1619,8 @@ impl RendezvousMediator {
             relay_server = provided_by_rendezvous_server;
         }
         if relay_server.is_empty() {
-            relay_server = crate::increase_port(&self.host, 1);
+            relay_server = device_stream::sibling_relay(&self.host)
+                .unwrap_or_else(|| crate::increase_port(&self.host, 1));
         }
         relay_server
     }
@@ -1669,6 +1719,7 @@ async fn direct_server(server: ServerPtr) {
 }
 
 enum Sink<'a> {
+    RegisterStream(&'a mut Stream, &'a [u8; 32]),
     Framed(&'a mut FramedSocket, &'a TargetAddr<'a>),
     Stream(&'a mut Stream),
 }
@@ -1677,7 +1728,7 @@ impl Sink<'_> {
     async fn send(self, msg: &Message) -> ResultType<()> {
         match self {
             Sink::Framed(socket, addr) => socket.send(msg, addr.to_owned()).await,
-            Sink::Stream(stream) => stream.send(msg).await,
+            Sink::Stream(stream) | Sink::RegisterStream(stream, _) => stream.send(msg).await,
         }
     }
 }
@@ -1828,6 +1879,7 @@ async fn punch_tcp_until_connected(
     local_addr: SocketAddr,
     meta: ConnectionMeta,
     slot: PunchSlot,
+    websocket_tag: Option<crate::live_direct::native::Ticket>,
 ) {
     use hbb_common::tcp::new_listener;
     // Shadows the module's `std::time::Instant`: the deadline is held against tokio's sleeps and
@@ -1855,7 +1907,7 @@ async fn punch_tcp_until_connected(
     let Some(listener) = listener else {
         if let Some(stream) = punch.await {
             drop(slot);
-            serve_punched(server, stream, peer_addr, meta).await;
+            serve_punched(server, stream, peer_addr, meta, websocket_tag).await;
         }
         return;
     };
@@ -1900,12 +1952,12 @@ async fn punch_tcp_until_connected(
         Some(stream) = punch => stream,
         Some((stream, addr)) = accept => {
             drop(slot);
-            return accept_punched_connection(server, stream, addr, meta).await;
+            return accept_punched_connection(server, stream, addr, meta, websocket_tag).await;
         }
         else => return,
     };
     drop(slot);
-    serve_punched(server, punched, peer_addr, meta).await;
+    serve_punched(server, punched, peer_addr, meta, websocket_tag).await;
 }
 
 /// The repeats of `punch_tcp_until_connected`, over any punch rather than `connect_tcp_local`
@@ -1954,13 +2006,24 @@ async fn serve_punched(
     stream: Stream,
     peer_addr: SocketAddr,
     meta: ConnectionMeta,
+    websocket_tag: Option<crate::live_direct::native::Ticket>,
 ) {
     log::info!("Punched tcp hole to {peer_addr}, connected on the punch itself");
     if let Err(err) =
-        crate::server::create_tcp_connection(server, stream, peer_addr, true, meta).await
+        serve_punched_transport(server, stream, peer_addr, meta, websocket_tag).await
     {
         log::warn!("Failed to serve the connection punched to {peer_addr}: {err}");
     }
+}
+
+async fn serve_punched_transport(
+    server: ServerPtr, stream: Stream, peer_addr: SocketAddr, meta: ConnectionMeta,
+    websocket_tag: Option<crate::live_direct::native::Ticket>,
+) -> ResultType<()> {
+    if let Some(marker) = websocket_tag {
+        return crate::server::create_websocket_path(server, stream, peer_addr, marker).await;
+    }
+    crate::server::create_tcp_connection(server, stream, peer_addr, true, meta).await
 }
 
 /// The accept half of `accept_connection`, kept here because only the accept may race the punch.
@@ -1969,14 +2032,13 @@ async fn accept_punched_connection(
     stream: tokio::net::TcpStream,
     addr: SocketAddr,
     meta: ConnectionMeta,
+    websocket_tag: Option<crate::live_direct::native::Ticket>,
 ) {
-    use crate::server::create_tcp_connection;
-
     stream.set_nodelay(true).ok();
     match stream.local_addr() {
         Ok(stream_addr) => {
             let stream = Stream::from(stream, stream_addr);
-            if let Err(err) = create_tcp_connection(server, stream, addr, true, meta).await {
+            if let Err(err) = serve_punched_transport(server, stream, addr, meta, websocket_tag).await {
                 log::warn!("Failed to serve the connection from {addr}: {err}");
             }
         }

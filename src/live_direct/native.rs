@@ -19,6 +19,8 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+pub(crate) mod websocket;
+
 pub(crate) const CAPABILITY: &str = "rustdesk_live_native_v1";
 pub(crate) const START: &[u8] = b"\0RD-native-v1-start";
 pub(crate) const ACCEPT: &[u8] = b"\0RD-native-v1-accept";
@@ -59,6 +61,13 @@ fn into_socket(mut stream: Stream) -> ResultType<FramedStream> {
     }
     let placeholder = FramedStream::from(tokio::io::duplex(1).0, socket.local_addr());
     Ok(std::mem::replace(socket, placeholder))
+}
+
+pub(super) fn relay_io(stream: Stream) -> ResultType<Relay> {
+    match &stream {
+        Stream::WebSocket(ws) if ws.is_secured() => Ok(websocket::bridge(stream)),
+        _ => Ok(Relay::new(into_socket(stream)?)),
+    }
 }
 
 pub(crate) struct Listener {
@@ -143,19 +152,22 @@ impl Mode {
 pub(super) async fn attach(
     ticket: Ticket,
     id: u64,
-    (stream, kcp, label): (Stream, Option<KcpStream>, &'static str),
+    (mut stream, kcp, label): (Stream, Option<KcpStream>, &'static str),
 ) -> ResultType<Lane> {
-    let mut socket = into_socket(stream)?;
+    if !stream.is_secured() || stream.is_webrtc() || (label == "WebSocket") != matches!(stream, Stream::WebSocket(_)) {
+        bail!("Invalid authenticated attachment transport");
+    }
     let kind = match label {
         "TCP" => 1,
         "UDP" => 2,
         "IPv6" => 3,
+        "WebSocket" => 4,
         _ => bail!("Unexpected native transport"),
     };
-    socket
+    stream
         .send_raw([ticket.as_slice(), &id.to_be_bytes(), &[kind]].concat())
         .await?;
-    let answer = socket
+    let answer = stream
         .next_timeout(4_000)
         .await
         .ok_or_else(|| anyhow!("Path attachment timed out"))??;
@@ -165,7 +177,7 @@ pub(super) async fn attach(
     #[cfg(target_os = "ios")]
     crate::ios_p2p_diagnostics::record_milestone("native-upgrade", "peer confirmed session attachment");
     Ok(Lane {
-        io: Relay::new(socket),
+        io: relay_io(stream)?,
         label,
         _kcp: kcp,
         _closed: None,
@@ -173,8 +185,14 @@ pub(super) async fn attach(
 }
 
 pub(crate) async fn accept(stream: Stream) -> ResultType<oneshot::Receiver<()>> {
-    let mut socket = into_socket(stream)?;
-    let frame = socket
+    accept_for(stream, None).await
+}
+
+pub(crate) async fn accept_for(mut stream: Stream, websocket_tag: Option<Ticket>) -> ResultType<oneshot::Receiver<()>> {
+    if !stream.is_secured() || stream.is_webrtc() || websocket_tag.is_some() != matches!(stream, Stream::WebSocket(_)) {
+        bail!("Invalid authenticated attachment transport");
+    }
+    let frame = stream
         .next()
         .await
         .ok_or_else(|| anyhow!("Closed path attachment"))??;
@@ -182,11 +200,15 @@ pub(crate) async fn accept(stream: Stream) -> ResultType<oneshot::Receiver<()>> 
         bail!("Invalid path attachment");
     }
     let ticket: &Ticket = frame[..32].try_into()?;
+    if websocket_tag.is_some_and(|expected| expected != websocket::marker(ticket)) {
+        bail!("WebSocket path belongs to a different session");
+    }
     let id = u64::from_be_bytes(frame[32..40].try_into()?);
-    let label = match frame[40] {
-        1 => "TCP",
-        2 => "UDP",
-        3 => "IPv6",
+    let label = match (websocket_tag.is_some(), frame[40]) {
+        (false, 1) => "TCP",
+        (false, 2) => "UDP",
+        (false, 3) => "IPv6",
+        (true, 4) => "WebSocket",
         _ => bail!("Unknown native transport"),
     };
     let sender = sessions()
@@ -198,12 +220,12 @@ pub(crate) async fn accept(stream: Stream) -> ResultType<oneshot::Receiver<()>> 
     let slot = sender
         .try_reserve()
         .map_err(|_| anyhow!("Session cannot accept a path"))?;
-    socket.send_raw(BOUND.to_vec()).await?;
+    stream.send_raw(BOUND.to_vec()).await?;
     let (closed, wait) = oneshot::channel();
     slot.send((
         id,
         Lane {
-            io: Relay::new(socket),
+            io: relay_io(stream)?,
             label,
             _kcp: None,
             _closed: Some(closed),

@@ -124,6 +124,7 @@ struct ParsedPeerInfo {
     live_direct: bool,
     live_native: bool,
     live_parallel: bool,
+    live_quality: bool,
     live_direct_trickle: bool,
     live_direct_punch: bool,
     live_direct_timed: bool,
@@ -343,6 +344,9 @@ impl<T: InvokeUiSession> Remote<T> {
                     .unwrap_or_else(|| key.to_owned());
                 let check_permission = async move {
                     let exchange = async {
+                        if hbb_common::websocket::check_ws(&policy_server).starts_with("wss://") {
+                            return Ok(crate::p2p::regional_relay::ws_direct_grant(&policy_server, &policy_key).await);
+                        }
                         let mut socket =
                             crate::p2p::connect_rendezvous(&policy_server, None, 4_000).await?;
                         if !crate::secure_tcp_with_direct_permission(&mut socket, &policy_key, true)
@@ -361,7 +365,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut last_rx_progress = peer.rx_progress();
                 let mut peer_gone = false;
                 let rtc_enabled = crate::live_direct::enabled();
-                let native_enabled = crate::live_direct::native::enabled();
+                let native_enabled = crate::live_direct::native::enabled()
+                    && !hbb_common::websocket::is_ws_endpoint(&native_server);
                 let eligible_live_direct = !direct
                     && crate::live_direct::supported_transport(&peer)
                     && peer_verified
@@ -373,7 +378,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut check_live_permission = eligible_live_direct && direct_retry_permitted.is_none();
                 let mut waiting_for_live_direct = false;
                 let mut waiting_for_native = false;
-                let mut waiting_for_parallel = false;
+                let mut waiting_for_parallel = None;
                 let mut live_path = None;
 
                 loop {
@@ -381,8 +386,11 @@ impl<T: InvokeUiSession> Remote<T> {
                     let native_upgrade = self.peer_info.live_native && native_enabled;
                     if allow_live_direct && (rtc_upgrade || native_upgrade) {
                         allow_live_direct = false;
-                        let parallel = rtc_upgrade && native_upgrade && self.peer_info.live_parallel;
-                        let start = if parallel {
+                        let measured = self.peer_info.live_quality;
+                        let parallel = measured || (rtc_upgrade && native_upgrade && self.peer_info.live_parallel);
+                        let start = if measured {
+                            crate::live_direct::quality::START
+                        } else if parallel {
                             crate::live_direct::parallel::START
                         } else if rtc_upgrade {
                             crate::live_direct::START
@@ -390,9 +398,9 @@ impl<T: InvokeUiSession> Remote<T> {
                             crate::live_direct::native::START
                         };
                         if peer.send_raw(start.to_vec()).await.is_ok() {
-                            waiting_for_parallel = parallel;
+                            waiting_for_parallel = parallel.then_some(measured);
                             waiting_for_live_direct = rtc_upgrade && !parallel;
-                            waiting_for_native = !rtc_upgrade;
+                            waiting_for_native = !rtc_upgrade && !parallel;
                         }
                     }
                     tokio::select! {
@@ -409,19 +417,23 @@ impl<T: InvokeUiSession> Remote<T> {
                                     }
                                     Ok(ref bytes) => {
                                         last_recv_time = Instant::now();
-                                        if waiting_for_parallel {
+                                        if let Some(measured) = waiting_for_parallel {
                                             if let Some(ticket) = bytes.strip_prefix(crate::live_direct::parallel::ACCEPT)
                                                 .and_then(|raw| <[u8; 32]>::try_from(raw).ok()) {
-                                                waiting_for_parallel = false;
-                                                let dials = Client::native_parallel_dials(self.handler.clone(), key, token, session_pk.clone(), native_server.clone());
-                                                let role = crate::live_direct::Role::offerer(
+                                                waiting_for_parallel = None;
+                                                let dials = if native_upgrade {
+                                                    Client::native_parallel_dials(self.handler.clone(), key, token, session_pk.clone(), native_server.clone(), measured.then_some(ticket))
+                                                } else {
+                                                    [None, None]
+                                                };
+                                                let role = if rtc_upgrade { crate::live_direct::Role::offerer(
                                                     self.peer_info.live_direct_trickle,
                                                     self.peer_info.live_direct_punch,
                                                     self.peer_info.live_direct_timed,
                                                     self.peer_info.live_direct_groups,
                                                     self.peer_info.live_direct_full && hbb_common::webrtc::WebRTCStream::has_expanded_udp_observer(),
-                                                );
-                                                match crate::live_direct::wrap_parallel(&mut peer, role, ticket, dials) {
+                                                ) } else { crate::live_direct::Role::Answerer };
+                                                match crate::live_direct::wrap_parallel(&mut peer, role, ticket, dials, measured) {
                                                     Ok(path) => live_path = Some(path),
                                                     Err(err) => {
                                                         log::error!("Could not start parallel direct session: {err}");
@@ -2915,6 +2927,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 .get(crate::live_direct::native::CAPABILITY).and_then(serde_json::Value::as_bool) == Some(true);
             self.peer_info.live_parallel = platform_additions
                 .get(crate::live_direct::parallel::CAPABILITY).and_then(serde_json::Value::as_bool) == Some(true);
+            self.peer_info.live_quality = platform_additions
+                .get(crate::live_direct::quality::CAPABILITY).and_then(serde_json::Value::as_bool) == Some(true);
             self.peer_info.live_direct_trickle = platform_additions
                 .get(crate::live_direct::TRICKLE_CAPABILITY)
                 .and_then(serde_json::Value::as_bool)

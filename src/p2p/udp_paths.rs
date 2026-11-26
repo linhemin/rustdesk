@@ -161,15 +161,23 @@ impl Candidates {
     }
 
     pub async fn gather(primary: &UdpSocket, nas: SocketAddr, wide: bool, observed: Option<u16>) -> Self {
+        let pinned = super::Interface::configured().map(|iface| std::net::IpAddr::V4(iface.address));
+        Self::gather_on(primary, nas, wide, observed, pinned).await
+    }
+
+    async fn gather_on(primary: &UdpSocket, nas: SocketAddr, wide: bool, observed: Option<u16>,
+        pinned: Option<std::net::IpAddr>) -> Self {
         let mut result = Self::default();
-        let Ok(source) = primary.local_addr() else { return result; };
+        let Ok(mut source) = primary.local_addr() else { return result; };
         if source.ip().is_unspecified() {
-            return result;
+            let Ok(routed) = super::ordinary_udp::routed_source(nas) else { return result; };
+            if routed.is_ipv4() != source.is_ipv4() { return result; }
+            if pinned.is_some_and(|address| routed.ip() != address) {
+                return result;
+            }
+            source.set_ip(routed.ip());
         }
-        let system_route = source.is_ipv4();
-        #[cfg(target_os = "windows")]
-        let system_route = system_route && !super::Interface::configured()
-            .is_some_and(|iface| source.ip() == std::net::IpAddr::V4(iface.address));
+        let system_route = source.is_ipv4() && pinned != Some(source.ip());
         let observe = |slot| async move {
             if slot == EXTRA_SOCKETS - 1 && system_route {
                 return observed_system_route(source, nas, wide).await;
@@ -283,6 +291,13 @@ impl Paths {
         let wide = if self.local.wide {
             tiered::Plan::new(&primary, &self.local.sockets, peer, &self.ports)
         } else { None };
+        #[cfg(target_os = "ios")]
+        if !listen {
+            crate::ios_p2p_diagnostics::record_milestone("ordinary-udp",
+                if wide.is_some() { "tiered UDP eligible with verified endpoints" }
+                else if self.local.wide { "tiered UDP unavailable: no supplemental verified peer endpoint" }
+                else { "authenticated UDP candidates without tiered observer support" });
+        }
         let mut jobs: FuturesUnordered<_> = std::iter::once(primary)
             .chain(self.local.sockets)
             .enumerate()
@@ -549,6 +564,32 @@ mod tests {
             KcpStream::connect(socket, Duration::from_secs(2)).await.unwrap()
         };
         let (_, _) = tokio::join!(accept, dial);
+    }
+
+    #[tokio::test]
+    async fn wildcard_primary_collects_receipts_on_the_route_to_its_observer() {
+        let nas = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let primary = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let endpoint = nas.local_addr().unwrap();
+        let unavailable_pin = "192.0.2.1".parse().unwrap();
+        assert!(Candidates::gather_on(&primary, endpoint, false, None, Some(unavailable_pin))
+            .await.tickets.is_empty());
+        let observer = async {
+            let mut request = [0; 96];
+            for _ in 0..EXTRA_SOCKETS {
+                let (_, from) = nas.recv_from(&mut request).await.unwrap();
+                let mut reply = [0; 76];
+                reply[..4].copy_from_slice(&[1, 1, 0, 56]);
+                reply[4..20].copy_from_slice(&request[4..20]);
+                reply[20..24].copy_from_slice(&[0, 0x20, 0, 8]);
+                reply[32..36].copy_from_slice(&[0xc0, 0x51, 0, 38]);
+                nas.send_to(&reply, from).await.unwrap();
+            }
+        };
+        let (_, candidates) = timeout(Duration::from_secs(3), async {
+            tokio::join!(observer, Candidates::gather_on(&primary, endpoint, false, None, None))
+        }).await.unwrap();
+        assert_eq!(candidates.tickets.len(), RECEIPT_SIZE * EXTRA_SOCKETS);
     }
 
     #[tokio::test]

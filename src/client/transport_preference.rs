@@ -10,7 +10,9 @@ pub(super) enum Rank {
     TcpRelay,
     TcpDirect,
     UdpRelay,
+    StartupDirect,
     UdpDirect,
+    VerifiedStartupRelay,
 }
 
 pub(super) fn tcp_wait(grace: Duration) -> Duration {
@@ -44,14 +46,18 @@ pub(super) async fn choose<'a, T: 'a>(
         match next {
             Some(Ok(path)) => {
                 let rank = classify(&path);
-                if rank == Rank::UdpDirect {
+                if rank >= Rank::UdpDirect {
                     return Ok(path);
                 }
                 if best.as_ref().map_or(true, |(old, _)| rank > *old) {
                     best = Some((rank, path));
                     // Committing direct TCP ends this race permanently. Allow the six-second
                     // UDP check plus signaling, while an established UDP relay can upgrade live.
-                    let wait = if rank < Rank::UdpRelay {
+                    let wait = if rank == Rank::StartupDirect {
+                        // Let a paired regional relay finish authenticating. Release the
+                        // verified direct promptly if the relay is unreachable or legacy.
+                        Duration::from_millis(750)
+                    } else if rank < Rank::UdpRelay {
                         tcp_wait(grace)
                     } else {
                         grace
@@ -100,5 +106,19 @@ mod tests {
         .unwrap();
         assert_eq!(result.0, "TCP");
         assert_eq!(start.elapsed(), Duration::from_secs(8));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn established_bootstrap_relay_can_win_without_stranding_a_ready_direct() {
+        let direct = async { Ok(Rank::StartupDirect) }.boxed();
+        let relay = async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok(Rank::VerifiedStartupRelay)
+        }.boxed();
+        assert!(choose([direct, relay], Duration::from_secs(3), |r| *r).await.unwrap() == Rank::VerifiedStartupRelay);
+        let start = Instant::now();
+        let direct = async { Ok(Rank::StartupDirect) }.boxed();
+        assert!(choose([direct, std::future::pending().boxed()], Duration::from_secs(3), |r| *r).await.unwrap() == Rank::StartupDirect);
+        assert_eq!(start.elapsed(), Duration::from_millis(750));
     }
 }

@@ -22,6 +22,11 @@ use std::{collections::VecDeque, future::pending, net::IpAddr};
 pub(crate) const CAPABILITY: &str = "rustdesk_live_direct_v1";
 pub(crate) mod native;
 pub(crate) mod parallel;
+pub(crate) mod quality;
+mod webrtc_path;
+use webrtc_path::{wait_full_connected, wait_lite_connected, Rtc};
+#[cfg(test)]
+use webrtc_path::{ice_needs_confirmed_path, ice_stalled};
 pub(crate) const TRICKLE_CAPABILITY: &str = "rustdesk_live_direct_trickle_v1";
 pub(crate) const PUNCH_CAPABILITY: &str = "rustdesk_live_direct_punch_v1";
 pub(crate) const FULL_CAPABILITY: &str = "rustdesk_lite_full_punch_v2";
@@ -97,7 +102,7 @@ pub(crate) fn enabled() -> bool {
 }
 
 pub(crate) fn responder_enabled() -> bool {
-    cfg!(any(target_os = "windows", target_os = "ios")) && enabled()
+    enabled()
 }
 
 type Path = Option<&'static str>;
@@ -112,7 +117,7 @@ pub(crate) async fn next_path(status: &mut Option<watch::Receiver<Path>>) -> Opt
 }
 
 pub(crate) fn supported_transport(stream: &Stream) -> bool {
-    matches!(stream, Stream::Tcp(_)) && stream.is_secured()
+    matches!(stream, Stream::Tcp(_) | Stream::WebSocket(_)) && stream.is_secured()
 }
 
 #[derive(Clone, Copy)]
@@ -242,24 +247,25 @@ pub(crate) fn wrap_native(stream: &mut Stream, mode: native::Mode) -> ResultType
     wrap_with(stream, Role::Answerer, Some(mode), None)
 }
 
-pub(crate) async fn accept_parallel(stream: &mut Stream) -> ResultType<()> {
+pub(crate) async fn accept_parallel(stream: &mut Stream, measured: bool) -> ResultType<()> {
     let listener = native::Listener::with_capacity(2);
     stream.send_raw(listener.response_with(parallel::ACCEPT)).await?;
-    wrap_with(stream, Role::Answerer, Some(native::Mode::Listen(listener)), Some(parallel::Race::default()))?;
+    let native = (!measured || native::enabled()).then_some(native::Mode::Listen(listener));
+    wrap_with(stream, Role::Answerer, native, Some(parallel::Race::default().measured(measured)))?;
     Ok(())
 }
 
 pub(crate) fn wrap_parallel(
-    stream: &mut Stream, role: Role, ticket: [u8; 32], dials: parallel::Dials,
+    stream: &mut Stream, role: Role, ticket: [u8; 32], dials: parallel::Dials, measured: bool,
 ) -> ResultType<watch::Receiver<Path>> {
     #[cfg(target_os = "ios")]
     crate::ios_p2p_diagnostics::record_milestone("relay-upgrade-parallel", "parallel direct attempts enabled");
-    wrap_with(stream, role, None, Some(parallel::Race::caller(ticket, dials)))
+    wrap_with(stream, role, None, Some(parallel::Race::caller(ticket, dials).measured(measured)))
 }
 
 fn wrap_with(stream: &mut Stream, role: Role, native: Option<native::Mode>, parallel: Option<parallel::Race>) -> ResultType<watch::Receiver<Path>> {
     if !supported_transport(stream) {
-        bail!("A live direct path requires an encrypted TCP session");
+        bail!("A live direct path requires an encrypted relay stream");
     }
     let addr = stream.local_addr();
     let (app_write, read_pipe) = duplex(1024 * 1024);
@@ -281,13 +287,10 @@ fn wrap_with(stream: &mut Stream, role: Role, native: Option<native::Mode>, para
     write_pipe.set_key_split(seed, false, &transcript)?;
     app.set_send_timeout(8_000);
     write_pipe.set_send_timeout(8_000);
-    let Stream::Tcp(tcp) = stream else {
-        unreachable!()
-    };
-    let relay = std::mem::replace(tcp, app);
+    let relay = native::relay_io(std::mem::replace(stream, Stream::Tcp(app)))?;
     let (path, status) = watch::channel(None);
     tokio::spawn(async move {
-        if let Err(err) = run(read_pipe, write_pipe, Relay::new(relay), role, path, native, parallel).await {
+        if let Err(err) = run(read_pipe, write_pipe, relay, role, path, native, parallel).await {
             log::debug!("Live direct bridge closed: {err}");
         }
     });
@@ -316,14 +319,6 @@ fn candidate_frame(id: u64, json: &str) -> Option<Bytes> {
     Some(frame(ICE_CANDIDATE, id, json.as_bytes()))
 }
 
-struct Rtc(WebRTCStream);
-
-impl Drop for Rtc {
-    fn drop(&mut self) {
-        self.0.close_detached();
-    }
-}
-
 struct Direct {
     id: u64,
     lane: Lane,
@@ -335,6 +330,7 @@ struct Direct {
     first_received: Option<Instant>,
     reported: bool,
     acked_at: Option<Instant>,
+    pending_ack: Option<u64>,
 }
 
 enum Lane {
@@ -349,17 +345,14 @@ impl Lane {
 
     async fn next(&mut self) -> Option<std::io::Result<BytesMut>> {
         match self {
-            Self::WebRtc(rtc) => rtc.0.next().await,
+            Self::WebRtc(rtc) => rtc.next().await,
             Self::Native(n) => n.io.incoming.recv().await.map(Ok),
         }
     }
 
     fn write(&self, bytes: Bytes, last: bool) -> BoxFuture<'static, (bool, ResultType<()>)> {
         match self {
-            Self::WebRtc(rtc) => {
-                let mut stream = rtc.0.clone();
-                async move { (last, stream.send_bytes(bytes).await) }.boxed()
-            }
+            Self::WebRtc(rtc) => rtc.write(bytes, last),
             Self::Native(n) => {
                 let sender = n.io.outgoing.clone();
                 async move { (last, sender.send(bytes).await.map_err(|_| hbb_common::anyhow::anyhow!("Native path closed"))) }.boxed()
@@ -372,21 +365,8 @@ impl Direct {
     fn new(id: u64, lane: Lane) -> Self {
         let last_rx_progress = match &lane { Lane::WebRtc(rtc) => rtc.0.rx_progress(), Lane::Native(_) => 0 };
         Self { id, lane, since: Instant::now(), active: false, ice_silent_since: None,
-            last_rx_progress, first_sent: None, first_received: None, reported: false, acked_at: None }
+            last_rx_progress, first_sent: None, first_received: None, reported: false, acked_at: None, pending_ack: None }
     }
-}
-
-fn ice_stalled(
-    since: &mut Option<Instant>,
-    now: Instant,
-    disconnected: bool,
-    progressed: bool,
-) -> bool {
-    if !disconnected || progressed {
-        *since = None;
-        return false;
-    }
-    now.duration_since(*since.get_or_insert(now)) >= PATH_TIMEOUT
 }
 
 fn stalled(now: Instant, waiting_since: Instant, acked_at: Option<Instant>) -> bool {
@@ -528,7 +508,7 @@ struct Relay {
     incoming: mpsc::Receiver<BytesMut>,
     outgoing: mpsc::Sender<Bytes>,
     _reader: SetupTask,
-    _writer: SetupTask,
+    _writer: Option<SetupTask>,
 }
 
 impl Relay {
@@ -563,7 +543,7 @@ impl Relay {
             incoming,
             outgoing,
             _reader: reader,
-            _writer: writer,
+            _writer: Some(writer),
         }
     }
 
@@ -924,56 +904,6 @@ impl Attempt {
     }
 }
 
-fn ice_needs_confirmed_path(io: Option<[u32; 6]>, direct_selected: bool) -> bool {
-    matches!(io, Some([_, _, _, _, _, 0])) && !direct_selected
-}
-
-async fn ice_has_no_confirmed_path(pc: &WebRTCStream) -> bool {
-    let (io, pair) = tokio::join!(
-        pc.direct_punch_io(),
-        timeout(Duration::from_millis(250), pc.is_relayed()),
-    );
-    // An inbound Binding request can be one-way. A matched reply or a selected
-    // direct pair is enough to keep waiting for nomination and DTLS.
-    pair.is_ok_and(|selected| ice_needs_confirmed_path(io, selected == Some(false)))
-}
-
-async fn wait_lite_connected(pc: &mut WebRTCStream) -> ResultType<()> {
-    let probe = pc.clone();
-    let idle = async {
-        tokio::time::sleep(LITE_IDLE_WINDOW).await;
-        if !ice_has_no_confirmed_path(&probe).await {
-            pending::<()>().await;
-        }
-    };
-    tokio::select! {
-        biased;
-        connected = pc.wait_connected(LITE_TIMEOUT) => connected,
-        _ = idle => bail!("No matched ICE reply or selected direct pair during the lightweight window"),
-    }
-}
-
-async fn wait_full_connected(
-    pc: &mut WebRTCStream,
-    ms: u64,
-    mut status: watch::Receiver<PunchStatus>,
-) -> Option<ResultType<()>> {
-    let probe = pc.clone();
-    let exhausted = async {
-        let reported = status.wait_for(|status|
-            status.full.is_some_and(|sample| sample.empty_pool)
-                || status.full_peer.is_some_and(|sample| sample.empty_pool)).await.is_ok();
-        if !reported || !ice_has_no_confirmed_path(&probe).await {
-            pending::<()>().await;
-        }
-    };
-    tokio::select! {
-        biased;
-        connected = pc.wait_connected(ms) => Some(connected),
-        _ = exhausted => None,
-    }
-}
-
 fn make_attempt(
     events: &mpsc::Sender<SetupEvent>,
     id: u64,
@@ -1328,7 +1258,6 @@ async fn relay_pending(
 
 async fn receive_data(
     app: &mpsc::Sender<Bytes>,
-    relay: &Relay,
     seq: &mut Sequence,
     number: u64,
     payload: &[u8],
@@ -1348,7 +1277,7 @@ async fn receive_data(
     }
     // A failed direct write may have been delivered after all. A replay is acknowledged without
     // dispatching desktop input or other application frames twice.
-    relay.send(frame(ACK, seq.received, &[])).await
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1722,7 +1651,7 @@ mod tests {
             Ok((caller, None, "UDP"))
         }.boxed());
         let mut path = wrap_parallel(
-            &mut controller, Role::Answerer, ticket, [Some(tcp), Some(udp)],
+            &mut controller, Role::Answerer, ticket, [Some(tcp), Some(udp)], false,
         ).unwrap();
         controller.send_raw(b"relay input".to_vec()).await.unwrap();
         assert_eq!(&controlled.next_timeout(3_000).await.unwrap().unwrap()[..], b"relay input");
@@ -1752,7 +1681,7 @@ mod tests {
         ).unwrap();
         let waiting: native::Dial = Box::new(|| pending().boxed());
         let mut path = wrap_parallel(
-            &mut controller, Role::Offerer { trickle: true }, ticket, [Some(waiting), None],
+            &mut controller, Role::Offerer { trickle: true }, ticket, [Some(waiting), None], false,
         ).unwrap();
         timeout(Duration::from_secs(30), async {
             path.changed().await.unwrap();
@@ -2049,7 +1978,8 @@ async fn run(
                 match decode(&packet) {
                     Some((kind @ (DATA | DATA_MORE), number, payload)) => {
                         first_relay_data.get_or_insert_with(Instant::now);
-                        receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
+                        receive_data(&to_app, &mut seq, number, payload, kind == DATA).await?;
+                        relay.send(frame(ACK, seq.received, &[])).await?;
                     }
                     Some((ACK, number, [])) => {
                         let acked = seq.acked;
@@ -2060,8 +1990,13 @@ async fn run(
                             }
                         }
                     }
+                    Some((kind @ (quality::PING | quality::PONG), number, data)) => {
+                        if let Some(meter) = parallel.as_mut().and_then(|race| race.quality.as_mut()) {
+                            meter.received(&relay, None, offerer, kind, number, data);
+                        }
+                    }
                     Some((kind @ (OFFER | TRICKLE_OFFER | PUNCH_OFFER | TIMED_OFFER | GROUP_OFFER | LITE_OFFER | FULL_OFFER), number, data))
-                        if (native.is_none() || parallel.is_some()) && !offerer && direct.is_none() && number > attempt
+                        if (native.is_none() || parallel.as_ref().is_some_and(|race| race.quality.is_none() || responder_enabled())) && !offerer && direct.is_none() && number > attempt
                             && data.len() <= MAX_SDP + usize::from(kind == FULL_OFFER) * 2
                             && if kind == FULL_OFFER {
                                 accepted_lite == number.checked_sub(1) && WebRTCStream::has_expanded_udp_observer()
@@ -2170,12 +2105,12 @@ async fn run(
                         }
                     }
                     Some((parallel::SELECT, number, [])) if !offerer && direct.is_none() => {
-                        if let Some(race) = parallel.as_mut() {
+                        if let Some(race) = parallel.as_mut().filter(|r| r.quality.is_none()) {
                             race.request(number);
                         }
                     }
                     Some((parallel::SELECTED, number, [])) if offerer && direct.is_none() => {
-                        if let Some(race) = parallel.as_mut() {
+                        if let Some(race) = parallel.as_mut().filter(|r| r.quality.is_none()) {
                             direct = race.take(number);
                             if direct.is_some() {
                                 setup = None;
@@ -2212,11 +2147,27 @@ async fn run(
                 if let Some(Ok(packet)) = from_direct {
                     if let Some((kind @ (DATA | DATA_MORE), number, payload)) = decode(&packet) {
                         let previous = seq.received;
-                        receive_data(&to_app, &relay, &mut seq, number, payload, kind == DATA).await?;
+                        receive_data(&to_app, &mut seq, number, payload, kind == DATA).await?;
+                        if let Some(route) = direct.as_mut().filter(|_| parallel.as_ref().is_some_and(|r| r.quality.is_some())) {
+                            route.pending_ack = Some(seq.received);
+                        } else {
+                            relay.send(frame(ACK, seq.received, &[])).await?;
+                        }
                         if kind == DATA && seq.received > previous {
                             if let Some(path) = direct.as_mut() {
                                 path.first_received.get_or_insert_with(Instant::now);
                             }
+                        }
+                    } else if let Some((ACK, number, [])) = decode(&packet) {
+                        if parallel.as_ref().is_some_and(|r| r.quality.is_some()) && number > seq.acked && number <= seq.sent {
+                            seq.acknowledge(number);
+                            if let Some(route) = direct.as_mut() {
+                                route.acked_at = Some(Instant::now());
+                            }
+                        }
+                    } else if let Some((kind @ (quality::PING | quality::PONG), number, payload)) = decode(&packet) {
+                        if let (Some(route), Some(meter)) = (direct.as_ref(), parallel.as_mut().and_then(|race| race.quality.as_mut())) {
+                            meter.received(&relay, Some(route.id), offerer, kind, number, payload);
                         }
                     }
                 } else {
@@ -2392,14 +2343,22 @@ async fn run(
                     relay_pending(&relay, &mut direct, &mut seq, &path, Some("test cut")).await?;
                 }
                 let now = Instant::now();
+                if offerer {
+                    if let Some(meter) = parallel.as_mut().and_then(|race| race.quality.as_mut()) {
+                        let active = direct.as_ref().filter(|d| d.active).map(|d| d.id);
+                        if meter.tick(&relay, active, now) {
+                            relay_pending(&relay, &mut direct, &mut seq, &path, Some("relay consistently answered faster than direct")).await?;
+                        }
+                    }
+                }
                 if let Some(d) = direct.as_mut() {
                     let ice_timeout = if let Lane::WebRtc(rtc) = &d.lane {
-                        let rx = rtc.0.rx_progress();
-                        let progressed = rx != d.last_rx_progress;
-                        d.last_rx_progress = rx;
-                        ice_stalled(&mut d.ice_silent_since, now, rtc.0.is_disconnected(), progressed)
+                        rtc.stopped_receiving(&mut d.ice_silent_since, &mut d.last_rx_progress, now)
                     } else { false };
-                    let reason = if !d.active && now.duration_since(d.since) >= PATH_TIMEOUT {
+                    let drain_budget = if parallel.as_ref().is_some_and(|r| r.quality.is_some()) {
+                        Duration::from_secs(6)
+                    } else { PATH_TIMEOUT };
+                    let reason = if !d.active && now.duration_since(d.since) >= drain_budget {
                         Some("relay drain timed out")
                     } else if seq.pending.front().is_some_and(|p| stalled(now, p.sent, d.acked_at)) {
                         Some("direct application acknowledgement timed out")
@@ -2445,6 +2404,13 @@ async fn run(
             }
         }
         if let Some(direct) = direct.as_mut() {
+            if direct_write.is_none() {
+                if let Some(packet) = parallel.as_mut().and_then(|race| race.quality.as_mut())
+                    .and_then(|meter| meter.take_write(direct.id))
+                    .or_else(|| direct.pending_ack.take().map(|ack| frame(ACK, ack, &[]))) {
+                    direct_write = Some(direct.lane.write(packet, false));
+                }
+            }
             if !direct.active && seq.acked == seq.sent {
                 direct.active = true;
                 path.send_replace(Some(direct.lane.label()));

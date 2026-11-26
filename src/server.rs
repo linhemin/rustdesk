@@ -8,6 +8,8 @@ use std::{
 use bytes::Bytes;
 
 pub use connection::*;
+#[cfg(test)]
+pub(crate) use connection::test::UNAUTHORIZED_TESTS;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use hbb_common::config::Config2;
 use hbb_common::tcp::{self, new_listener};
@@ -211,6 +213,36 @@ async fn accept_connection_(
     Ok(())
 }
 
+pub(crate) async fn create_websocket_path(
+    server: ServerPtr, stream: Stream, addr: SocketAddr, marker: crate::live_direct::native::Ticket,
+) -> ResultType<()> {
+    use crate::live_direct::native::{accept_for, websocket};
+
+    let ip = hbb_common::try_into_v4(addr).ip();
+    if !connection::ip_allowed(ip) || websocket::active_marker(&marker).is_none() {
+        bail!("WebSocket attachment is not permitted");
+    }
+    let id = server.write().unwrap().get_new_id();
+    let unauthorized = admit_unauthorized(id, ip)
+        .ok_or_else(|| hbb_common::anyhow::anyhow!("WebSocket admission limit reached"))?;
+    let admitted = async {
+        let mut ws = websocket::upgrade(stream, None).await?;
+        ws.set_max_packet_length(MAX_UNAUTHORIZED_MESSAGE);
+        if !identity_handshake(&mut ws, true).await? {
+            bail!("WebSocket candidate requires a session attachment");
+        }
+        let closed = accept_for(ws, Some(marker)).await?;
+        Ok::<_, hbb_common::anyhow::Error>(closed)
+    };
+    let closed = tokio::select! {
+        result = timeout(12_000, admitted) => result??,
+        _ = unauthorized.evicted() => bail!("WebSocket path admission expired"),
+    };
+    drop(unauthorized);
+    let _ = closed.await;
+    Ok(())
+}
+
 pub async fn create_tcp_connection(
     server: ServerPtr,
     stream: Stream,
@@ -389,6 +421,7 @@ pub async fn create_relay_connection(
     secure: bool,
     ipv4: bool,
     meta: ConnectionMeta,
+    ws_grant: Option<tokio::task::JoinHandle<bool>>,
 ) {
     if let Err(err) = create_relay_connection_(
         server,
@@ -398,6 +431,7 @@ pub async fn create_relay_connection(
         secure,
         ipv4,
         meta,
+        ws_grant,
     )
     .await
     {
@@ -417,7 +451,8 @@ async fn create_relay_connection_(
     peer_addr: SocketAddr,
     secure: bool,
     ipv4: bool,
-    meta: ConnectionMeta,
+    mut meta: ConnectionMeta,
+    ws_grant: Option<tokio::task::JoinHandle<bool>>,
 ) -> ResultType<()> {
     // The proxy's address family does not constrain the relay target.
     let relay_server = crate::check_port(relay_server, RELAY_PORT);
@@ -430,6 +465,9 @@ async fn create_relay_connection_(
         ..Default::default()
     });
     stream.send(&msg_out).await?;
+    if let Some(grant) = ws_grant {
+        meta.direct_retry_permitted = matches!(grant.await, Ok(true));
+    }
     create_tcp_connection(server, stream, peer_addr, secure, ConnectionMeta { relayed: true, ..meta }).await?;
     Ok(())
 }

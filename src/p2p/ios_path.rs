@@ -12,6 +12,7 @@ pub(crate) fn subscribe() -> watch::Receiver<()> {
 
 #[no_mangle]
 pub extern "C" fn rustdesk_ios_p2p_wake() {
+    super::regional_relay::network_changed();
     changes().send_replace(());
 }
 

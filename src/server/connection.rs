@@ -1068,9 +1068,12 @@ impl Connection {
                             Ok(bytes) => {
                                 last_recv_time = Instant::now();
                                 conn.session_last_recv_time.as_mut().map(|t| *t.lock().unwrap() = Instant::now());
-                                if bytes.as_ref() == crate::live_direct::parallel::START {
-                                    if !live_direct_started && conn.can_try_live_direct() && crate::live_direct::native::enabled() {
-                                        if crate::live_direct::accept_parallel(&mut conn.stream).await.is_err() {
+                                let measured = bytes.as_ref() == crate::live_direct::quality::START;
+                                if measured || bytes.as_ref() == crate::live_direct::parallel::START {
+                                    let rtc = conn.can_try_live_direct();
+                                    let native = conn.can_try_live_transport() && crate::live_direct::native::enabled();
+                                    if !live_direct_started && (if measured { rtc || native } else { rtc && native }) {
+                                        if crate::live_direct::accept_parallel(&mut conn.stream, measured).await.is_err() {
                                             conn.on_close("Parallel direct negotiation could not start", true).await;
                                             break;
                                         }
@@ -2086,13 +2089,6 @@ impl Connection {
             pi.hostname = DEVICE_NAME.lock().unwrap().clone();
             pi.platform = "Android".into();
         }
-        #[cfg(all(target_os = "macos", not(feature = "unix-file-copy-paste")))]
-        let mut platform_additions = serde_json::Map::new();
-        #[cfg(any(
-            target_os = "windows",
-            target_os = "linux",
-            all(target_os = "macos", feature = "unix-file-copy-paste")
-        ))]
         let mut platform_additions = serde_json::Map::new();
         #[cfg(target_os = "linux")]
         {
@@ -2131,6 +2127,11 @@ impl Connection {
                 json!(privacy_mode::get_supported_privacy_mode_impl()),
             );
         }
+        #[cfg(not(target_os = "windows"))]
+        if self.can_try_live_direct() {
+            platform_additions.insert(crate::live_direct::CAPABILITY.into(), json!(true));
+            platform_additions.insert(crate::live_direct::TRICKLE_CAPABILITY.into(), json!(true));
+        }
 
         #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
         {
@@ -2155,14 +2156,15 @@ impl Connection {
             platform_additions.insert("support_view_camera".into(), json!(true));
         }
 
-        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         if self.can_try_live_transport() && crate::live_direct::native::enabled() {
             platform_additions.insert(crate::live_direct::native::CAPABILITY.into(), json!(true));
             if self.can_try_live_direct() {
                 platform_additions.insert(crate::live_direct::parallel::CAPABILITY.into(), json!(true));
             }
         }
-        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        if self.can_try_live_direct() || (self.can_try_live_transport() && crate::live_direct::native::enabled()) {
+            platform_additions.insert(crate::live_direct::quality::CAPABILITY.into(), json!(true));
+        }
         if !platform_additions.is_empty() {
             pi.platform_additions = serde_json::to_string(&platform_additions).unwrap_or("".into());
         }
@@ -7476,13 +7478,14 @@ pub(crate) fn ip_allowed(ip: std::net::IpAddr) -> bool {
 }
 
 #[cfg(test)]
-mod test {
+pub(super) mod test {
     #[allow(unused)]
     use super::*;
 
     // The registry is process-global and the harness runs tests in parallel threads, so every
-    // test that admits connections holds this first; a poisoned lock is still a lock.
-    static UNAUTHORIZED_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // test that admits connections reserves it for the duration of its handshakes.
+    pub(crate) static UNAUTHORIZED_TESTS: hbb_common::tokio::sync::Semaphore =
+        hbb_common::tokio::sync::Semaphore::const_new(1);
 
     fn unauthorized_count() -> usize {
         UNAUTHORIZED_CONNS.lock().unwrap().len()
@@ -7506,9 +7509,9 @@ mod test {
         assert_eq!(ip_whitelist_entries("10.0.0.1, "), vec!["10.0.0.1"]);
     }
 
-    #[test]
-    fn test_unauthorized_admission_is_per_address() {
-        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    #[tokio::test]
+    async fn test_unauthorized_admission_is_per_address() {
+        let _serial = UNAUTHORIZED_TESTS.acquire().await.unwrap();
         let a: IpAddr = "203.0.113.1".parse().unwrap();
         let b: IpAddr = "203.0.113.2".parse().unwrap();
         let held: Vec<_> = (0..MAX_UNAUTHORIZED_CONNS_PER_ADDR as i32)
@@ -7545,7 +7548,7 @@ mod test {
     // a timer tick, so the live count never exceeds the limit and a place opens only then.
     #[tokio::test]
     async fn test_unauthorized_limit_bounds_live_handshakes() {
-        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = UNAUTHORIZED_TESTS.acquire().await.unwrap();
         let server = crate::server::new_for_test();
         let mut controllers = Vec::new();
         let mut handshakes = Vec::new();
@@ -7607,7 +7610,7 @@ mod test {
     #[tokio::test]
     async fn test_unauthorized_frame_is_refused_on_its_header() {
         use hbb_common::tokio::io::AsyncWriteExt;
-        let _serial = UNAUTHORIZED_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+        let _serial = UNAUTHORIZED_TESTS.acquire().await.unwrap();
         let server = crate::server::new_for_test();
         let listener = hbb_common::tcp::new_listener("127.0.0.1:0", false)
             .await

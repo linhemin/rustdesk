@@ -32,7 +32,7 @@ use crate::{
     create_symmetric_key_msg, decode_id_pk, decode_id_pk_dtls, dtls_fingerprint_bound, get_rs_pk,
     is_keyboard_mode_supported,
     kcp_stream::KcpStream,
-    secure_tcp, secure_tcp_with_direct_permission,
+    secure_tcp,
     ui_interface::{get_builtin_option, resolve_avatar_url, use_texture_render},
     ui_session_interface::{InvokeUiSession, Session},
 };
@@ -96,6 +96,7 @@ pub use super::lang::*;
 mod login_method;
 mod path_rtt;
 mod transport_preference;
+mod relay_start;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
@@ -359,9 +360,11 @@ type PeerConnection = (
 // list cannot authorize the server which actually returned the relay.
 #[derive(Default)]
 struct DirectRetryPermission {
+    relay_start: relay_start::RelayStart,
     direct_only: bool,
     native_upgrade: bool,
     udp_upgrade_only: bool,
+    websocket_path_ticket: Option<crate::live_direct::native::Ticket>,
     punch_failed: OnceLock<()>,
     server_requires_direct: OnceLock<()>,
     checked: OnceLock<String>,
@@ -372,6 +375,17 @@ const DIRECT_ONLY_REQUIRED: &str = "Direct connection required by server";
 const DIRECT_ONLY_UNAVAILABLE: &str = "Direct connection unavailable in direct-only mode";
 
 impl DirectRetryPermission {
+    fn session_rank(&self, connection: &PeerConnection) -> transport_preference::Rank {
+        let (stream, direct, identity, _, label) = &connection.0;
+        if !direct && identity.is_some() && stream.is_secured() && self.relay_start.accepted() {
+            transport_preference::Rank::VerifiedStartupRelay
+        } else if *direct && self.relay_start.requested() && identity.is_some() && stream.is_secured() {
+            transport_preference::Rank::StartupDirect
+        } else {
+            transport_preference::rank(label, *direct)
+        }
+    }
+
     fn observe_refusal(&self, reason: &str) {
         if reason == DIRECT_ONLY_REQUIRED {
             let _ = self.server_requires_direct.set(());
@@ -580,6 +594,7 @@ impl Client {
 
     fn native_parallel_dials(
         interface: impl Interface, key: &str, token: &str, original_pk: Option<Vec<u8>>, server: String,
+        websocket_ticket: Option<crate::live_direct::native::Ticket>,
     ) -> crate::live_direct::parallel::Dials {
         let other_server = interface.get_lch().read().unwrap().other_server.clone();
         let (peer, key, token) = match other_server {
@@ -591,14 +606,16 @@ impl Client {
             let (peer, key, token, server) = (peer.clone(), key.clone(), token.clone(), server.clone());
             let (interface, original_pk) = (interface.clone(), original_pk.clone());
             enabled[usize::from(udp)].then(|| -> crate::live_direct::native::Dial {
+                let framing = crate::live_direct::native::websocket::TcpFraming::new(websocket_ticket.filter(|_| !udp));
                 Box::new(move || {
+                    let websocket_path_ticket = framing.next_marker();
                     let (peer, key, token, server) = (peer.clone(), key.clone(), token.clone(), server.clone());
                     let (interface, original_pk) = (interface.clone(), original_pk.clone());
                     Box::pin(async move {
                         if interface.is_policy_relay() || !crate::live_direct::native::enabled() {
                             bail!("Direct transport is disabled");
                         }
-                        let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only: udp, ..Default::default() };
+                        let permission = DirectRetryPermission { direct_only: true, native_upgrade: true, udp_upgrade_only: udp, websocket_path_ticket, ..Default::default() };
                         let ((stream, direct, pk, kcp, label), _, _) = if udp {
                             Self::start_via_rendezvous(
                                 &peer, &key, &token, ConnType::DEFAULT_CONN, interface, server, Vec::new(), true, &permission,
@@ -678,6 +695,12 @@ impl Client {
             {
                 retried_punch = true;
                 permission = DirectRetryPermission { direct_only: true, ..Default::default() };
+                continue;
+            }
+            if result.is_err() && permission.relay_start.accepted() && !permission.direct_only {
+                permission = DirectRetryPermission {
+                    relay_start: permission.relay_start.ordinary_retry(), ..Default::default()
+                };
                 continue;
             }
             break result;
@@ -793,7 +816,7 @@ impl Client {
             if !crate::is_udp_disabled() && (crate::get_udp_punch_enabled() || crate::get_ipv6_punch_enabled() || crate::get_webrtc_enabled()) {
                 let lan = Self::probe_lan(peer, key, token, &server, iface, direct_permission);
                 return transport_preference::choose([existing.boxed(), lan.boxed()], Self::udp_preference_window(),
-                    |path| transport_preference::rank(path.0.4, path.0.1)).await;
+                    |path| direct_permission.session_rank(path)).await;
             }
             let (mut lan, alternate) = prefer_lan_connection(
                 Self::probe_lan(peer, key, token, &server, iface, direct_permission),
@@ -832,9 +855,13 @@ impl Client {
         contained: bool,
         direct_permission: &DirectRetryPermission,
     ) -> ResultType<PeerConnection> {
+        if !direct_permission.direct_only && conn_type == ConnType::DEFAULT_CONN {
+            crate::p2p::regional_relay::prefetch(&rendezvous_server, key);
+        }
+        let ws_signaling = hbb_common::websocket::is_ws_endpoint(&rendezvous_server);
         // Same relay gate as the v6 socket below: under any forced relay the v6 punch cannot
         // be used, so probing v6 reachability is wasted work on every such connection.
-        if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() {
+        if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() && !ws_signaling {
             crate::test_ipv6().await;
         }
 
@@ -842,7 +869,7 @@ impl Client {
         let udp =
         // no need to care about multiple rendezvous servers case, since it is acutally not used any more.
         // Shared state for UDP NAT test result
-        if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
+        if crate::get_udp_punch_enabled() && !interface.is_force_relay() && !ws_signaling {
             let socket = if !key.is_empty() && !Config::is_proxy() && !use_ws()
                 && (direct_permission.native_upgrade || !crate::get_webrtc_enabled()) {
                 crate::p2p::ordinary_udp::controller_socket(&rendezvous_server, key,
@@ -880,7 +907,7 @@ impl Client {
         };
         // Under force-relay a direct IPv6 path is not allowed, so don't bind the v6 socket;
         // the controlled side likewise skips v6 when relaying.
-        let ipv6 = if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() {
+        let ipv6 = if crate::get_ipv6_punch_enabled() && !interface.is_force_relay() && !ws_signaling {
             crate::get_ipv6_socket().await
         } else {
             None
@@ -943,7 +970,7 @@ impl Client {
         // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
         // punch is off — it would reach `connect()` with nothing to try and just open a second
         // relay.
-        if interface.is_force_relay()
+        if ws_signaling || interface.is_force_relay()
             || (udp.0.is_none() && !has_webrtc_offerer)
             || !tcp_punch_allowed() || direct_permission.udp_upgrade_only
         {
@@ -973,7 +1000,7 @@ impl Client {
         transport_preference::choose(
             [preferred_fut, fallback_fut],
             Self::udp_preference_window(),
-            |result| transport_preference::rank(result.0.4, result.0.1),
+            |result| direct_permission.session_rank(result),
         )
         .await
     }
@@ -1314,17 +1341,19 @@ impl Client {
         let udp_nat_wait_from = Instant::now();
         let mut exchanged = false;
         let mut handshake_grant = false;
-        if carries_offer || (udp.0.is_some() && !key.is_empty()) {
+        let mut regional_directory = false;
+        if carries_offer || ((udp.0.is_some() || direct_permission.websocket_path_ticket.is_some()) && !key.is_empty()) {
             // An offer puts both sides' ICE candidates, every interface address of both
             // machines, on this socket, so it goes out only once the server's key exchange has
             // encrypted it. When the server does not complete one, an hbbs from before the
             // exchange, the offer is dropped and this becomes a punch without WebRTC, on a fresh
             // socket since the failed exchange may have consumed a message on this one. Degrade
             // to no WebRTC, never to WebRTC signalling in the clear.
-            match secure_tcp_with_direct_permission(&mut socket, &key, true).await {
-                Ok(signed_grant) => {
+            match crate::secure_punch_policy(&mut socket, &key).await {
+                Ok((signed_grant, directory)) => {
                     exchanged = true;
                     handshake_grant = signed_grant;
+                    regional_directory = directory;
                 }
                 Err(err) => {
                     log::warn!(
@@ -1407,9 +1436,14 @@ impl Client {
             .and_then(|g| g.stream())
             .map(|stream| stream.local_endpoint().to_owned())
             .unwrap_or_default();
-        let mut allow_tcp_punch = tcp_punch_allowed() && !direct_permission.udp_upgrade_only
+        let ws_signaling = matches!(socket, Stream::WebSocket(_));
+        let mut allow_tcp_punch = !ws_signaling && tcp_punch_allowed() && !direct_permission.udp_upgrade_only
             && request_allows_tcp_punch(&webrtc_sdp_offer)
             && (udp_nat_port == 0 || interface.is_force_relay());
+        let websocket_marker = direct_permission.websocket_path_ticket.filter(|_| {
+            allow_tcp_punch && handshake_grant && exchanged && socket.is_secured() && !interface.is_policy_relay()
+        });
+        let mut websocket_path = false;
         let mut family_retry_available = allow_tcp_punch
             && !interface.is_force_relay()
             && !Config::is_proxy()
@@ -1449,7 +1483,16 @@ impl Client {
         } else if !tcp_punch_allowed() && !interface.is_force_relay() {
             native_stage("ordinary-tcp", "TCP disabled in settings");
         }
+        let allow_relay_ice = hbb_common::websocket::check_ws(&rendezvous_server).starts_with("wss://")
+            && !interface.is_policy_relay() && !direct_permission.direct_only && crate::live_direct::enabled();
+        let prefer_relay_start = !direct_permission.direct_only && (!interface.is_force_relay() || allow_relay_ice)
+            && !key.is_empty() && conn_type == ConnType::DEFAULT_CONN
+            && (crate::live_direct::enabled() || crate::live_direct::native::enabled())
+            && direct_permission.relay_start.request();
         msg_out.set_punch_hole_request(PunchHoleRequest {
+            prefer_relay_start,
+            allow_relay_ice,
+            websocket_path_ticket: websocket_marker.as_ref().map(|tag| tag.to_vec()).unwrap_or_default().into(),
             id: peer.to_owned(),
             token: token.to_owned(),
             nat_type: nat_type.into(),
@@ -1460,7 +1503,11 @@ impl Client {
             udp_mapping_tickets: udp_candidates.tickets.clone().into(),
             udp_lan_endpoint: udp.0.as_ref().map(|s| udp_candidates.lan_offer(s)).unwrap_or_default(),
             udp_observed_ipv4: udp_candidates.observed_ipv4,
-            force_relay: interface.is_force_relay() && !direct_permission.direct_only,
+            relay_samples: if !direct_permission.direct_only && conn_type == ConnType::DEFAULT_CONN {
+                direct_permission.relay_start.remaining(
+                    crate::p2p::regional_relay::samples(&rendezvous_server, &key, regional_directory).await)
+            } else { Vec::new() },
+            force_relay: (ws_signaling || interface.is_force_relay()) && !direct_permission.direct_only,
             direct_only: direct_permission.direct_only,
             socket_addr_v6: ipv6.1.unwrap_or_default(),
             switch_code,
@@ -1556,6 +1603,7 @@ impl Client {
                             // The independently signaled TCP attempt owns its TCP listener.
                             // A TCP accept on this UDP mapping would discard a live KCP probe.
                             allow_tcp_punch &= !ph.is_udp;
+                            websocket_path = allow_tcp_punch && websocket_marker.is_some() && ph.websocket_path;
                             signed_id_pk = ph.pk.into();
                             relay_server = ph.relay_server;
                             peer_addr = AddrMangle::decode(&ph.socket_addr);
@@ -1572,6 +1620,12 @@ impl Client {
                                         });
                                         udp.0 = Some(socket);
                                     } else {
+                                        #[cfg(target_os = "ios")]
+                                        crate::ios_p2p_diagnostics::record_milestone("ordinary-udp",
+                                            if !handshake_grant || !exchanged { "single socket: no authenticated multi-path grant" }
+                                            else if mapped.is_none() { "single socket: no mapping observer for this round" }
+                                            else if udp_candidates.tickets.is_empty() { "single socket: observer returned no mapping receipts" }
+                                            else { "single socket: rendezvous returned no valid probe key" });
                                         match crate::p2p::ordinary_udp::connect_peer(&socket, peer_addr).await {
                                             Ok(()) => udp.0 = Some(socket),
                                             Err(err) => {
@@ -1616,6 +1670,11 @@ impl Client {
                         if !rr.refuse_reason.is_empty() {
                             direct_permission.observe_refusal(&rr.refuse_reason);
                             bail!(rr.refuse_reason);
+                        }
+                        if prefer_relay_start && rr.prefer_relay_start && !rr.pk().is_empty() {
+                            direct_permission.relay_start.accept(&rr.relay_server);
+                            drop(webrtc_offerer.take());
+                            return relay_start::open(&peer, &key, conn_type, my_addr.is_ipv4(), rr, rendezvous_server).await;
                         }
                         log::info!(
                             "relay requested from peer, time used: {:?}, relay_server: {}",
@@ -1957,6 +2016,7 @@ impl Client {
                 webrtc_for_connect,
                 webrtc_bridge_stop,
                 allow_tcp_punch,
+                websocket_path,
                 &punch_type,
                 direct_permission,
             )
@@ -1987,6 +2047,7 @@ impl Client {
         webrtc_offerer: Option<WebRTCStream>,
         webrtc_bridge_stop: Option<oneshot::Sender<()>>,
         allow_tcp_punch: bool,
+        websocket_path: bool,
         punch_type: &str,
         direct_permission: &DirectRetryPermission,
     ) -> ResultType<(
@@ -2049,6 +2110,11 @@ impl Client {
                     let result = fut.await;
                     native_stage("ordinary-tcp", if result.is_ok() { "TCP socket open; awaiting peer authentication" } else { "peer TCP connection failed" });
                     let conn = result?;
+                    if websocket_path {
+                        let conn = crate::live_direct::native::websocket::upgrade(conn, Some(peer)).await?;
+                        native_stage("ordinary-websocket", "HTTP upgrade complete, awaiting peer authentication");
+                        return Ok((conn, None, "WebSocket", true));
+                    }
                     Ok((conn, None, "TCP", true))
                 }
                 .boxed(),
@@ -2312,13 +2378,13 @@ impl Client {
         peer_id: &str, signed_id_pk: &[u8], key: &str, conn: &mut Stream, upgrade: bool, label: &str,
     ) -> ResultType<Option<Vec<u8>>> {
         let result = Self::secure_connection_for_path(peer_id, signed_id_pk.to_vec(), key, conn, upgrade).await;
-        if label == "TCP" {
+        if label == "TCP" || label == "WebSocket" {
             let stage = match &result {
                 Ok(Some(_)) if conn.is_secured() => "peer identity verified",
                 Ok(_) => "peer identity unavailable",
                 Err(_) => "peer authentication did not complete",
             };
-            native_stage("ordinary-tcp", stage);
+            native_stage(if label == "TCP" { "ordinary-tcp" } else { "ordinary-websocket" }, stage);
         }
         result
     }
@@ -6787,10 +6853,45 @@ mod tcp_family_tests;
 #[cfg(all(test, feature = "flutter"))]
 #[tokio::test]
 #[cfg(not(target_os = "ios"))]
+async fn websocket_punch_verifies_the_host_identity_and_refuses_a_new_desktop_login() {
+    use crate::live_direct::native::{self, websocket};
+
+    let _admission = crate::server::UNAUTHORIZED_TESTS.acquire().await.unwrap();
+    let listener = native::Listener::new();
+    let ticket = listener.response()[native::ACCEPT.len()..].try_into().unwrap();
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = server.local_addr().unwrap();
+    let (authority, secret) = sign::gen_keypair();
+    let id = Config::get_id();
+    let identity = Config::get_key_pair().1;
+    let signed = sign::sign(&IdPk { id: id.clone(), pk: identity.clone().into(), ..Default::default() }
+        .write_to_bytes().unwrap(), &secret);
+    let host = async {
+        let (tcp, peer) = server.accept().await.unwrap();
+        crate::server::create_websocket_path(crate::server::new_for_test(),
+            Stream::from(tcp, addr), peer, websocket::marker(&ticket)).await
+    };
+    let caller = async {
+        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let source = tcp.local_addr().unwrap();
+        let mut ws = websocket::upgrade(Stream::from(tcp, source), Some(addr)).await.unwrap();
+        let pk = Client::secure_connection_for_path(&id, signed, &crate::encode64(authority.0), &mut ws, false)
+            .await.unwrap();
+        assert_eq!(pk, Some(identity));
+        assert!(ws.is_secured());
+    };
+    let (result, ()) = timeout(4_000, async { tokio::join!(host, caller) }).await.unwrap();
+    assert!(result.unwrap_err().to_string().contains("requires a session attachment"));
+}
+
+#[cfg(all(test, feature = "flutter"))]
+#[tokio::test]
+#[cfg(not(target_os = "ios"))]
 async fn relay_session_attaches_a_rendezvous_tcp_punch_without_webrtc() {
     use crate::live_direct::{native, wrap_native};
     use hbb_common::tcp::{new_listener, FramedStream, KxTranscript};
 
+    let _admission = crate::server::UNAUTHORIZED_TESTS.acquire().await.unwrap();
     let host = new_listener("127.0.0.1:0", false).await.unwrap();
     let addr = host.local_addr().unwrap();
     let hbbs = new_listener("127.0.0.1:0", false).await.unwrap();

@@ -1,6 +1,5 @@
 use hbb_common::{
     config::{use_ws, Config, CONNECT_TIMEOUT},
-    log,
     socket_client::{connect_tcp, ipv4_to_ipv6},
     websocket::{check_ws, is_ws_endpoint},
     ResultType, Stream,
@@ -12,13 +11,35 @@ pub(crate) async fn connect(
     ipv4: bool,
 ) -> ResultType<(Stream, &'static str)> {
     let ws = is_ws_endpoint(&check_ws(&server));
+    let tcp_endpoint = ipv4_to_ipv6(server.clone(), ipv4 || (Config::is_proxy() && ws));
+    let tcp = async {
+        let stream = connect_tcp(tcp_endpoint, CONNECT_TIMEOUT).await?;
+        Ok((stream, if use_ws() || ws { "WebSocket" } else { "Relay" }))
+    };
     #[cfg(feature = "udp-relay")]
-    if let Some(stream) = connect_udp(&server, _key).await {
-        return Ok((stream, "QUIC"));
+    if !ws && !Config::is_proxy() && !crate::is_udp_disabled() {
+        let quic = async { connect_udp(&server, _key).await.map(|stream| (stream, "QUIC")) };
+        return with_tcp_fallback(quic, tcp).await;
     }
-    let server = ipv4_to_ipv6(server, ipv4 || (Config::is_proxy() && ws));
-    let stream = connect_tcp(server, CONNECT_TIMEOUT).await?;
-    Ok((stream, if use_ws() || ws { "WebSocket" } else { "Relay" }))
+    tcp.await
+}
+
+#[cfg(feature = "udp-relay")]
+async fn with_tcp_fallback<T>(
+    udp: impl std::future::Future<Output = Option<T>>,
+    tcp: impl std::future::Future<Output = ResultType<T>>,
+) -> ResultType<T> {
+    use hbb_common::tokio::{self, time::{sleep, Duration}};
+    tokio::pin!(udp);
+    tokio::select! {
+        first = &mut udp => if let Some(path) = first { return Ok(path) } else { return tcp.await },
+        _ = sleep(Duration::from_millis(150)) => {}
+    }
+    tokio::pin!(tcp);
+    tokio::select! {
+        first = &mut udp => match first { Some(path) => Ok(path), None => tcp.await },
+        first = &mut tcp => match first { Ok(path) => Ok(path), Err(err) => udp.await.ok_or(err) },
+    }
 }
 
 #[cfg(feature = "udp-relay")]
@@ -30,13 +51,29 @@ pub(crate) async fn connect_udp(server: &str, key: &str) -> Option<Stream> {
     match hbb_common::timeout(1800, quic::connect(server, pk)).await {
         Ok(Ok(stream)) => Some(Stream::Tcp(stream)),
         Ok(Err(err)) => {
-            log::debug!("UDP relay unavailable: {err}");
+            hbb_common::log::debug!("UDP relay unavailable: {err}");
             None
         }
         Err(_) => {
-            log::debug!("UDP relay handshake timed out");
+            hbb_common::log::debug!("UDP relay handshake timed out");
             None
         }
+    }
+}
+
+#[cfg(all(test, feature = "udp-relay"))]
+mod tests {
+    use super::with_tcp_fallback;
+    use hbb_common::{anyhow::anyhow, tokio::{self, time::{sleep, Duration, Instant}}};
+
+    #[tokio::test(start_paused = true)]
+    async fn a_blocked_udp_relay_does_not_delay_a_working_tcp_relay() {
+        let start = Instant::now();
+        assert_eq!(with_tcp_fallback(std::future::pending(), async { Ok("TCP") }).await.unwrap(), "TCP");
+        assert_eq!(start.elapsed(), Duration::from_millis(150));
+
+        let slow_quic = async { sleep(Duration::from_millis(500)).await; Some("QUIC") };
+        assert_eq!(with_tcp_fallback(slow_quic, async { Err(anyhow!("TCP refused")) }).await.unwrap(), "QUIC");
     }
 }
 
