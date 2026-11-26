@@ -95,6 +95,8 @@ pub struct Remote<T: InvokeUiSession> {
     client_conn_id: i32, // used for file clipboard
     data_count: Arc<AtomicUsize>,
     video_delivery: super::video_delivery::DeliveryWindow,
+    #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+    p2p_test: crate::p2p_remote_diagnostics::ios::Round,
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     video_diagnostic: Arc<crate::video_diagnostics::ReceiveStats>,
     video_format: CodecFormat,
@@ -160,6 +162,8 @@ impl<T: InvokeUiSession> Remote<T> {
             client_conn_id: 0,
             data_count: Arc::new(AtomicUsize::new(0)),
             video_delivery: Default::default(),
+            #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+            p2p_test: Default::default(),
             #[cfg(all(windows, feature = "windows-video-diagnostics"))]
             video_diagnostic: Default::default(),
             video_format: CodecFormat::Unknown,
@@ -221,6 +225,8 @@ impl<T: InvokeUiSession> Remote<T> {
         };
 
         let mut initial_frames = client::path_rtt::InitialFrames::new();
+        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+        self.handler.p2p_test_access.begin_round();
         match Client::start_with_direct_permission(
             &self.handler.get_id(),
             key,
@@ -242,6 +248,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 let is_secured = peer.is_secured();
                 let peer_verified = pk.is_some();
                 let session_pk = pk.clone();
+                #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                if is_secured && conn_type == ConnType::DEFAULT_CONN {
+                    self.p2p_test.key = session_pk.clone();
+                }
                 let trust = crate::trusted_devices::client::Session::new(
                     &self.handler.lc.read().unwrap(),
                     is_secured,
@@ -267,6 +277,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 } else {
                     stream_type
                 };
+                #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                self.p2p_test.set_path(stream_type, direct);
                 self.handler
                     .set_connection_type(is_secured, direct, stream_type); // flutter -> connection_ready
                 if !is_secured
@@ -443,6 +455,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         path = crate::live_direct::next_path(&mut live_path) => {
                             if let Some(transport) = path {
                                 direct = transport.is_some();
+                                #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                                self.p2p_test.set_path(transport.unwrap_or(stream_type), direct);
                                 #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                                 {
                                     diagnostic_transport = transport.unwrap_or(stream_type);
@@ -1988,6 +2002,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
 
                         self.is_connected = true;
+                        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                        self.handler.p2p_test_access.authenticated(self.p2p_test.key.as_deref());
                         if peer.is_secured() {
                             for id in &self.udp_probe_rounds {
                                 allow_err!(peer.send(&crate::p2p::probe_report::query(id)).await);
@@ -2438,6 +2454,23 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Misc(misc)) => match misc.union {
+                    #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                    Some(misc::Union::P2pDiagnosticCommand(command)) if self.is_connected && peer.is_secured() => {
+                        if let Some((report, reconnect)) = self.p2p_test.sample(&self.handler.p2p_test_access, Some(command)) {
+                            let mut misc = Misc::new();
+                            misc.set_p2p_diagnostic_report(report);
+                            let mut reply = Message::new();
+                            reply.set_misc(misc);
+                            if peer.send(&reply).await.is_ok() {
+                                if reconnect {
+                                    self.handler.reconnect(false);
+                                    return false;
+                                }
+                            } else if reconnect {
+                                self.handler.p2p_test_access.close();
+                            }
+                        }
+                    }
                     Some(misc::Union::UdpProbeReport(report)) if self.is_connected && peer.is_secured() => {
                         if let Some(index) = self.udp_probe_rounds.iter().position(|id| report.round.as_ref() == id) {
                             if let Some(text) = crate::p2p::probe_report::display(&self.udp_probe_rounds[index], &report) {
@@ -2664,6 +2697,12 @@ impl<T: InvokeUiSession> Remote<T> {
                             && self.handler.lc.read().unwrap().conn_type == ConnType::DEFAULT_CONN,
                     );
                     if !t.from_client {
+                        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                        if self.is_connected && peer.is_secured() {
+                            if let Some((report, _)) = self.p2p_test.sample(&self.handler.p2p_test_access, None) {
+                                t.p2p_diagnostic_report = Some(report).into();
+                            }
+                        }
                         let (kbps, fps, queued, decoded_fps) = self.video_delivery
                             .finish(std::time::Instant::now())
                             .unwrap_or_default();

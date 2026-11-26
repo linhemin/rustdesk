@@ -584,6 +584,13 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                 Data::ChatMessage { text } => {
                                     self.cm.new_message(self.conn_id, text);
                                 }
+                                #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
+                                Data::P2pTestReport(report) => {
+                                    hbb_common::throttled_log!(
+                                        std::time::Duration::from_secs(1), info,
+                                        "p2p_diag_v1 conn={} {report}", self.conn_id
+                                    );
+                                }
                                 Data::SwitchPermission { name, enabled } => {
                                     // Keep this branch scoped to privacy mode rollback.
                                     // Other CM permission toggles are updated optimistically by the UI itself.

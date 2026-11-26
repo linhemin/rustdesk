@@ -218,6 +218,8 @@ mod recorder {
     static WRITER: Mutex<Option<Writer>> = Mutex::new(None);
 
     pub(crate) fn disable() {
+        #[cfg(feature = "p2p-remote-diagnostics")]
+        crate::p2p_remote_diagnostics::ios::revoke();
         let mut writer = WRITER.lock().unwrap();
         *writer = None;
         let path = Config::path(FILENAME);
@@ -274,6 +276,8 @@ mod recorder {
     #[derive(Clone)]
     struct Attempt {
         id: u64,
+        #[cfg(feature = "p2p-remote-diagnostics")]
+        remote_capture: Option<Instant>,
         entries: SyncSender<(u64, String)>,
         started: Instant,
         start_path: &'static str,
@@ -329,6 +333,8 @@ mod recorder {
             if let Some(punch) = &progress.punch {
                 append_punch_status(&mut entry, &punch.borrow());
             }
+            #[cfg(feature = "p2p-remote-diagnostics")]
+            crate::p2p_remote_diagnostics::ios::record(self.remote_capture, self.id, &entry);
             let _ = self.entries.try_send((self.id, entry));
         }
     }
@@ -347,6 +353,8 @@ mod recorder {
             let (entries, stop) = recording()?;
             let attempt = Attempt {
                 id: NEXT.fetch_add(1, Ordering::Relaxed),
+                #[cfg(feature = "p2p-remote-diagnostics")]
+                remote_capture: crate::p2p_remote_diagnostics::ios::capture(),
                 entries,
                 started: Instant::now(),
                 start_path: path_label(),

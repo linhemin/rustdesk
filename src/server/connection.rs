@@ -808,6 +808,17 @@ impl Connection {
                             }
                         }
                         ipc::Data::ChatMessage{text} => {
+                            #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
+                            if text.split_ascii_whitespace().next() == Some(crate::p2p_remote_diagnostics::windows::PREFIX) {
+                                if conn.is_authed_remote_conn() && conn.stream.is_secured() {
+                                    if let Some(command) = crate::p2p_remote_diagnostics::windows::command(&text) {
+                                        conn.send(command).await;
+                                    } else {
+                                        conn.send_to_cm(ipc::Data::P2pTestReport(crate::p2p_remote_diagnostics::windows::USAGE.to_owned()));
+                                    }
+                                }
+                                continue;
+                            }
                             let mut misc = Misc::new();
                             misc.set_chat_message(ChatMessage {
                                 text,
@@ -3239,7 +3250,11 @@ impl Connection {
                     }
                 }
             }
-        } else if let Some(message::Union::TestDelay(t)) = msg.union {
+        } else if let Some(message::Union::TestDelay(mut t)) = msg.union {
+            #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
+            if let Some(report) = t.p2p_diagnostic_report.take() {
+                self.receive_p2p_test_report(report);
+            }
             if t.from_client {
                 let mut msg_out = Message::new();
                 msg_out.set_test_delay(t);
@@ -4211,6 +4226,10 @@ impl Connection {
                                 }
                             });
                         }
+                    }
+                    #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
+                    Some(misc::Union::P2pDiagnosticReport(report)) => {
+                        self.receive_p2p_test_report(report);
                     }
                     Some(misc::Union::MessageQuery(mq)) => {
                         if let Some(msg_out) = video_service::make_display_changed_msg(
@@ -5994,6 +6013,15 @@ impl Connection {
             return id.conn_type() == AuthConnType::Remote;
         }
         false
+    }
+
+    #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
+    fn receive_p2p_test_report(&mut self, report: P2pDiagnosticReport) {
+        if self.is_authed_remote_conn() && self.stream.is_secured() {
+            if let Some(report) = crate::p2p_remote_diagnostics::windows::report(report) {
+                self.send_to_cm(ipc::Data::P2pTestReport(report));
+            }
+        }
     }
 
     fn is_authed_view_camera_conn(&self) -> bool {

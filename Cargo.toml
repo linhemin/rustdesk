@@ -32,6 +32,7 @@ hwcodec = ["scrap/hwcodec"]
 vram = ["scrap/vram"]
 # Only enable this explicitly for Windows video diagnostics packages.
 windows-video-diagnostics = ["scrap/dxgi-diagnostics"]
+p2p-remote-diagnostics = []
 mediacodec = ["scrap/mediacodec"]
 drm = ["scrap/drm"]
 # The display wake, as its OWN compile gate on top of `drm`. Everything else in the drm backend

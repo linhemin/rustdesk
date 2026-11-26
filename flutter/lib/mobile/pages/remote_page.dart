@@ -1243,6 +1243,9 @@ class _RemotePageState extends State<RemotePage>
     if (recordIosP2pDiagnostics) {
       add(translate('Copy P2P diagnostics'), _copyP2pDiagnostics);
     }
+    if (_showRemoteP2pTest) {
+      add(translate('Remote P2P test'), _showP2pTestConsent);
+    }
     _nativeActions = actions;
     return {
       'actions': titles,
@@ -2254,6 +2257,52 @@ class _RemotePageState extends State<RemotePage>
     ];
   }
 
+  static const _p2pTestAccessOption = 'p2p-remote-diagnostics-access';
+
+  bool get _showRemoteP2pTest =>
+      const bool.fromEnvironment('RUSTDESK_P2P_REMOTE_DIAGNOSTICS') &&
+      isIOS &&
+      recordIosP2pDiagnostics;
+
+  Future<void> _showP2pTestConsent() async {
+    final target = sessionId;
+    final allowed = (await bind.sessionGetPeerOption(
+            sessionId: target, name: _p2pTestAccessOption)) ==
+        'Y';
+    if (!mounted || sessionId != target) return;
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(translate('Remote P2P test')),
+        content: Text(
+          '${widget.id}\n\n${translate('Allow this computer to receive P2P diagnostics, change TCP, UDP and WebRTC test settings, and reconnect this session for 15 minutes.')}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(translate('Cancel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: Text(translate(allowed ? 'Disable' : 'Enable')),
+          ),
+        ],
+      ),
+    );
+    if (changed != true || !mounted || sessionId != target) return;
+    await bind.sessionPeerOption(
+      sessionId: target,
+      name: _p2pTestAccessOption,
+      value: allowed ? 'N' : 'Y',
+    );
+    final enabled = (await bind.sessionGetPeerOption(
+            sessionId: target, name: _p2pTestAccessOption)) ==
+        'Y';
+    if (mounted) {
+      showToast(translate(enabled == !allowed ? 'Success' : 'Failed'));
+    }
+  }
+
   Future<void> _copyP2pDiagnostics() async {
     if (!recordIosP2pDiagnostics) return;
     try {
@@ -2292,6 +2341,11 @@ class _RemotePageState extends State<RemotePage>
           child: Text(translate('Copy P2P diagnostics')),
           trailingIcon: const Icon(Icons.content_copy),
           onPressed: _copyP2pDiagnostics,
+        ),
+      if (_showRemoteP2pTest)
+        TTextMenu(
+          child: Text(translate('Remote P2P test')),
+          onPressed: _showP2pTestConsent,
         ),
       ..._getMobileActionMenus(),
     ];

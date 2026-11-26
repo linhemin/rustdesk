@@ -887,5 +887,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Decoder", ""),
         ("Prefer hardware decoding", ""),
         ("Software decoding", ""),
+        ("Remote P2P test", ""),
+        ("Allow this computer to receive P2P diagnostics, change TCP, UDP and WebRTC test settings, and reconnect this session for 15 minutes.", ""),
     ].iter().cloned().collect();
 }

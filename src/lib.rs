@@ -18,6 +18,8 @@ mod client;
 mod video_diagnostics;
 #[cfg(any(target_os = "ios", test))]
 mod ios_p2p_diagnostics;
+#[cfg(any(all(feature = "p2p-remote-diagnostics", any(windows, target_os = "ios")), test))]
+mod p2p_remote_diagnostics;
 mod lan;
 mod live_direct;
 mod p2p;

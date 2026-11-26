@@ -731,6 +731,25 @@ message TestDelay {
   VideoDiagnostics video_diagnostics = 11;
   // Zero means the viewer did not measure decoding, 1 represents zero decoded FPS.
   uint32 decoded_video_fps_plus_one = 12;
+  P2pDiagnosticReport p2p_diagnostic_report = 13;
+}
+
+message P2pDiagnosticCommand {
+  enum Action {
+    UNKNOWN = 0;
+    STATUS = 1;
+    APPLY_AND_RECONNECT = 2;
+    RECONNECT = 3;
+    RESTORE_AND_RECONNECT = 4;
+  }
+  uint64 request_id = 1;
+  Action action = 2;
+  uint32 profile = 3;
+}
+
+message P2pDiagnosticReport {
+  uint64 request_id = 1;
+  string sample = 2;
 }
 
 message VideoDiagnostics {
@@ -932,6 +951,8 @@ message Misc {
     uint64 request_cursor_data = 39;
     bytes udp_probe_query = 40;
     UdpProbeReport udp_probe_report = 41;
+    P2pDiagnosticCommand p2p_diagnostic_command = 42;
+    P2pDiagnosticReport p2p_diagnostic_report = 43;
   }
 }
 

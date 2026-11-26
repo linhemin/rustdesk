@@ -77,6 +77,8 @@ pub struct Session<T: InvokeUiSession> {
     pub reconnect_count: Arc<AtomicUsize>,
     pub last_audit_note: Arc<Mutex<String>>,
     pub audit_guid: Arc<Mutex<String>>,
+    #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+    pub(crate) p2p_test_access: crate::p2p_remote_diagnostics::ios::Access,
     // Every cursor shape as the peer sent it, compressed, by the id the UI knows it by. The
     // peer sends a shape once, and a window asks for it whenever it has to draw it again.
     #[cfg(feature = "flutter")]
@@ -645,6 +647,10 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn get_option(&self, k: String) -> String {
+        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+        if k == crate::p2p_remote_diagnostics::ios::OPTION {
+            return if self.p2p_test_access.allowed() { "Y" } else { "N" }.to_owned();
+        }
         if k.eq("remote_dir") {
             return self.lc.read().unwrap().get_remote_dir();
         }
@@ -652,6 +658,11 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn set_option(&self, k: String, mut v: String) {
+        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+        if k == crate::p2p_remote_diagnostics::ios::OPTION {
+            self.p2p_test_access.allow(v == "Y");
+            return;
+        }
         let mut lc = self.lc.write().unwrap();
         if k.eq("remote_dir") {
             v = lc.get_all_remote_dir(v);
@@ -1444,6 +1455,8 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn close(&self) {
+        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+        self.p2p_test_access.close();
         self.send(Data::Close);
     }
 

@@ -364,6 +364,8 @@ pub enum Data {
     ChatMessage {
         text: String,
     },
+    #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
+    P2pTestReport(String),
     SwitchPermission {
         name: String,
         enabled: bool,
