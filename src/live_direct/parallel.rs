@@ -29,7 +29,25 @@ pub(super) struct Race {
     ready: VecDeque<(u64, Lane)>,
     selected: Option<(u64, Instant)>,
     native_attempt: u64,
-    native_retry: Option<Instant>,
+    native_retry: [NativeRetry; 2],
+}
+
+#[derive(Default)]
+struct NativeRetry {
+    after: Option<Instant>,
+    failures: u32,
+}
+
+impl NativeRetry {
+    fn defer(&mut self, until: Instant) {
+        self.after = Some(self.after.map_or(until, |at| at.max(until)));
+    }
+
+    fn failed(&mut self, now: Instant) {
+        let delay = (2u64 << self.failures.min(3)).min(12);
+        self.failures = self.failures.saturating_add(1);
+        self.defer(now + Duration::from_secs(delay));
+    }
 }
 
 impl Race {
@@ -54,23 +72,24 @@ impl Race {
     }
 
     pub(super) fn defer_native(&mut self, until: Instant) {
-        self.native_retry = Some(self.native_retry.map_or(until, |retry| retry.max(until)));
+        for retry in &mut self.native_retry {
+            retry.defer(until);
+        }
     }
 
     pub(super) fn start_native(&mut self, now: Instant) {
-        if self.selected.is_some()
-            || self.busy(TCP)
-            || self.busy(UDP)
-            || self.native_retry.is_some_and(|retry| now < retry)
-        {
+        if self.selected.is_some() {
             return;
         }
         let Some((ticket, dials)) = self.caller.as_ref() else {
             return;
         };
-        self.native_attempt += 1;
-        for (family, dial) in [TCP, UDP].into_iter().zip(dials) {
+        for (index, (family, dial)) in [TCP, UDP].into_iter().zip(dials).enumerate() {
             let Some(dial) = dial else { continue };
+            if self.busy(family) || self.native_retry[index].after.is_some_and(|at| now < at) {
+                continue;
+            }
+            self.native_attempt += 1;
             let dial = dial();
             let ticket = *ticket;
             let id = self.native_attempt | family;
@@ -109,8 +128,22 @@ impl Race {
             return;
         };
         self.pending.retain(|pending| *pending != id);
-        if id & NATIVE != 0 {
-            self.native_retry = Some(Instant::now() + Duration::from_secs(10));
+        if self.is_caller() && id & NATIVE != 0 {
+            let retry = &mut self.native_retry[usize::from(id & NATIVE == UDP)];
+            if result.is_err() {
+                retry.failed(Instant::now());
+                #[cfg(target_os = "ios")]
+                crate::ios_p2p_diagnostics::record_milestone(
+                    "relay-upgrade-parallel",
+                    if id & NATIVE == UDP {
+                        "UDP attempt ended, waiting for UDP retry"
+                    } else {
+                        "TCP attempt ended, waiting for TCP retry"
+                    },
+                );
+            } else {
+                *retry = NativeRetry::default();
+            }
         }
         match result {
             Ok(lane) => {
@@ -203,4 +236,40 @@ async fn verify(mut lane: Lane, id: u64, caller: bool) -> ResultType<Lane> {
         Ok(lane)
     })
     .await?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hbb_common::tokio;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_native_transport_retries_while_the_other_is_still_dialing() {
+        for failed in 0..2 {
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let dials: Dials = [0, 1].map(|index| {
+                let attempts = attempts.clone();
+                let dial: native::Dial = Box::new(move || {
+                    if index == failed {
+                        attempts.fetch_add(1, Ordering::Relaxed);
+                        async { bail!("dial failed") }.boxed()
+                    } else {
+                        std::future::pending().boxed()
+                    }
+                });
+                Some(dial)
+            });
+            let mut race = Race::caller([0; 32], dials);
+            race.start_native(Instant::now());
+            race.checked().await;
+            assert_eq!(attempts.load(Ordering::Relaxed), 1);
+            tokio::time::advance(Duration::from_secs(2)).await;
+            race.start_native(Instant::now());
+            assert_eq!(attempts.load(Ordering::Relaxed), 2);
+        }
+    }
 }
