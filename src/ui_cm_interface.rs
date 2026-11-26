@@ -591,6 +591,10 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                         "p2p_diag_v1 conn={} {report}", self.conn_id
                                     );
                                 }
+                                #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                                Data::VideoStartupReport(report) => {
+                                    log::info!("video_startup_v1 conn={} {report}", self.conn_id);
+                                }
                                 Data::SwitchPermission { name, enabled } => {
                                     // Keep this branch scoped to privacy mode rollback.
                                     // Other CM permission toggles are updated optimistically by the UI itself.

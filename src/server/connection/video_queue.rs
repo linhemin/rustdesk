@@ -12,6 +12,7 @@ use super::video_service;
 
 const MAX_PENDING_FRAMES: usize = 8;
 const MAX_FRAME_AGE: Duration = Duration::from_millis(150);
+const FIRST_KEYFRAME_GRACE: Duration = Duration::from_secs(4);
 const PRESSURED_FRAME_AGE: Duration = Duration::from_millis(50);
 
 pub(super) enum Event {
@@ -30,6 +31,7 @@ struct Pending {
     messages: VecDeque<(Instant, Arc<Message>)>,
     recovery: HashMap<i32, Recovery>,
     send_pressure: bool,
+    first_keyframe_sent: bool,
     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
     discarded_frames: usize,
 }
@@ -100,15 +102,34 @@ impl VideoQueue {
 }
 
 impl Pending {
+    fn first_keyframe_to_keep(&self, now: Instant) -> Option<usize> {
+        if self.first_keyframe_sent {
+            return None;
+        }
+        self.messages.iter().rposition(|(at, message)| {
+            now.duration_since(*at) < FIRST_KEYFRAME_GRACE
+                && starts_with_keyframe(message.video_frame())
+        })
+    }
+
     fn expired(&self, now: Instant) -> bool {
+        let protected = self.first_keyframe_to_keep(now);
         self.messages
             .iter()
-            .find(|(_, message)| message.has_video_frame())
-            .is_some_and(|(queued_at, _)| now.duration_since(*queued_at) >= MAX_FRAME_AGE)
+            .enumerate()
+            .find(|(index, (_, message))| Some(*index) != protected && message.has_video_frame())
+            .is_some_and(|(_, (queued_at, _))| now.duration_since(*queued_at) >= MAX_FRAME_AGE)
     }
 
     fn discard_video(&mut self, conn_id: i32) {
+        let protected = self.first_keyframe_to_keep(Instant::now());
+        let mut index = 0;
         self.messages.retain(|(_, message)| {
+            let keep = Some(index) == protected;
+            index += 1;
+            if keep {
+                return true;
+            }
             let Some(message::Union::VideoFrame(frame)) = &message.union else {
                 return true;
             };
@@ -129,16 +150,19 @@ impl Pending {
         if self.expired(now) {
             self.discard_video(conn_id);
         }
-        if let Some((&display, state)) = self
-            .recovery
-            .iter_mut()
-            .find(|(_, state)| matches!(state, Recovery::NeedsRefresh))
-        {
-            // Request recovery only once the connection's in-flight write has finished.
-            *state = Recovery::WaitingForKeyframe;
-            return Some(Event::Refresh(display));
+        if self.first_keyframe_to_keep(now).is_none() {
+            if let Some((&display, state)) = self
+                .recovery
+                .iter_mut()
+                .find(|(_, state)| matches!(state, Recovery::NeedsRefresh))
+            {
+                // Request recovery only once the connection's in-flight write has finished.
+                *state = Recovery::WaitingForKeyframe;
+                return Some(Event::Refresh(display));
+            }
         }
         let (at, message) = self.messages.pop_front()?;
+        self.first_keyframe_sent |= starts_with_keyframe(message.video_frame());
         if message.has_video_frame() && now.duration_since(at) >= PRESSURED_FRAME_AGE {
             self.send_pressure = true;
         }
@@ -146,7 +170,7 @@ impl Pending {
     }
 }
 
-fn starts_with_keyframe(frame: &VideoFrame) -> bool {
+pub(super) fn starts_with_keyframe(frame: &VideoFrame) -> bool {
     use video_frame::Union::*;
     match &frame.union {
         Some(Vp8s(frames) | Vp9s(frames) | Av1s(frames) | H264s(frames) | H265s(frames)) => {
@@ -208,8 +232,26 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn delayed_first_keyframe_survives_the_steady_video_age_limit() {
+        let queue = VideoQueue::default();
+        let display = switch_display();
+        let keyframe = frame(0, 1, true);
+        queue.push(1, display.clone());
+        queue.push(1, keyframe.clone());
+        queue.push(1, frame(0, 2, false));
+        tokio::time::advance(Duration::from_secs(1)).await;
+
+        assert_sends(&queue, &display).await;
+        assert_sends(&queue, &keyframe).await;
+        assert!(matches!(queue.recv(1).await, Event::Refresh(0)));
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn skips_overflow_and_resumes_from_a_new_keyframe() {
         let queue = VideoQueue::default();
+        let initial = frame(0, -1, true);
+        queue.push(1, initial.clone());
+        assert_sends(&queue, &initial).await;
         let display_change = switch_display();
         for pts in 0..MAX_PENDING_FRAMES {
             queue.push(1, frame(0, pts as i64, pts == 0));
@@ -231,6 +273,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn expires_stale_frames_even_when_no_new_frames_arrive() {
         let queue = VideoQueue::default();
+        let initial = frame(1, -1, true);
+        queue.push(1, initial.clone());
+        assert_sends(&queue, &initial).await;
         queue.push(1, frame(1, 0, true));
         tokio::time::advance(MAX_FRAME_AGE).await;
         assert!(matches!(queue.recv(1).await, Event::Refresh(1)));

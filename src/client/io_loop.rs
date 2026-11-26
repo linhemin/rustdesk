@@ -91,6 +91,7 @@ pub struct Remote<T: InvokeUiSession> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     initial_clipboard_pending: bool,
     first_frame: bool,
+    first_image: super::first_image::FirstImage,
     #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
     client_conn_id: i32, // used for file clipboard
     data_count: Arc<AtomicUsize>,
@@ -159,6 +160,7 @@ impl<T: InvokeUiSession> Remote<T> {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             initial_clipboard_pending: false,
             first_frame: false,
+            first_image: Default::default(),
             #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
             client_conn_id: 0,
             data_count: Arc::new(AtomicUsize::new(0)),
@@ -528,6 +530,13 @@ impl<T: InvokeUiSession> Remote<T> {
                             }
                         }
                         _ = status_timer.tick() => {
+                            if let Some(display) = self.first_image.refresh_due(Instant::now()) {
+                                #[cfg(target_os = "ios")]
+                                crate::ios_p2p_diagnostics::record_milestone(
+                                    "video-startup", "requested a fresh keyframe while waiting for the first image",
+                                );
+                                self.handler.refresh_video(display);
+                            }
                             if self.handler.is_restarting_remote_device()
                                 && last_recv_time.elapsed() >= RESTART_REMOTE_DEVICE_NO_DATA_TIMEOUT
                             {
@@ -1897,6 +1906,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::VideoFrame(vf)) => {
                     if !self.first_frame {
                         self.first_frame = true;
+                        #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
+                        { self.first_image.received = Some(Instant::now()); }
+                        #[cfg(target_os = "ios")]
+                        crate::ios_p2p_diagnostics::record_milestone("video-startup", "first complete video message received");
                         self.handler.close_success();
                         self.handler.adapt_size();
                         self.send_toggle_virtual_display_msg(peer).await;
@@ -1969,6 +1982,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     Some(login_response::Union::PeerInfo(pi)) => {
                         let peer_version = pi.version.clone();
                         let peer_platform = pi.platform.clone();
+                        if !self.is_connected && self.handler.is_default() && !pi.displays.is_empty() {
+                            let display = if (pi.current_display as usize) < pi.displays.len() { pi.current_display } else { 0 };
+                            self.first_image.wait(display);
+                            #[cfg(target_os = "ios")]
+                            crate::ios_p2p_diagnostics::record_milestone("video-startup", "desktop session accepted, waiting for first image");
+                        }
                         self.set_peer_info(&pi);
                         if self.handler.is_view_camera() {
                             if !self.check_view_camera_support(&peer_version, &peer_platform) {
@@ -2488,7 +2507,8 @@ impl<T: InvokeUiSession> Remote<T> {
                 Some(message::Union::Misc(misc)) => match misc.union {
                     #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
                     Some(misc::Union::P2pDiagnosticCommand(command)) if self.is_connected && peer.is_secured() => {
-                        if let Some((report, reconnect)) = self.p2p_test.sample(&self.handler.p2p_test_access, Some(command)) {
+                        if let Some((mut report, reconnect)) = self.p2p_test.sample(&self.handler.p2p_test_access, Some(command)) {
+                            self.first_image.append_report(&mut report.sample);
                             let mut misc = Misc::new();
                             misc.set_p2p_diagnostic_report(report);
                             let mut reply = Message::new();
@@ -2731,7 +2751,8 @@ impl<T: InvokeUiSession> Remote<T> {
                     if !t.from_client {
                         #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
                         if self.is_connected && peer.is_secured() {
-                            if let Some((report, _)) = self.p2p_test.sample(&self.handler.p2p_test_access, None) {
+                            if let Some((mut report, _)) = self.p2p_test.sample(&self.handler.p2p_test_access, None) {
+                                self.first_image.append_report(&mut report.sample);
                                 t.p2p_diagnostic_report = Some(report).into();
                             }
                         }
@@ -3193,6 +3214,7 @@ impl<T: InvokeUiSession> Remote<T> {
             discard_queue: discard_queue.clone(),
         };
         let handler = self.handler.ui_handler.clone();
+        let first_image_submitted = self.first_image.submitted.clone();
         let decoded_counter = self.video_delivery.decoded_counter();
         crate::client::start_video_thread(
             self.handler.clone(),
@@ -3215,6 +3237,10 @@ impl<T: InvokeUiSession> Remote<T> {
                 } else {
                     #[cfg(all(feature = "vram", feature = "flutter"))]
                     handler.on_texture(display, _texture);
+                }
+                if first_image_submitted.get().is_none() && first_image_submitted.set(Instant::now()).is_ok() {
+                    #[cfg(target_os = "ios")]
+                    crate::ios_p2p_diagnostics::record_milestone("video-startup", "first decoded image submitted to the graphics path");
                 }
             },
         );

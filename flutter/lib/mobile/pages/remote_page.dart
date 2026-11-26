@@ -195,7 +195,9 @@ class _RemotePageState extends State<RemotePage>
     onCommand: _nativeCommand,
     onVirtualMove: _moveNativePointer,
     onVideoTexture: (id) {
-      if (mounted && _nativeSessionActive && _nativeVideoTexture != id) {
+      if (!mounted || !_nativeSessionActive) return;
+      if (id != null) unawaited(gFFI.onEvent2UIRgba());
+      if (_nativeVideoTexture != id) {
         setState(() => _nativeVideoTexture = id);
         _syncNativePerformance();
       }

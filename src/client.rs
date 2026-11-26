@@ -107,6 +107,7 @@ mod audio_state_tests;
 pub mod file_trait;
 pub mod helper;
 pub mod io_loop;
+mod first_image;
 mod video_delivery;
 mod video_freshness;
 pub mod screenshot;
@@ -4824,6 +4825,7 @@ pub fn start_video_thread<F, T>(
         let mut duration = std::time::Duration::ZERO;
         let mut skip_beginning = 0;
         let mut freshness = video_freshness::Freshness::default();
+        let mut presented = false;
         loop {
             if let Ok(data) = video_receiver.recv() {
                 match data {
@@ -4950,13 +4952,15 @@ pub fn start_video_thread<F, T>(
                                     video_diagnostic.decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     let pending = video_queue.read().unwrap().len();
                                     let now = std::time::Instant::now();
-                                    if freshness.show(
+                                    let timely = freshness.show(
                                         following_frame_was_queued,
                                         pending,
                                         pts,
                                         now.saturating_duration_since(start),
                                         now,
-                                    ) {
+                                    );
+                                    if !presented || timely {
+                                        presented = true;
                                         #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                                         video_diagnostic.ui_submitted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         video_callback(

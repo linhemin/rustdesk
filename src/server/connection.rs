@@ -753,6 +753,8 @@ impl Connection {
         let mut live_direct_started = false;
         #[cfg(all(windows, feature = "windows-video-diagnostics"))]
         let mut video_diagnostic = crate::video_diagnostics::SendStats::default();
+        #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+        let mut first_keyframe_reported = false;
         loop {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
@@ -1160,7 +1162,25 @@ impl Connection {
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                     let (queue_age, queue_depth, write_started) =
                         (instant.elapsed(), video_queue.len(), Instant::now());
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    let report_startup = !first_keyframe_reported && conn.is_authed_remote_conn()
+                        && video_queue::starts_with_keyframe(value.video_frame());
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    if report_startup {
+                        first_keyframe_reported = true;
+                        conn.send_to_cm(ipc::Data::VideoStartupReport(format!(
+                            "stage=first_keyframe_write display={} bytes={} queue_ms={}",
+                            value.video_frame().display, value.compute_size(), queue_age.as_millis(),
+                        )));
+                    }
                     let sent = conn.stream.send(&value as &Message).await;
+                    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+                    if report_startup {
+                        conn.send_to_cm(ipc::Data::VideoStartupReport(format!(
+                            "stage=first_keyframe_write_result sent={} write_ms={}",
+                            sent.is_ok(), write_started.elapsed().as_millis(),
+                        )));
+                    }
                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]
                     if sent.is_ok() {
                         if let Some(message::Union::VideoFrame(frame)) = &value.union {

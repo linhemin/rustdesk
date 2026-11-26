@@ -366,6 +366,8 @@ pub enum Data {
     },
     #[cfg(all(windows, feature = "p2p-remote-diagnostics"))]
     P2pTestReport(String),
+    #[cfg(all(windows, feature = "windows-video-diagnostics"))]
+    VideoStartupReport(String),
     SwitchPermission {
         name: String,
         enabled: bool,
