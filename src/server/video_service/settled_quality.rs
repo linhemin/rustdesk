@@ -25,7 +25,7 @@ pub(super) struct SettledQuality {
 }
 
 impl SettledQuality {
-    pub(super) fn on_capture(&mut self, now: Instant, sent: bool) {
+    pub(super) fn on_capture(&mut self, now: Instant, sent: bool, refine_first_image: bool) {
         self.moving_frames = if self
             .last_capture
             .is_some_and(|last| now.saturating_duration_since(last) <= MOTION_GAP)
@@ -34,7 +34,10 @@ impl SettledQuality {
         } else {
             1
         };
-        if self.moving_frames >= MOTION_FRAMES {
+        if refine_first_image && self.last_capture.is_none() {
+            self.last_motion = Some(now);
+            self.remaining = 1;
+        } else if self.moving_frames >= MOTION_FRAMES {
             self.last_motion = Some(now);
             self.remaining = MAX_QUALITY_FRAMES;
             self.next_frame = None;
@@ -129,7 +132,7 @@ mod tests {
         let start = Instant::now();
         let mut settled = SettledQuality::default();
         for index in 0..4 {
-            settled.on_capture(start + Duration::from_millis(index * 17), true);
+            settled.on_capture(start + Duration::from_millis(index * 17), true, false);
         }
         assert!(settled
             .waiting(start + Duration::from_millis(300))
@@ -143,8 +146,20 @@ mod tests {
         }
         for second in 1..10 {
             let frame = start + Duration::from_secs(second);
-            settled.on_capture(frame, true);
+            settled.on_capture(frame, true, false);
             assert!(settled.waiting(frame + QUIET_PERIOD).is_none());
         }
+    }
+
+    #[test]
+    fn best_can_refine_the_quiet_first_image_once_without_continuous_motion() {
+        let start = Instant::now();
+        let mut settled = SettledQuality::default();
+        settled.on_capture(start, false, true);
+        assert!(settled.waiting(start + QUIET_PERIOD).is_none());
+        settled.on_pending_output();
+        assert!(settled.waiting(start + QUIET_PERIOD).is_some());
+        settled.on_attempt(start + QUIET_PERIOD, true);
+        assert!(settled.waiting(start + Duration::from_secs(1)).is_none());
     }
 }

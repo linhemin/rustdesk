@@ -658,6 +658,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let mut spf = video_qos.spf();
     let mut quality = video_qos.ratio();
+    let refine_first_image = video_qos.latest_quality() == Quality::Best;
     let record_incoming = config::option2bool(
         "allow-auto-record-incoming",
         &Config::get_option("allow-auto-record-incoming"),
@@ -998,7 +999,7 @@ fn run(vs: VideoService) -> ResultType<()> {
                         pending_hardware.on_capture(ms, result.last_output_pts);
                     }
                     if vs.source.is_monitor() {
-                        settled_quality.on_capture(now, !result.send_conn_ids.is_empty());
+                        settled_quality.on_capture(now, !result.send_conn_ids.is_empty(), refine_first_image);
                     }
                     frame_controller.set_send(now, result.send_conn_ids);
                     send_counter += 1;
@@ -1680,7 +1681,7 @@ fn check_qos(
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let fixed_pacing = video_qos.fixed_target().is_some();
     let observe_auto_bitrate =
-        video_qos.latest_quality() == Quality::Auto && video_qos.in_vbr_state();
+        video_qos.latest_quality().uses_auto_bitrate() && video_qos.in_vbr_state();
     #[cfg(feature = "vram")]
     video_qos.set_gpu_texture_encode(name, encoder.input_texture());
     *spf = video_qos.spf();

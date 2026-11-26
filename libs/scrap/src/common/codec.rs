@@ -1240,7 +1240,7 @@ pub fn allow_d3d_render() -> bool {
     option2bool(OPTION, &hbb_common::config::LocalConfig::get_option(OPTION))
 }
 
-pub const BR_BEST: f32 = 1.5;
+pub const BR_BEST: f32 = 4.0;
 pub const BR_BALANCED: f32 = 0.67;
 pub const BR_SPEED: f32 = 0.5;
 
@@ -1260,6 +1260,10 @@ impl Default for Quality {
 }
 
 impl Quality {
+    pub fn uses_auto_bitrate(self) -> bool {
+        matches!(self, Quality::Auto | Quality::Best)
+    }
+
     pub fn is_custom(&self) -> bool {
         match self {
             Quality::Auto | Quality::Custom(_) => true,

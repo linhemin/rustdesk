@@ -1,6 +1,6 @@
 use super::*;
 use base::config::keys::{CUSTOM_BITRATE_AUTO_FLAG, MAX_VIDEO_BITRATE_KBPS, MIN_VIDEO_BITRATE_KBPS};
-use scrap::codec::{BitrateModel, Quality, BR_BALANCED, BR_BEST, BR_SPEED};
+use scrap::codec::{BitrateModel, Quality, BR_BALANCED, BR_SPEED};
 use std::{
     collections::VecDeque,
     time::{Duration, Instant},
@@ -65,6 +65,7 @@ const HISTORY_DELAY_LEN: usize = 2;
 const ADJUST_RATIO_INTERVAL: usize = 3; // Adjust quality ratio every 3 seconds
 const DYNAMIC_SCREEN_THRESHOLD: usize = 2; // Allow increase quality ratio if encode more than 2 times in one second
 const FAST_GROWTH_BELOW_KBPS: u32 = 8_000;
+const MAX_INITIAL_BEST_KBPS: u32 = 20_000;
 const DELAY_THRESHOLD_150MS: u32 = 150; // 150ms is the threshold for good network condition
 const RESTORE_GUARD_SAMPLES: u8 = 5; // A restored level that congests this soon is lowered
 
@@ -447,11 +448,11 @@ impl VideoQoS {
     }
 
     pub(super) fn back_off_encoder_bitrate(&mut self) {
-        if self.displays.len() != 1 || !self.in_vbr_state() || !self.latest_quality().is_custom() {
+        if self.latest_quality().uses_auto_bitrate() {
+            self.back_off_auto_bitrate(0.85);
             return;
         }
-        if self.latest_quality() == Quality::Auto {
-            self.back_off_auto_bitrate(0.85);
+        if self.displays.len() != 1 || !self.in_vbr_state() || !self.latest_quality().is_custom() {
             return;
         }
         let current = self.ratio();
@@ -473,7 +474,7 @@ impl VideoQoS {
 
     fn back_off_auto_bitrate(&mut self, factor: f32) {
         let now = self.now();
-        if self.latest_quality() != Quality::Auto
+        if !self.latest_quality().uses_auto_bitrate()
             || self.displays.len() != 1
             || !self.in_vbr_state()
             || !self.bitrate_recovery.encoder_ready(now)
@@ -483,10 +484,8 @@ impl VideoQoS {
         let before = self.ratio;
         let capped = self.requested_bitrate_limit().is_some();
         let factor = if capped { factor.min(0.75) } else { factor };
-        let next = self
-            .bitrate_recovery
-            .auto_trial_from
-            .take()
+        let trial = self.bitrate_recovery.auto_trial_from.take();
+        let next = trial
             .map_or(before * factor, |(stable, _)| stable)
             .max(self.min_ratio());
         if next >= before {
@@ -510,7 +509,8 @@ impl VideoQoS {
         self.bitrate_recovery.auto_retry =
             Some((now + Duration::from_secs(retry_seconds << failures), failures));
         self.bitrate_recovery.encoder_blocked_until = Some(now + Duration::from_secs(2));
-        self.bitrate_recovery.previous_ratio = None;
+        self.bitrate_recovery.previous_ratio =
+            (self.latest_quality() == Quality::Best && trial.is_none()).then_some(before);
         self.ratio = next;
         self.adjust_ratio_instant = now;
         for user in self.users.values_mut() {
@@ -605,7 +605,7 @@ impl VideoQoS {
         }
         if !self.ratio.is_finite()
             || self.ratio < BR_MIN_HIGH_RESOLUTION.min(cap)
-            || (quality != Quality::Auto && self.ratio > BR_MAX)
+            || (!quality.uses_auto_bitrate() && self.ratio > BR_MAX)
         {
             self.ratio = BR_BALANCED;
         }
@@ -629,7 +629,7 @@ impl VideoQoS {
         // A single frame-priority stream can apply a new rate at encoder recreation.
         self.abr_config
             && (self.displays.values().all(|display| display.support_changing_quality)
-                || (self.displays.len() == 1 && self.latest_quality() == Quality::Auto))
+                || (self.displays.len() == 1 && self.latest_quality().uses_auto_bitrate()))
     }
 }
 
@@ -760,8 +760,11 @@ impl VideoQoS {
                     }
                 }
             }
-            if !(had_quality && quality == Quality::Auto && latest == Quality::Auto) {
-                self.ratio = latest.ratio();
+            let keep_rate = had_quality
+                && quality == latest
+                && (quality == Quality::Auto || (quality == Quality::Best && quality == previous));
+            if !keep_rate {
+                self.ratio = self.initial_ratio(latest);
             }
         }
     }
@@ -784,13 +787,13 @@ impl VideoQoS {
             && (!adaptive_custom || self.since(self.adjust_ratio_instant).as_secs() >= 1);
         let min_ratio = self.min_ratio();
         let mut pressure = false;
-        let auto = quality == Quality::Auto && self.displays.len() == 1;
+        let auto = quality.uses_auto_bitrate() && self.displays.len() == 1;
         let capped = auto && self.requested_bitrate_limit().is_some();
         let mut backoff_factor = 0.85;
         let sender = auto.then(|| self.auto_frame_sample(now)).flatten();
         // An actual video sample with less than one frame per second rounds to
         // zero FPS. Empty windows also report zero delivered bitrate.
-        let min_fps = if adaptive_custom { 0 } else { 6 };
+        let min_fps = if adaptive_custom || auto { 0 } else { 6 };
         if let Some(user) = self.users.get_mut(&id) {
             if !(min_fps..=1000).contains(&fps) || !(1..=1_000_000).contains(&kbps) || queued > 100
             {
@@ -855,9 +858,11 @@ impl VideoQoS {
                     && user.delay.avg_delay() >= 24
                 {
                     pressure = auto;
-                    if !pressure {
-                        let factor =
-                            (delivery_floor as f32 * 1.10 / target as f32).clamp(0.55, 0.85);
+                    let factor =
+                        (delivery_floor as f32 * 1.10 / target as f32).clamp(0.55, 0.85);
+                    if pressure && quality == Quality::Best {
+                        backoff_factor = factor;
+                    } else if !pressure {
                         let next = (self.ratio * factor).max(min_ratio);
                         if adaptive_custom {
                             self.bitrate_recovery.remember_reduction(self.ratio, next);
@@ -884,7 +889,7 @@ impl VideoQoS {
         if target_kbps == 0 || self.users.is_empty() || self.displays.len() != 1 {
             return (150, false);
         }
-        let frame_priority = self.latest_quality() == Quality::Auto;
+        let frame_priority = self.latest_quality().uses_auto_bitrate();
         let min_fps = if frame_priority {
             let Some(sender) = self.auto_frame_sample(now).filter(|sample| sample.headroom) else {
                 return (150, false);
@@ -994,10 +999,35 @@ impl VideoQoS {
         target.min(custom_cap)
     }
 
-    pub(super) fn settled_quality_ready(&self, waiting: Duration) -> bool {
+    pub(super) fn settled_quality_ready(&mut self, waiting: Duration) -> bool {
         let quality = self.latest_quality();
+        let now = self.now();
+        if !self.video_path_ready(now) {
+            return false;
+        }
+        if quality == Quality::Best {
+            if self.users.values().any(|viewer| {
+                viewer.send_pressure.is_some_and(|at| now.saturating_duration_since(at) < Duration::from_secs(3))
+            }) {
+                return false;
+            }
+            // A pending still image gets one recovery step after a real cut. The next
+            // capture-loop iteration applies the new rate before sending the refresh.
+            if self.displays.len() == 1 && self.displays.values().all(|d| d.support_changing_quality) {
+                if let Some(before) = self.bitrate_recovery.previous_ratio.take() {
+                    let target = (self.ratio * 1.25)
+                        .min(before)
+                        .min(self.initial_ratio(quality))
+                        .min(self.custom_bitrate_cap().unwrap_or(f32::MAX));
+                    if target > self.ratio {
+                        self.ratio = target;
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
         quality.is_custom()
-            && self.video_path_ready(self.now())
             && (waiting >= Duration::from_secs(3)
                 || self.ratio >= self.bitrate_recovery_target(
                     quality,
@@ -1015,7 +1045,8 @@ impl VideoQoS {
             quality != Quality::Auto || self.displays.len() != 1 || !bitrate_first;
 
         // For bad network, small fps means quick reaction and high quality
-        let (min_fps, normal_fps) = if target_ratio >= BR_BEST {
+        // The legacy high-quality FPS tier also applies to custom ratios.
+        let (min_fps, normal_fps) = if target_ratio >= 1.5 {
             (8, 16)
         } else if target_ratio >= BR_BALANCED {
             (10, 20)
@@ -1030,7 +1061,6 @@ impl VideoQoS {
         let mut reduce_bitrate = false;
         let mut auto_pressure = false;
         let now = self.now();
-        let enhanced_best = self.abr_config && quality == Quality::Best;
         if let Some(user) = self.users.get_mut(&id) {
             let delay = delay.max(10);
             // The reply closes the outstanding probe, braked or not.
@@ -1040,18 +1070,12 @@ impl VideoQoS {
             if !braked {
                 user.delay.rtt_calculator.update(delay);
             }
-            // A trial above the normal ceiling must not wait for the ordinary
-            // congestion brake. Queuing is measurable before frames start dropping.
             let queue_ms = delay.saturating_sub(user.delay.rtt_calculator.get_rtt().unwrap_or(delay));
-            auto_pressure = quality == Quality::Auto
+            auto_pressure = quality.uses_auto_bitrate()
                 && (braked || queue_ms >= 100 || (queue_ms >= 24 && old_avg_delay >= 24));
-            if auto_pressure || (quality != Quality::Auto && (queue_ms >= 24 || braked)) {
-                let cooldown = if quality == Quality::Auto { 6 } else { 60 };
+            if auto_pressure || (!quality.uses_auto_bitrate() && (queue_ms >= 24 || braked)) {
+                let cooldown = if quality.uses_auto_bitrate() { 6 } else { 60 };
                 user.probe_blocked_until = Some(now + Duration::from_secs(cooldown));
-                let ordinary_cap = target_ratio * MAX_BR_MULTIPLE;
-                if enhanced_best && !user.delivery.is_empty() && self.ratio > ordinary_cap {
-                    self.ratio = ordinary_cap;
-                }
             }
             user.delay.add_delay(delay);
             let mut avg_delay = user.delay.avg_delay();
@@ -1225,7 +1249,23 @@ impl VideoQoS {
         if let Some(display) = self.displays.get_mut(name) {
             display.bitrate_model = Some(model);
         }
+        if self.bitrate_store == 0 && self.latest_quality() == Quality::Best {
+            self.ratio = self.ratio.min(self.initial_ratio(Quality::Best));
+            return Some(self.ratio());
+        }
         self.requested_bitrate_limit().map(|_| self.ratio())
+    }
+
+    fn initial_ratio(&self, quality: Quality) -> f32 {
+        let ratio = quality.ratio();
+        if quality != Quality::Best {
+            return ratio;
+        }
+        self.displays
+            .values()
+            .filter_map(|display| display.bitrate_model)
+            .map(|model| model.ratio_at_limit(MAX_INITIAL_BEST_KBPS))
+            .fold(ratio, f32::min)
     }
 
     pub fn update_display_data(&mut self, video_service_name: &str, send_counter: usize) {
@@ -1236,7 +1276,7 @@ impl VideoQoS {
         let abr_enabled = self.in_vbr_state();
         if abr_enabled {
             let quality = self.latest_quality();
-            let interval = if quality == Quality::Auto
+            let interval = if quality.uses_auto_bitrate()
                 || (matches!(quality, Quality::Custom(cap) if self.ratio < cap)
                     && self.can_recover_bitrate())
             {
@@ -1256,7 +1296,7 @@ impl VideoQoS {
             self.ratio = if quality == Quality::Auto && self.requested_bitrate_limit().is_some() {
                 self.custom_bitrate_cap().unwrap_or_else(|| quality.ratio())
             } else {
-                quality.ratio()
+                self.initial_ratio(quality)
             };
         }
     }
@@ -1319,7 +1359,7 @@ impl VideoQoS {
         };
         match self.latest_quality() {
             Quality::Best => {
-                let mut min = BR_BEST / 2.5;
+                let mut min: f32 = 0.6;
                 if let Some(ratio_1mbps) = ratio_1mbps {
                     if min > ratio_1mbps {
                         min = ratio_1mbps;
@@ -1379,8 +1419,8 @@ impl VideoQoS {
         let target_ratio = quality.ratio();
         let current_ratio = self.ratio;
         let current_bitrate = self.bitrate();
-        let encoder_ready =
-            !quality.is_custom() || self.bitrate_recovery.encoder_ready(self.now());
+        let encoder_ready = (!quality.is_custom() && quality != Quality::Best)
+            || self.bitrate_recovery.encoder_ready(self.now());
 
         let (growth_kbps, caught_up) = self.delivery_growth_budget(current_bitrate);
         let ratio_growth_limit = if current_bitrate > 0 {
@@ -1389,13 +1429,10 @@ impl VideoQoS {
             None
         };
 
-        // Best can probe above the old fixed limit on sustained motion. Never send
-        // synthetic traffic to prove capacity: evaluate the next step using delivered
-        // video and queue feedback. Keep the last clear still frame when activity ends.
         let base_cap = target_ratio * MAX_BR_MULTIPLE;
         let now = self.now();
         let has_absolute_target = self.requested_bitrate_limit().is_some();
-        let auto_probe = quality == Quality::Auto
+        let auto_probe = quality.uses_auto_bitrate()
             && encoder_ready
             && !self.bitrate_recovery.auto_retry.is_some_and(|(retry_at, _)| now < retry_at)
             && (dynamic_screen || has_absolute_target)
@@ -1424,19 +1461,12 @@ impl VideoQoS {
             && current_ratio < recovery_target
             && reduction.is_none()
             && self.can_recover_bitrate();
-        let max = if quality == Quality::Auto {
+        let max = if quality == Quality::Auto || (quality == Quality::Best && self.displays.len() == 1) {
             if auto_probe {
                 f32::MAX
             } else {
                 current_ratio
             }
-        } else if quality == Quality::Best && self.abr_config {
-            if dynamic_screen && caught_up && max_delay < 50 {
-                base_cap * 2.5
-            } else if current_ratio > base_cap {
-                if dynamic_screen && !caught_up { (current_ratio * 0.90).max(base_cap) }
-                else { current_ratio }
-            } else { base_cap }
         } else { base_cap };
         let max = max.min(custom_cap);
         let min = self.min_ratio().min(max);
@@ -1447,7 +1477,7 @@ impl VideoQoS {
         // encoder the bitrate is then the only thing that drains the queue, so it
         // comes down hard.  Increases need every viewer below the threshold.
         if let Some(factor) = reduction {
-            if quality == Quality::Auto && self.displays.len() == 1 {
+            if quality.uses_auto_bitrate() && self.displays.len() == 1 {
                 self.back_off_auto_bitrate(factor);
                 return;
             }
@@ -1595,7 +1625,7 @@ mod tests {
     use super::*;
     use scrap::{
         aom::AomEncoderConfig,
-        codec::{base_bitrate, EncoderCfg},
+        codec::{base_bitrate, EncoderCfg, BR_BEST},
     };
 
     fn stable_qos() -> VideoQoS {
@@ -2005,13 +2035,17 @@ mod tests {
         qos.new_display("monitor".into());
         qos.set_support_changing_quality("monitor", true);
         qos.users.get_mut(&1).unwrap().quality = Some((1, Quality::Best));
-        qos.ratio = BR_BEST * MAX_BR_MULTIPLE * 1.25;
+        qos.ratio = BR_BEST;
+        qos.store_bitrate(8000);
+        clear_frame_sample(&mut qos, 60);
         for _ in 0..3 { qos.user_video_delivery(1, 8100, 60, 0); }
-        assert!(qos.delivery_growth_budget(8000).1);
-        qos.user_network_delay(1, 65);
-        assert!(qos.ratio <= BR_BEST * MAX_BR_MULTIPLE);
+        qos.adjust_ratio(true);
+        assert!(qos.ratio() > BR_BEST);
+        qos.user_network_delay(1, 150);
+        assert_eq!(qos.ratio(), BR_BEST);
         assert_eq!(qos.delivery_growth_budget(8000), (150, false));
-        qos.advance_ms(59_000);
+        qos.advance_ms(5_000);
+        clear_frame_sample(&mut qos, 60);
         for _ in 0..3 { qos.user_video_delivery(1, 8100, 60, 0); }
         assert!(!qos.delivery_growth_budget(8000).1);
         qos.advance_ms(1100);
@@ -2049,12 +2083,72 @@ mod tests {
         qos.store_bitrate(8000);
         qos.adjust_ratio(true);
         assert_eq!(qos.ratio, BR_BEST);
+        clear_frame_sample(&mut qos, 60);
         for _ in 0..3 { qos.user_video_delivery(1, 7900, 55, 0); }
         qos.adjust_ratio(true);
-        assert!(qos.ratio > BR_BEST && qos.ratio < BR_BEST * 1.15);
+        assert!(qos.ratio > BR_BEST && qos.ratio <= BR_BEST * 1.20);
         qos.users.get_mut(&1).unwrap().quality = Some((2, Quality::Custom(BR_BEST)));
         qos.adjust_ratio(true);
         assert!(qos.ratio <= BR_BEST);
+    }
+
+    #[test]
+    fn best_opens_with_a_resolution_aware_bounded_target_and_can_refine_the_still_image() {
+        for (width, height, expected) in [(1920, 1080, 8292), (7680, 4320, 20_000)] {
+            let mut qos = stable_qos();
+            qos.new_display("monitor".into());
+            qos.user_image_quality(1, ImageQuality::Best.value());
+            let ratio = qos.set_bitrate_model("monitor", monitor_bitrate_model(width, height)).unwrap();
+            assert_eq!((base_bitrate(width, height) as f32 * ratio) as u32, expected);
+            assert!(qos.settled_quality_ready(Duration::from_millis(350)));
+            qos.user_delay_response_elapsed(1, 2200);
+            assert!(!qos.settled_quality_ready(Duration::from_secs(3)));
+        }
+    }
+
+    #[test]
+    fn best_refines_at_a_higher_rate_once_after_scrolling_stops_and_pressure_clears() {
+        let mut qos = stable_qos();
+        qos.new_display("monitor".into());
+        qos.set_support_changing_quality("monitor", true);
+        qos.user_image_quality(1, ImageQuality::Best.value());
+        qos.store_bitrate(8292);
+        qos.back_off_encoder_bitrate();
+        let reduced = qos.ratio();
+        assert!(reduced < BR_BEST);
+        assert!(!qos.settled_quality_ready(Duration::from_secs(1)));
+        qos.advance_ms(3100);
+        assert!(!qos.settled_quality_ready(Duration::from_secs(3)));
+        let refined = qos.ratio();
+        assert!(refined > reduced && refined <= reduced * 1.25 && refined <= BR_BEST);
+        for _ in 0..4 {
+            assert!(qos.settled_quality_ready(Duration::from_secs(4)));
+            assert_eq!(qos.ratio(), refined);
+        }
+    }
+
+    #[test]
+    fn best_on_multiple_displays_recovers_when_motion_continues_after_congestion() {
+        let mut qos = stable_qos();
+        for name in ["monitor", "other"] {
+            qos.new_display(name.into());
+            qos.set_support_changing_quality(name, true);
+        }
+        qos.user_image_quality(1, ImageQuality::Best.value());
+        qos.store_bitrate(8292);
+        for _ in 0..3 {
+            qos.advance_ms(1000);
+            qos.user_network_delay(1, 500);
+        }
+        qos.adjust_ratio(true);
+        let reduced = qos.ratio();
+        assert!(reduced < BR_BEST);
+        for _ in 0..8 {
+            qos.advance_ms(1100);
+            qos.user_network_delay(1, 10);
+            qos.update_display_data("monitor", 60);
+        }
+        assert!(qos.ratio() > reduced);
     }
 
     #[test]
