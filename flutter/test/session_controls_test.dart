@@ -1,7 +1,10 @@
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/widgets/dialog.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/common/widgets/remote_input.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
@@ -20,6 +23,52 @@ class _Binding extends Fake implements RustdeskImpl {
   String translate(
           {required String name, required String locale, dynamic hint}) =>
       name;
+}
+
+class _VideoBinding extends _Binding {
+  String preset = kRemoteImageQualityBest;
+  int custom = kBitrateKbpsBase + 3109;
+  @override
+  int versionToNumber({required String v, dynamic hint}) =>
+      v.split('.').fold(0, (number, part) => number * 1000 + int.parse(part));
+  @override
+  Future<bool> mainIsUsingPublicServer({dynamic hint}) async => false;
+  @override
+  Future<String?> sessionGetImageQuality(
+          {required UuidValue sessionId, dynamic hint}) async =>
+      preset;
+  @override
+  Future<Int32List?> sessionGetCustomImageQuality(
+          {required UuidValue sessionId, dynamic hint}) async =>
+      Int32List.fromList([custom]);
+  @override
+  Future<String?> sessionGetOption(
+          {required UuidValue sessionId,
+          required String arg,
+          dynamic hint}) async =>
+      '60';
+  @override
+  Future<void> sessionSetCustomImageQuality(
+      {required UuidValue sessionId, required int value, dynamic hint}) async {
+    preset = kRemoteImageQualityCustom;
+    custom = value;
+  }
+}
+
+class _VideoPeer extends Fake implements FfiModel {
+  @override
+  final pi = PeerInfo()..version = '1.5.3';
+}
+
+class _VideoSession extends Fake implements FFI {
+  @override
+  bool get closed => false;
+  @override
+  final dialogManager = OverlayDialogManager();
+  @override
+  final ffiModel = _VideoPeer();
+  @override
+  ConnType get connType => ConnType.defaultConn;
 }
 
 class _TouchPeer extends Fake implements FfiModel {
@@ -105,6 +154,96 @@ class _TouchImageModel extends Fake implements ImageModel {
 class _TouchImage extends Fake implements ui.Image {}
 
 void main() {
+  testWidgets('a mobile session overlay keeps bitrate choices tappable',
+      (tester) async {
+    final oldMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = oldMobile);
+    final manager = OverlayDialogManager();
+    double? saved;
+    await tester.pumpWidget(
+        MaterialApp(navigatorKey: globalKey, home: const Scaffold()));
+    manager.show((setState, close, context) => CustomAlertDialog(
+        content: SingleChildScrollView(
+            child: customImageQualityWidget(
+                initQuality: (kBitrateKbpsBase + 8000).toDouble(),
+                initFps: 30,
+                setQuality: (v) => saved = v,
+                setFps: null,
+                showFps: false,
+                showMoreQuality: false,
+                actualBitrate: true)),
+        actions: [TextButton(onPressed: close, child: const Text('Done'))]));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('8 Mbps'));
+    await tester.pumpAndSettle();
+    expect(find.text('10 Mbps').hitTestable(), findsOneWidget);
+    await tester.ensureVisible(find.text('10 Mbps'));
+    await tester.tap(find.text('10 Mbps').hitTestable());
+    await tester.pumpAndSettle();
+    expect(saved, kBitrateKbpsBase + 10000);
+    manager.dismissAll();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+      'mobile video settings show the active preset and save only on confirmation',
+      (tester) async {
+    final oldMobile = isMobile;
+    isMobile = true;
+    addTearDown(() => isMobile = oldMobile);
+    final binding = _VideoBinding();
+    platformFFI.setBindingForTesting(binding);
+    addTearDown(() => platformFFI.setBindingForTesting(_Binding()));
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(320, 600);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 120);
+    addTearDown(tester.view.resetViewInsets);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final ffi = _VideoSession();
+    ffi.ffiModel.pi.features.videoBitrateLimitKbps = true;
+    await tester.pumpWidget(
+        MaterialApp(navigatorKey: globalKey, home: const Scaffold()));
+    Future<void> open() async {
+      customImageQualityDialog(const Uuid().v4obj(), 'test', ffi);
+      await tester.pumpAndSettle();
+    }
+
+    await open();
+    expect(find.text('Adaptive bitrate'), findsOneWidget);
+    expect(find.text('3.109 Mbps'), findsNothing);
+    await tester.tap(find.text('Custom'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('3.109 Mbps'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('20 Mbps'));
+    await tester.tap(find.text('20 Mbps').hitTestable());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(binding.preset, kRemoteImageQualityBest);
+    expect(binding.custom, kBitrateKbpsBase + 3109);
+    tester.view.resetViewInsets();
+    tester.view.physicalSize = const Size(650, 320);
+    await open();
+    await tester.ensureVisible(find.text('Custom'));
+    await tester.tap(find.text('Custom'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('3.109 Mbps'));
+    await tester.tap(find.text('3.109 Mbps'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('No bitrate cap'));
+    await tester.tap(find.text('No bitrate cap').hitTestable());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(binding.preset, kRemoteImageQualityCustom);
+    expect(binding.custom, kAutoBitrate.round());
+    expect(ffi.dialogManager.openDialog.value, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('video bitrate list selects an absolute rate in kbps',
       (tester) async {
     int? selectedKbps;

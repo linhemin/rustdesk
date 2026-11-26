@@ -19,7 +19,22 @@ class BitrateLimitDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final rates = {
+    return DropdownButton<int>(
+      value: kbps,
+      hint: const Text('—'),
+      onChanged: onChanged,
+      items: [
+        for (final rate in _bitrateSteps(kbps))
+          DropdownMenuItem(value: rate, child: Text(_bitrateLabel(rate))),
+      ],
+    );
+  }
+}
+
+String _bitrateLabel(int rate) =>
+    '${rate % 1000 == 0 ? rate ~/ 1000 : rate / 1000} Mbps';
+
+List<int> _bitrateSteps(int? kbps) => {
       500,
       1000,
       2000,
@@ -39,22 +54,74 @@ class BitrateLimitDropdown extends StatelessWidget {
       125000,
       150000,
       200000,
-      if (kbps != null) kbps!,
+      if (kbps != null) kbps,
     }.toList()
       ..sort();
-    return DropdownButton<int>(
-      value: kbps,
-      hint: const Text('—'),
-      onChanged: onChanged,
-      items: [
-        for (final rate in rates)
-          DropdownMenuItem(
-            value: rate,
-            child:
-                Text('${rate % 1000 == 0 ? rate ~/ 1000 : rate / 1000} Mbps'),
-          ),
-      ],
-    );
+
+// A DropdownRoute lives below the session's OverlayEntry. Keep this picker
+// in the editor so its choices share the same focus, scroll and hit testing.
+class MobileBitratePicker extends StatefulWidget {
+  const MobileBitratePicker({
+    super.key,
+    required this.kbps,
+    required this.unlimited,
+    required this.legacyQuality,
+    required this.onChanged,
+  });
+
+  final int? kbps;
+  final bool unlimited;
+  final int legacyQuality;
+  final ValueChanged<int?>? onChanged;
+
+  @override
+  State<MobileBitratePicker> createState() => _MobileBitratePickerState();
+}
+
+class _MobileBitratePickerState extends State<MobileBitratePicker> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = widget.unlimited
+        ? translate('No bitrate cap')
+        : widget.kbps == null
+            ? '${widget.legacyQuality}%'
+            : _bitrateLabel(widget.kbps!);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        title: Text(translate(!widget.unlimited && widget.kbps == null
+            ? 'Custom Image Quality'
+            : 'Bitrate limit')),
+        subtitle: Text(label),
+        trailing: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+        onTap: widget.onChanged == null
+            ? null
+            : () => setState(() => _expanded = !_expanded),
+      ),
+      if (_expanded)
+        Wrap(spacing: 6, runSpacing: 2, children: [
+          for (final rate in <int?>[null, ..._bitrateSteps(widget.kbps)])
+            ChoiceChip(
+              label: Text(rate == null
+                  ? translate('No bitrate cap')
+                  : _bitrateLabel(rate)),
+              showCheckmark: true,
+              selectedColor:
+                  Theme.of(context).colorScheme.primary.withOpacity(0.16),
+              selected: rate == null
+                  ? widget.unlimited
+                  : !widget.unlimited && widget.kbps == rate,
+              onSelected: widget.onChanged == null
+                  ? null
+                  : (_) {
+                      setState(() => _expanded = false);
+                      widget.onChanged!(rate);
+                    },
+            ),
+        ]),
+    ]);
   }
 }
 
@@ -106,7 +173,22 @@ customImageQualityWidget(
 
   return Column(
     children: [
-      if (actualBitrate)
+      if (actualBitrate && isMobile)
+        Obx(() => MobileBitratePicker(
+              kbps: bitrateKbps.value,
+              unlimited: autoBitrate.value,
+              legacyQuality: qualityValue.value.round(),
+              onChanged: setQuality == null
+                  ? null
+                  : (value) {
+                      autoBitrate.value = value == null;
+                      if (value != null) bitrateKbps.value = value;
+                      setQuality(value == null
+                          ? kAutoBitrate
+                          : kBitrateKbpsBase + value.toDouble());
+                    },
+            )),
+      if (actualBitrate && !isMobile)
         Obx(() => ListTile(
               title: Text(translate('Bitrate limit')),
               trailing: BitrateLimitDropdown(
@@ -188,7 +270,7 @@ customImageQualityWidget(
                 )
               ],
             )),
-      if (!isWeb)
+      if (!isWeb && !(actualBitrate && isMobile))
         Obx(() => CheckboxListTile(
               title: Text(translate('No bitrate cap')),
               value: autoBitrate.value,

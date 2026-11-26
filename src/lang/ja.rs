@@ -906,5 +906,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Managed by your administrator", ""),
         ("Public key source", ""),
         ("Both devices must use the same relay address and public key.", ""),
+        ("Choose Custom to set a bitrate limit.", "「カスタム」でビットレートの上限を設定できます。"),
     ].iter().cloned().collect();
 }

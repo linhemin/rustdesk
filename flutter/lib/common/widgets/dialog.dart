@@ -19,7 +19,7 @@ import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import 'address_book.dart';
 import 'setting_widgets.dart'
-    show BitrateLimitDropdown, TrackpadSpeedWidget, savedBitrateKbps;
+    show BitrateLimitDropdown, MobileBitratePicker, TrackpadSpeedWidget, savedBitrateKbps;
 
 void clientClose(SessionID sessionId, FFI ffi) async {
   if (allowAskForNoteAtEndOfConnection(ffi, true)) {
@@ -1866,12 +1866,22 @@ Future<void> customImageQualityDialog(
   final initialQuality = savedQuality?.toDouble() ?? kDefaultQuality;
   final initialUnlimited = !isWeb && initialQuality == kAutoBitrate;
   final initialBitrateKbps = savedBitrateKbps(savedQuality);
+  final savedPreset =
+      isMobile ? await bind.sessionGetImageQuality(sessionId: sessionId) : null;
+  final initialPreset = savedPreset?.isNotEmpty == true
+      ? savedPreset!
+      : kRemoteImageQualityBalanced;
+  var preset = fromCustomPreset ? kRemoteImageQualityCustom : initialPreset;
   var bitrateKbps = initialBitrateKbps;
   final maxAllowed = showMore ? kMaxMoreQuality : kMaxQuality;
   var bitrate = initialQuality >= kMinQuality && initialQuality <= maxAllowed
       ? initialQuality
       : kDefaultQuality;
-  var unlimited = initialUnlimited;
+  var unlimited = initialUnlimited ||
+      (isMobile &&
+          actualBitrate &&
+          initialPreset != kRemoteImageQualityCustom &&
+          initialBitrateKbps == null);
   var more = showMore && bitrate > kMaxQuality;
   final initialBitrate = bitrate;
   final normalFpsOption =
@@ -1890,7 +1900,9 @@ Future<void> customImageQualityDialog(
   var fixedFps = fixed ? initialFixed : 60;
   var busy = false;
 
-  ffi.dialogManager.show((setState, close, context) {
+  if (isMobile && ffi.closed) return;
+  var open = true;
+  final dialog = ffi.dialogManager.show((setState, close, context) {
     Future<void> apply() async {
       if (busy) return;
       setState(() => busy = true);
@@ -1920,9 +1932,18 @@ Future<void> customImageQualityDialog(
                 fixed) {
           throw StateError('Could not change the session frame rate mode');
         }
-        final changeFps =
-            !fixed && showFps && (fps != initialFps || fromCustomPreset);
-        if (fromCustomPreset ||
+        final changeFps = !fixed &&
+            showFps &&
+            (fps != initialFps ||
+                fromCustomPreset &&
+                    (!isMobile || preset == kRemoteImageQualityCustom));
+        if (isMobile && preset != kRemoteImageQualityCustom) {
+          if (preset != initialPreset) {
+            await bind.sessionSetImageQuality(
+                sessionId: sessionId, value: preset);
+          }
+        } else if (fromCustomPreset ||
+            (isMobile && preset != initialPreset) ||
             unlimited != initialUnlimited ||
             (!unlimited &&
                 (actualBitrate
@@ -1931,7 +1952,7 @@ Future<void> customImageQualityDialog(
             (!actualBitrate && changeFps)) {
           final value = unlimited
               ? kAutoBitrate.round()
-              : actualBitrate
+              : actualBitrate && (!isMobile || bitrateKbps != null)
                   ? kBitrateKbpsBase + (bitrateKbps ?? kDefaultBitrateKbps)
                   : bitrate.round();
           await bind.sessionSetCustomImageQuality(
@@ -1941,31 +1962,75 @@ Future<void> customImageQualityDialog(
           await bind.sessionSetCustomFps(
               sessionId: sessionId, fps: fps.round());
         }
-        close();
+        if (open) close();
       } catch (error) {
         debugPrint('Failed to apply video settings: $error');
-        if (context.mounted) {
+        if (context.mounted && open) {
           showToast(translate('Failed'));
           setState(() => busy = false);
         }
       }
     }
 
-    return CustomAlertDialog(
-      title: Text(translate('Video settings')),
-      content: SingleChildScrollView(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(
-              title: Text(translate('Bitrate limit')),
-              trailing: actualBitrate
-                  ? BitrateLimitDropdown(
-                      kbps: bitrateKbps,
-                      onChanged: busy || unlimited
-                          ? null
-                          : (value) => setState(() => bitrateKbps = value),
-                    )
-                  : (unlimited ? null : Text('${bitrate.round()}%'))),
-          if (!actualBitrate)
+    final content = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment:
+            isMobile ? CrossAxisAlignment.stretch : CrossAxisAlignment.center,
+        children: [
+          if (isMobile) ...[
+            Text(translate('Image Quality'),
+                style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 6),
+            Wrap(spacing: 6, runSpacing: 2, children: [
+              for (final entry in const {
+                kRemoteImageQualityBest: 'Good image quality',
+                kRemoteImageQualityBalanced: 'Balanced',
+                kRemoteImageQualityLow: 'Optimize reaction time',
+                kRemoteImageQualityCustom: 'Custom',
+              }.entries)
+                ChoiceChip(
+                    label: Text(translate(entry.value)),
+                    showCheckmark: true,
+                    selectedColor:
+                        Theme.of(context).colorScheme.primary.withOpacity(0.16),
+                    selected: preset == entry.key,
+                    onSelected: busy
+                        ? null
+                        : (_) => setState(() => preset = entry.key)),
+            ]),
+          ],
+          if (isMobile && preset != kRemoteImageQualityCustom)
+            ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(translate(preset == kRemoteImageQualityBest
+                    ? 'Adaptive bitrate'
+                    : 'Bitrate')),
+                subtitle:
+                    Text(translate('Choose Custom to set a bitrate limit.')))
+          else if (isMobile && actualBitrate)
+            MobileBitratePicker(
+                kbps: bitrateKbps,
+                unlimited: unlimited,
+                legacyQuality: bitrate.round(),
+                onChanged: busy
+                    ? null
+                    : (value) => setState(() {
+                          unlimited = value == null;
+                          if (value != null) bitrateKbps = value;
+                        }))
+          else
+            ListTile(
+                title: Text(translate('Bitrate limit')),
+                trailing: actualBitrate
+                    ? BitrateLimitDropdown(
+                        kbps: bitrateKbps,
+                        onChanged: busy || unlimited
+                            ? null
+                            : (value) => setState(() => bitrateKbps = value),
+                      )
+                    : (unlimited ? null : Text('${bitrate.round()}%'))),
+          if (!actualBitrate &&
+              (!isMobile || preset == kRemoteImageQualityCustom))
             Slider(
                 value: bitrate,
                 min: kMinQuality,
@@ -1974,14 +2039,16 @@ Future<void> customImageQualityDialog(
                 onChanged: busy || unlimited
                     ? null
                     : (value) => setState(() => bitrate = value)),
-          if (!isWeb)
+          if (!isWeb &&
+              (!isMobile ||
+                  !actualBitrate && preset == kRemoteImageQualityCustom))
             CheckboxListTile(
                 title: Text(translate('No bitrate cap')),
                 value: unlimited,
                 onChanged: busy
                     ? null
                     : (value) => setState(() => unlimited = value == true)),
-          if (showMore)
+          if (showMore && (!isMobile || preset == kRemoteImageQualityCustom))
             CheckboxListTile(
                 title: Text(translate('More')),
                 value: more,
@@ -1989,17 +2056,21 @@ Future<void> customImageQualityDialog(
                     ? null
                     : (value) => setState(() {
                           more = value == true;
-                          if (!more && bitrate > kMaxQuality)
+                          if (!more && bitrate > kMaxQuality) {
                             bitrate = kMaxQuality;
+                          }
                         })),
+          if (isMobile && (canFixFps || showFps)) const Divider(),
           if (canFixFps)
             SwitchListTile(
+                contentPadding: isMobile ? EdgeInsets.zero : null,
                 title: Text(translate('High performance mode')),
                 value: fixed,
                 onChanged:
                     busy ? null : (value) => setState(() => fixed = value)),
           if (fixed || showFps)
             ListTile(
+                contentPadding: isMobile ? EdgeInsets.zero : null,
                 title: Text(translate('Target frame rate')),
                 trailing: Text(fixed ? '$fixedFps FPS' : '${fps.round()} FPS')),
           if (fixed)
@@ -2019,8 +2090,18 @@ Future<void> customImageQualityDialog(
                 divisions: ((kMaxFps - kMinFps) / 5).round(),
                 onChanged:
                     busy ? null : (value) => setState(() => fps = value)),
-        ]),
-      ),
+        ]);
+    if (isMobile) {
+      return _MobileVideoDialog(content: content, actions: [
+        TextButton(
+            onPressed: busy ? null : close, child: Text(translate('Cancel'))),
+        FilledButton(
+            onPressed: busy ? null : apply, child: Text(translate('Save'))),
+      ]);
+    }
+    return CustomAlertDialog(
+      title: Text(translate('Video settings')),
+      content: SingleChildScrollView(child: content),
       actions: [
         dialogButton('Cancel', onPressed: busy ? null : close),
         dialogButton('OK', onPressed: busy ? null : apply),
@@ -2028,7 +2109,34 @@ Future<void> customImageQualityDialog(
       onSubmit: busy ? null : apply,
       onCancel: busy ? null : close,
     );
-  });
+  }, forceGlobal: isMobile, backDismiss: isMobile);
+  if (isMobile) {
+    try {
+      await dialog;
+    } finally {
+      open = false;
+    }
+  }
+}
+
+class _MobileVideoDialog extends CustomAlertDialog {
+  const _MobileVideoDialog({required super.content, required super.actions});
+
+  @override
+  Widget build(BuildContext context) => FocusScope(
+      autofocus: true,
+      child: SafeArea(
+        child: AlertDialog(
+          scrollable: true,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+          contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+          actionsPadding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+          title: Text(translate('Video settings')),
+          content: SizedBox(width: 440, child: content),
+          actions: actions,
+        ),
+      ));
 }
 
 int? _validateTrackpadSpeed(String text) {

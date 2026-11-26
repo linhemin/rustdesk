@@ -906,5 +906,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Managed by your administrator", "由管理員管理"),
         ("Public key source", "公鑰來源"),
         ("Both devices must use the same relay address and public key.", "雙方設定相同的中繼位址與公鑰後即可使用中繼。"),
+        ("Choose Custom to set a bitrate limit.", "選擇「自訂」可設定位元率上限。"),
     ].iter().cloned().collect();
 }
