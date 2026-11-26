@@ -202,6 +202,27 @@ IconData _toolbarCollapseIcon(_ToolbarEdge edge, bool isCollapsed) {
   }
 }
 
+IconData _toolbarCollapseRoundedIcon(_ToolbarEdge edge, bool isCollapsed) {
+  switch (edge) {
+    case _ToolbarEdge.top:
+      return isCollapsed
+          ? Icons.keyboard_arrow_down_rounded
+          : Icons.keyboard_arrow_up_rounded;
+    case _ToolbarEdge.bottom:
+      return isCollapsed
+          ? Icons.keyboard_arrow_up_rounded
+          : Icons.keyboard_arrow_down_rounded;
+    case _ToolbarEdge.left:
+      return isCollapsed
+          ? Icons.keyboard_arrow_right_rounded
+          : Icons.keyboard_arrow_left_rounded;
+    case _ToolbarEdge.right:
+      return isCollapsed
+          ? Icons.keyboard_arrow_left_rounded
+          : Icons.keyboard_arrow_right_rounded;
+  }
+}
+
 Offset _toolbarSubmenuOffset(_ToolbarEdge edge) {
   switch (edge) {
     case _ToolbarEdge.top:
@@ -742,13 +763,20 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         }
       });
 
+      final rawToolbar = collapse.isFalse
+          ? _buildToolbar(context, edge, isHorizontal)
+          : _buildDraggableCollapse(context, edge, isHorizontal);
       final toolbar = Align(
         alignment: _alignmentForEdge(edge, _fraction.value),
         child: KeyedSubtree(
           key: _toolbarKey,
-          child: collapse.isFalse
-              ? _buildToolbar(context, edge, isHorizontal)
-              : _buildDraggableCollapse(context, edge, isHorizontal),
+          child: _ToolbarTheme.nativeDesktop
+              ? Padding(
+                  padding: const EdgeInsets.all(
+                      DesktopSessionStyle.toolbarEdgeMargin),
+                  child: rawToolbar,
+                )
+              : rawToolbar,
         ),
       );
 
@@ -782,6 +810,29 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     // (e.g. dragging a top-docked toolbar toward the left edge), so swap the
     // long/short axes when previewing a different orientation.
     final previewSize = _toolbarSizeForEdge(edge, measured);
+    if (_ToolbarTheme.nativeDesktop) {
+      final radius = collapse.isTrue
+          ? DesktopSessionStyle.collapsedToolbarRadius
+          : DesktopSessionStyle.toolbarRadius;
+      return Align(
+        alignment: _alignmentForEdge(edge, fraction),
+        child: SizedBox(
+          width: previewSize.width,
+          height: previewSize.height,
+          child: Padding(
+            padding:
+                const EdgeInsets.all(DesktopSessionStyle.toolbarEdgeMargin),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.14),
+                borderRadius: BorderRadius.circular(radius),
+                border: Border.all(color: color.withOpacity(0.65), width: 1.5),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Align(
       alignment: _alignmentForEdge(edge, fraction),
       child: Container(
@@ -796,91 +847,274 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
     );
   }
 
+  Widget _buildDraggableHandle({
+    required _ToolbarEdge edge,
+    required bool isHorizontal,
+    required BorderRadius borderRadius,
+    bool gripOnly = false,
+  }) {
+    return _DraggableShowHide(
+      id: widget.id,
+      ffi: widget.ffi,
+      sessionId: widget.ffi.sessionId,
+      dragging: _dragging,
+      fraction: _fraction,
+      edge: _edge,
+      previewEdge: _previewEdge,
+      previewFraction: _previewFraction,
+      toolbarSize: _toolbarSize,
+      markDragEpoch: _markToolbarDragEpoch,
+      syncDockingOptionsAfterDragIfNeeded:
+          _syncDockingOptionsAfterDragIfNeeded,
+      isHorizontal: isHorizontal,
+      multiEdgeEnabled: _multiEdgeEnabled.value,
+      toolbarState: widget.state,
+      setFullscreen: _setFullscreen,
+      setMinimize: _minimize,
+      borderRadius: borderRadius,
+      gripOnly: gripOnly,
+    );
+  }
+
   Widget _buildDraggableCollapse(
       BuildContext context, _ToolbarEdge edge, bool isHorizontal) {
     return Obx(() {
       if (collapse.isFalse && _dragging.isFalse) {
         triggerAutoHide();
       }
-      final borderRadius = _collapseHandleBorderRadius(edge);
+      final borderRadius = _ToolbarTheme.nativeDesktop
+          ? BorderRadius.circular(DesktopSessionStyle.collapsedToolbarRadius)
+          : _collapseHandleBorderRadius(edge);
+      final handle = _buildDraggableHandle(
+        edge: edge,
+        isHorizontal: isHorizontal,
+        borderRadius: borderRadius,
+      );
       return Offstage(
         offstage: _dragging.isTrue,
-        child: Material(
-          elevation: _ToolbarTheme.elevation,
-          shadowColor: MyTheme.color(context).shadow,
-          borderRadius: borderRadius,
-          child: _DraggableShowHide(
-            id: widget.id,
-            ffi: widget.ffi,
-            sessionId: widget.ffi.sessionId,
-            dragging: _dragging,
-            fraction: _fraction,
-            edge: _edge,
-            previewEdge: _previewEdge,
-            previewFraction: _previewFraction,
-            toolbarSize: _toolbarSize,
-            markDragEpoch: _markToolbarDragEpoch,
-            syncDockingOptionsAfterDragIfNeeded:
-                _syncDockingOptionsAfterDragIfNeeded,
-            isHorizontal: isHorizontal,
-            multiEdgeEnabled: _multiEdgeEnabled.value,
-            toolbarState: widget.state,
-            setFullscreen: _setFullscreen,
-            setMinimize: _minimize,
-            borderRadius: borderRadius,
-          ),
-        ),
+        child: _ToolbarTheme.nativeDesktop
+            ? handle
+            : Material(
+                elevation: _ToolbarTheme.elevation,
+                shadowColor: MyTheme.color(context).shadow,
+                borderRadius: borderRadius,
+                child: handle,
+              ),
       );
     });
   }
 
-  Widget _buildToolbar(
-      BuildContext context, _ToolbarEdge edge, bool isHorizontal) {
-    final List<Widget> toolbarItems = [];
-    toolbarItems.add(_PinMenu(state: widget.state));
-    if (_ToolbarTheme.nativeDesktop) {
-      toolbarItems.add(AnimatedBuilder(
-        animation: widget.ffi.qualityMonitorModel,
-        builder: (context, _) {
-          final model = widget.ffi.qualityMonitorModel;
-          final color = model.directConnection == null
-              ? Theme.of(context).hintColor
-              : model.directConnection == true
-                  ? WorkspaceStyle.success(context)
-                  : Theme.of(context).colorScheme.primary;
-          return TextButton.icon(
-            style: TextButton.styleFrom(
-              foregroundColor: Theme.of(context).colorScheme.onSurface,
-              backgroundColor: color.withOpacity(.10),
-              minimumSize: const Size(0, 34),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-            ),
+  Widget _buildConnectionStatusPill(BuildContext context, bool isHorizontal) {
+    return AnimatedBuilder(
+      animation: widget.ffi.qualityMonitorModel,
+      builder: (context, _) {
+        final model = widget.ffi.qualityMonitorModel;
+        final color = model.directConnection == null
+            ? Theme.of(context).hintColor
+            : model.directConnection == true
+                ? WorkspaceStyle.success(context)
+                : Theme.of(context).colorScheme.primary;
+        final statusText = [
+          model.activeTransport ?? translate('Connection'),
+          if (model.data.delay != null) '${model.data.delay} ms',
+        ].join(' · ');
+        return Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: isHorizontal
+                ? _ToolbarTheme.buttonHMargin
+                : _ToolbarTheme.buttonVMargin,
+            vertical: isHorizontal
+                ? _ToolbarTheme.buttonVMargin
+                : _ToolbarTheme.buttonHMargin,
+          ),
+          child: SessionStatusPill(
+            dotColor: color,
+            label: statusText,
+            active: model.show,
+            compact: !isHorizontal,
+            tooltip: isHorizontal
+                ? translate('Connection quality')
+                : '${translate('Connection quality')} · $statusText',
             onPressed: () async {
               await bind.sessionToggleOption(
                   sessionId: widget.ffi.sessionId,
                   value: 'show-quality-monitor');
               await model.checkShowQualityMonitor(widget.ffi.sessionId);
             },
-            icon: Icon(Icons.circle, size: 7, color: color),
-            label: Text(
-                [
-                  model.activeTransport ?? translate('Connection'),
-                  if (model.data.delay != null) '${model.data.delay} ms',
-                ].join(' · '),
-                style: Theme.of(context).textTheme.labelMedium),
-          );
-        },
-      ));
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildNativeDesktopToolbar(
+      BuildContext context, _ToolbarEdge edge, bool isHorizontal) {
+    if (collapse.isFalse && _dragging.isFalse) {
+      triggerAutoHide();
     }
+    final compact = !isHorizontal;
+    final List<Widget> toolbarItems = [
+      _buildDraggableHandle(
+        edge: edge,
+        isHorizontal: isHorizontal,
+        borderRadius:
+            BorderRadius.circular(DesktopSessionStyle.buttonRadius),
+        gripOnly: true,
+      ),
+      _buildConnectionStatusPill(context, isHorizontal),
+      SessionToolbarDivider(horizontal: isHorizontal),
+      Obx(() {
+        final privacyModeState = PrivacyModeState.find(widget.id);
+        if ((privacyModeState.isEmpty ||
+                allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value)) &&
+            pi.displaysCount.value > 1 &&
+            mainGetLocalBoolOptionSync(kOptionAllowMonitorSwitchMainToolbar)) {
+          return _MainMonitorSwitchButton(
+              id: widget.id, ffi: widget.ffi, compact: compact);
+        }
+        return const Offstage();
+      }),
+      if (!isWebDesktop) _MobileActionMenu(ffi: widget.ffi, compact: compact),
+      Obx(() {
+        final privacyModeState = PrivacyModeState.find(widget.id);
+        if ((privacyModeState.isEmpty ||
+                allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value)) &&
+            pi.displaysCount.value > 1) {
+          return _MonitorMenu(
+              id: widget.id,
+              ffi: widget.ffi,
+              edge: edge,
+              setRemoteState: widget.setRemoteState);
+        }
+        return const Offstage();
+      }),
+      _DisplayMenu(
+        id: widget.id,
+        ffi: widget.ffi,
+        state: widget.state,
+        setFullscreen: _setFullscreen,
+        edge: edge,
+        compact: compact,
+      ),
+      if (widget.ffi.connType == ConnType.defaultConn) ...[
+        _KeyboardMenu(
+          id: widget.id,
+          ffi: widget.ffi,
+          edge: edge,
+          compact: compact,
+        ),
+        _IconMenuButton(
+          nativeIcon: Icons.folder_open_rounded,
+          icon: const Icon(Icons.folder_open_rounded),
+          label: translate('Transfer file'),
+          tooltip: 'Transfer file',
+          compact: compact,
+          color: _ToolbarTheme.commandColor,
+          hoverColor: _ToolbarTheme.hoverBlueColor,
+          onPressed: () => _launchSessionTool(context, isFileTransfer: true),
+        ),
+        _IconMenuButton(
+          nativeIcon: Icons.terminal_rounded,
+          icon: const Icon(Icons.terminal_rounded),
+          label: translate('Terminal'),
+          tooltip: '${translate('Terminal')} (beta)',
+          compact: compact,
+          color: _ToolbarTheme.commandColor,
+          hoverColor: _ToolbarTheme.hoverBlueColor,
+          onPressed: () => _launchSessionTool(context, isTerminal: true),
+        ),
+      ],
+      _ControlMenu(
+        id: widget.id,
+        ffi: widget.ffi,
+        state: widget.state,
+        edge: edge,
+        compact: compact,
+      ),
+      SessionToolbarDivider(horizontal: isHorizontal),
+      _ChatMenu(id: widget.id, ffi: widget.ffi, edge: edge, compact: compact),
+      if (!isWeb)
+        _VoiceCallMenu(
+            id: widget.id, ffi: widget.ffi, edge: edge, compact: compact),
+      if (!isWeb) _RecordMenu(compact: compact),
+      SessionToolbarDivider(horizontal: isHorizontal),
+      _PinMenu(state: widget.state, compact: compact),
+      Obx(() {
+        final isFs = stateGlobal.fullscreen.isTrue;
+        return _IconMenuButton(
+          nativeIcon: isFs
+              ? Icons.fullscreen_exit_rounded
+              : Icons.fullscreen_rounded,
+          icon: Icon(isFs ? Icons.fullscreen_exit : Icons.fullscreen),
+          tooltip: isFs ? 'Exit Fullscreen' : 'Fullscreen',
+          active: isFs,
+          muted: !isFs,
+          compact: compact,
+          color: _ToolbarTheme.commandColor,
+          hoverColor: _ToolbarTheme.hoverBlueColor,
+          onPressed: () => _setFullscreen(!isFs),
+        );
+      }),
+      if (!isMacOS && !isWebDesktop)
+        Obx(() => Offstage(
+              offstage: stateGlobal.fullscreen.isFalse,
+              child: _IconMenuButton(
+                nativeIcon: Icons.remove_rounded,
+                icon: const Icon(Icons.remove),
+                tooltip: 'Minimize',
+                muted: true,
+                compact: compact,
+                color: _ToolbarTheme.commandColor,
+                hoverColor: _ToolbarTheme.hoverBlueColor,
+                onPressed: _minimize,
+              ),
+            )),
+      _IconMenuButton(
+        nativeIcon: _toolbarCollapseRoundedIcon(edge, false),
+        icon: Icon(_toolbarCollapseIcon(edge, false)),
+        tooltip: 'Hide Toolbar',
+        muted: true,
+        compact: compact,
+        color: _ToolbarTheme.commandColor,
+        hoverColor: _ToolbarTheme.hoverBlueColor,
+        onPressed: () => widget.state.switchCollapse(widget.ffi.sessionId),
+      ),
+      SessionToolbarDivider(horizontal: isHorizontal),
+      _CloseMenu(id: widget.id, ffi: widget.ffi, compact: compact),
+    ];
+
+    final innerAxis = isHorizontal ? Axis.horizontal : Axis.vertical;
+    final endPad = isHorizontal
+        ? const SizedBox(width: 4)
+        : const SizedBox(height: 4);
+    final controls = SingleChildScrollView(
+      scrollDirection: innerAxis,
+      child: Theme(
+        data: themeData(),
+        child: Flex(
+          direction: innerAxis,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [endPad, ...toolbarItems, endPad],
+        ),
+      ),
+    );
+    return Obx(() => AnimatedOpacity(
+          opacity: _dragging.isTrue ? 0.32 : 1.0,
+          duration: const Duration(milliseconds: 120),
+          child: SessionToolbarSurface(child: controls),
+        ));
+  }
+
+  Widget _buildToolbar(
+      BuildContext context, _ToolbarEdge edge, bool isHorizontal) {
+    if (_ToolbarTheme.nativeDesktop) {
+      return _buildNativeDesktopToolbar(context, edge, isHorizontal);
+    }
+    final List<Widget> toolbarItems = [];
+    toolbarItems.add(_PinMenu(state: widget.state));
     toolbarItems.add(Obx(() {
       final privacyModeState = PrivacyModeState.find(widget.id);
-      if (_ToolbarTheme.nativeDesktop && pi.displaysCount.value == 1) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          child: Text('${translate('Display')} 1 / 1',
-              style: Theme.of(context).textTheme.labelMedium),
-        );
-      }
       if ((privacyModeState.isEmpty ||
               allowDisplaySwitchInPrivacyMode(pi, privacyModeState.value)) &&
           pi.displaysCount.value > 1 &&
@@ -909,43 +1143,16 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       }
     }));
 
-    if (!_ToolbarTheme.nativeDesktop) {
-      toolbarItems
-          .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
-    }
+    toolbarItems
+        .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
     toolbarItems.add(_DisplayMenu(
       id: widget.id,
       ffi: widget.ffi,
       state: widget.state,
       setFullscreen: _setFullscreen,
     ));
-    if (_ToolbarTheme.nativeDesktop &&
-        widget.ffi.connType == ConnType.defaultConn) {
-      toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
-      toolbarItems.add(_IconMenuButton(
-        icon: const Icon(Icons.folder_open_rounded),
-        label: 'Transfer file',
-        tooltip: 'Transfer file',
-        color: _ToolbarTheme.commandColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
-        onPressed: () => _launchSessionTool(context, isFileTransfer: true),
-      ));
-      toolbarItems.add(_IconMenuButton(
-        icon: const Icon(Icons.terminal_rounded),
-        label: '${translate('Terminal')} (beta)',
-        tooltip: 'Terminal',
-        color: _ToolbarTheme.commandColor,
-        hoverColor: _ToolbarTheme.hoverBlueColor,
-        onPressed: () => _launchSessionTool(context, isTerminal: true),
-      ));
-    }
-    if (_ToolbarTheme.nativeDesktop) {
-      toolbarItems
-          .add(_ControlMenu(id: widget.id, ffi: widget.ffi, state: widget.state));
-    }
     // Do not show keyboard for camera connection type.
-    if (!_ToolbarTheme.nativeDesktop &&
-        widget.ffi.connType == ConnType.defaultConn) {
+    if (widget.ffi.connType == ConnType.defaultConn) {
       toolbarItems.add(_KeyboardMenu(id: widget.id, ffi: widget.ffi));
     }
     Widget groupDivider() => Padding(
@@ -980,21 +1187,19 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         ),
       ),
     );
-    final toolbarMaterial = _ToolbarTheme.nativeDesktop
-        ? SessionToolbarSurface(child: controls)
-        : Material(
-            elevation: _ToolbarTheme.elevation,
-            shadowColor: MyTheme.color(context).shadow,
-            color: Theme.of(context)
-                .menuBarTheme
-                .style
-                ?.backgroundColor
-                ?.resolve(MaterialState.values.toSet()),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-                side: BorderSide(color: _ToolbarTheme.borderColor(context))),
-            child: controls,
-          );
+    final toolbarMaterial = Material(
+      elevation: _ToolbarTheme.elevation,
+      shadowColor: MyTheme.color(context).shadow,
+      color: Theme.of(context)
+          .menuBarTheme
+          .style
+          ?.backgroundColor
+          ?.resolve(MaterialState.values.toSet()),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: _ToolbarTheme.borderColor(context))),
+      child: controls,
+    );
     final handle = _buildDraggableCollapse(context, edge, isHorizontal);
     // The handle hangs off the interior face of the toolbar (away from the
     // docked edge), centered along that face by the Flex's default cross-axis
@@ -1029,9 +1234,16 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
       menuButtonTheme: MenuButtonThemeData(
         style: ButtonStyle(
           minimumSize: MaterialStatePropertyAll(
-              Size(64, _ToolbarTheme.nativeDesktop ? 36 : 32)),
+              Size(_ToolbarTheme.nativeDesktop ? 136 : 64,
+                  _ToolbarTheme.nativeDesktop ? 34 : 32)),
+          padding: _ToolbarTheme.nativeDesktop
+              ? const MaterialStatePropertyAll(
+                  EdgeInsets.symmetric(horizontal: 10))
+              : null,
           textStyle: MaterialStatePropertyAll(
-            TextStyle(fontWeight: FontWeight.normal),
+            TextStyle(
+                fontSize: _ToolbarTheme.nativeDesktop ? 13 : null,
+                fontWeight: FontWeight.normal),
           ),
           shape: MaterialStatePropertyAll(RoundedRectangleBorder(
               borderRadius:
@@ -3803,6 +4015,7 @@ class _DraggableShowHide extends StatefulWidget {
   final RxBool dragging;
   final ToolbarState toolbarState;
   final BorderRadius borderRadius;
+  final bool gripOnly;
 
   final Function(bool) setFullscreen;
   final Function() setMinimize;
@@ -3826,6 +4039,7 @@ class _DraggableShowHide extends StatefulWidget {
     required this.setFullscreen,
     required this.setMinimize,
     required this.borderRadius,
+    this.gripOnly = false,
   }) : super(key: key);
 
   @override
@@ -3835,6 +4049,7 @@ class _DraggableShowHide extends StatefulWidget {
 class _DraggableShowHideState extends State<_DraggableShowHide> {
   double left = 0.0;
   double right = 1.0;
+  bool _gripHover = false;
   Offset? _lastPointerDown;
   Offset? _dragGrabOffset;
   double? _dragLongAxisGrabOffset;
@@ -4000,7 +4215,66 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
     );
   }
 
-  Widget _buildDraggable(BuildContext context) {
+  Widget _buildNativeDragFeedback(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: SessionToolbarSurface(
+        borderRadius: DesktopSessionStyle.buttonRadius,
+        child: SizedBox(
+          width: 34,
+          height: 30,
+          child: Center(
+            child: Icon(
+              widget.isHorizontal
+                  ? Icons.drag_indicator_rounded
+                  : Icons.drag_handle_rounded,
+              size: 16,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNativeDragGrip(BuildContext context, {bool compact = false}) {
+    final theme = Theme.of(context);
+    final ink = theme.colorScheme.onSurface;
+    final iconColor = _gripHover ? ink : theme.hintColor.withOpacity(0.85);
+    final width = widget.isHorizontal ? (compact ? 18.0 : 20.0) : 28.0;
+    final height = widget.isHorizontal ? (compact ? 24.0 : 30.0) : 20.0;
+    return MouseRegion(
+      cursor: SystemMouseCursors.grab,
+      onEnter: (_) => setState(() => _gripHover = true),
+      onExit: (_) => setState(() => _gripHover = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        width: width,
+        height: height,
+        margin: widget.gripOnly
+            ? EdgeInsets.symmetric(
+                horizontal: widget.isHorizontal ? 1 : 0,
+                vertical: widget.isHorizontal ? _ToolbarTheme.buttonVMargin : 1,
+              )
+            : EdgeInsets.zero,
+        decoration: BoxDecoration(
+          color: _gripHover ? ink.withOpacity(0.08) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        alignment: Alignment.center,
+        child: Icon(
+          widget.isHorizontal
+              ? Icons.drag_indicator_rounded
+              : Icons.drag_handle_rounded,
+          size: compact ? 14 : 15,
+          color: iconColor,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDraggable(BuildContext context, {bool compact = false}) {
     return Listener(
       onPointerDown: (event) => _lastPointerDown = event.position,
       child: Draggable(
@@ -4009,12 +4283,16 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
         // floats away from the top while dragging and the toolbar looks
         // unmoored. When multi-edge is on we need 2D drag for snap-to-edge.
         axis: widget.multiEdgeEnabled ? null : Axis.horizontal,
-        child: Icon(
-          widget.isHorizontal ? Icons.drag_indicator : Icons.drag_handle,
-          size: 20,
-          color: MyTheme.color(context).drag_indicator,
-        ),
-        feedback: widget,
+        child: _ToolbarTheme.nativeDesktop
+            ? _buildNativeDragGrip(context, compact: compact)
+            : Icon(
+                widget.isHorizontal ? Icons.drag_indicator : Icons.drag_handle,
+                size: 20,
+                color: MyTheme.color(context).drag_indicator,
+              ),
+        feedback: _ToolbarTheme.nativeDesktop
+            ? _buildNativeDragFeedback(context)
+            : widget,
         onDragStarted: () {
           widget.markDragEpoch();
           final pointerDown = _lastPointerDown;
@@ -4035,8 +4313,122 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
     );
   }
 
+  Widget _buildNativeCollapsedCapsule(BuildContext context) {
+    final isFullscreen = stateGlobal.fullscreen;
+    final axis = widget.isHorizontal ? Axis.horizontal : Axis.vertical;
+    final isHorizontal = widget.isHorizontal;
+
+    Widget compactIconBtn({
+      required IconData icon,
+      required String tooltip,
+      required VoidCallback onPressed,
+      bool active = false,
+    }) {
+      return _CompactNativeIconButton(
+        icon: icon,
+        tooltip: translate(tooltip),
+        active: active,
+        onPressed: onPressed,
+      );
+    }
+
+    final statusExpandPill = AnimatedBuilder(
+      animation: widget.ffi.qualityMonitorModel,
+      builder: (context, _) {
+        final model = widget.ffi.qualityMonitorModel;
+        final color = model.directConnection == null
+            ? Theme.of(context).hintColor
+            : model.directConnection == true
+                ? WorkspaceStyle.success(context)
+                : Theme.of(context).colorScheme.primary;
+        final statusText = [
+          model.activeTransport ?? translate('Connection'),
+          if (model.data.delay != null) '${model.data.delay} ms',
+        ].join(' · ');
+        return SessionStatusPill(
+          dotColor: color,
+          label: statusText,
+          compact: !isHorizontal,
+          height: 24,
+          tooltip: isHorizontal
+              ? translate('Show Toolbar')
+              : '${translate('Show Toolbar')} · $statusText',
+          trailing: isHorizontal
+              ? Obx(() => Icon(
+                    _toolbarCollapseRoundedIcon(widget.edge.value, true),
+                    size: 15,
+                    color: Theme.of(context).hintColor,
+                  ))
+              : null,
+          onPressed: () =>
+              widget.toolbarState.switchCollapse(widget.sessionId),
+        );
+      },
+    );
+
+    return SessionToolbarSurface(
+      borderRadius: DesktopSessionStyle.collapsedToolbarRadius,
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: isHorizontal ? 5 : 3,
+          vertical: isHorizontal ? 3 : 5,
+        ),
+        child: Flex(
+          direction: axis,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _buildDraggable(context, compact: true),
+            SizedBox(width: isHorizontal ? 2 : 0, height: isHorizontal ? 0 : 2),
+            statusExpandPill,
+            Obx(() => collapse.isTrue
+                ? _MinimizedMonitorSwitchButton(
+                    id: widget.id,
+                    ffi: widget.ffi,
+                    isHorizontal: isHorizontal,
+                  )
+                : const Offstage()),
+            SizedBox(width: isHorizontal ? 2 : 0, height: isHorizontal ? 0 : 2),
+            Obx(() => compactIconBtn(
+                  icon: isFullscreen.isTrue
+                      ? Icons.fullscreen_exit_rounded
+                      : Icons.fullscreen_rounded,
+                  tooltip:
+                      isFullscreen.isTrue ? 'Exit Fullscreen' : 'Fullscreen',
+                  active: isFullscreen.isTrue,
+                  onPressed: () => widget.setFullscreen(!isFullscreen.value),
+                )),
+            if (!isMacOS && !isWebDesktop)
+              Obx(() => Offstage(
+                    offstage: isFullscreen.isFalse,
+                    child: compactIconBtn(
+                      icon: Icons.remove_rounded,
+                      tooltip: 'Minimize',
+                      onPressed: widget.setMinimize,
+                    ),
+                  )),
+            if (!isHorizontal)
+              Obx(() => compactIconBtn(
+                    icon: _toolbarCollapseRoundedIcon(widget.edge.value, true),
+                    tooltip: 'Show Toolbar',
+                    onPressed: () =>
+                        widget.toolbarState.switchCollapse(widget.sessionId),
+                  )),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_ToolbarTheme.nativeDesktop) {
+      if (widget.gripOnly) {
+        return _buildDraggable(context);
+      }
+      return _buildNativeCollapsedCapsule(context);
+    }
+
     final ButtonStyle buttonStyle = ButtonStyle(
       minimumSize: MaterialStateProperty.all(const Size(0, 0)),
       padding: MaterialStateProperty.all(EdgeInsets.zero),
@@ -4137,9 +4529,11 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
       data: TextButtonThemeData(style: buttonStyle),
       child: Container(
         decoration: BoxDecoration(
-          color: _ToolbarTheme.nativeDesktop
-              ? Theme.of(context).cardColor
-              : Theme.of(context).menuBarTheme.style?.backgroundColor?.resolve(MaterialState.values.toSet()),
+          color: Theme.of(context)
+              .menuBarTheme
+              .style
+              ?.backgroundColor
+              ?.resolve(MaterialState.values.toSet()),
           border: Border.all(
             color: _ToolbarTheme.borderColor(context),
             width: 1,
@@ -4150,6 +4544,67 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
           height: widget.isHorizontal ? 20 : null,
           width: widget.isHorizontal ? null : 20,
           child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactNativeIconButton extends StatefulWidget {
+  final IconData icon;
+  final String tooltip;
+  final bool active;
+  final VoidCallback onPressed;
+
+  const _CompactNativeIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.active = false,
+  });
+
+  @override
+  State<_CompactNativeIconButton> createState() =>
+      _CompactNativeIconButtonState();
+}
+
+class _CompactNativeIconButtonState extends State<_CompactNativeIconButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
+    final ink = theme.colorScheme.onSurface;
+    final primary = theme.colorScheme.primary;
+    final fg = widget.active
+        ? primary
+        : (_hover ? ink : theme.hintColor.withOpacity(0.92));
+    final bg = widget.active
+        ? primary.withOpacity(dark ? 0.20 : 0.14)
+        : (_hover
+            ? ink.withOpacity(dark ? 0.10 : 0.07)
+            : Colors.transparent);
+    return Tooltip(
+      message: widget.tooltip,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            alignment: Alignment.center,
+            child: Icon(widget.icon, size: 15, color: fg),
+          ),
         ),
       ),
     );
@@ -4232,11 +4687,13 @@ class EdgeThicknessControl extends StatelessWidget {
 class _MinimizedMonitorSwitchButton extends StatelessWidget {
   final String id;
   final FFI ffi;
+  final bool isHorizontal;
 
   const _MinimizedMonitorSwitchButton({
     Key? key,
     required this.id,
     required this.ffi,
+    this.isHorizontal = true,
   }) : super(key: key);
 
   @override
@@ -4256,6 +4713,64 @@ class _MinimizedMonitorSwitchButton extends StatelessWidget {
           !allowDisplaySwitchInPrivacyMode(
               ffi.ffiModel.pi, privacyModeState.value)) {
         return const Offstage();
+      }
+      if (_ToolbarTheme.nativeDesktop) {
+        return Tooltip(
+          message: cycle.tooltip,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: isHorizontal ? 2 : 0,
+              top: isHorizontal ? 0 : 2,
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: cycle.next,
+              child: Container(
+                height: 24,
+                width: isHorizontal ? null : 24,
+                padding: isHorizontal
+                    ? const EdgeInsets.symmetric(horizontal: 7)
+                    : EdgeInsets.zero,
+                decoration: BoxDecoration(
+                  color: WorkspaceStyle.elevatedSurface(context),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Theme.of(context).dividerColor),
+                ),
+                alignment: Alignment.center,
+                child: isHorizontal
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.monitor_rounded,
+                            size: 13,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            '$label/${cycle.total}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              height: 1.0,
+                              fontWeight: FontWeight.w600,
+                              color: Theme.of(context).colorScheme.onSurface,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1.0,
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(context).colorScheme.onSurface,
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        );
       }
 
       return Tooltip(
