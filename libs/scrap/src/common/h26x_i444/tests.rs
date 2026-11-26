@@ -120,7 +120,7 @@ fn hardware_decode_budget_uses_real_frame_cadence() {
 
 fn compare_d3d11_decode(width: usize, height: usize) {
     let mut encoder =
-        Encoder::open(Format::H265, Backend::QuickSync, width, height, 1.0, None).unwrap();
+        Encoder::open(Format::H265, Backend::QuickSync, width, height, 1.0, None, 60).unwrap();
     let mut pixels = vec![128; encoder.layout.u * 3];
     let mut decoder = Decoder::new(Format::H265).unwrap();
     let mut hardware = Decoder::try_d3d11(Format::H265).unwrap();
@@ -130,6 +130,11 @@ fn compare_d3d11_decode(width: usize, height: usize) {
     let mut software_time = std::time::Duration::ZERO;
     let mut hardware_time = std::time::Duration::ZERO;
     for frame in 0..30 {
+        match frame {
+            10 => encoder.set_quality(5.0).unwrap(),
+            20 => encoder.set_quality(1.0).unwrap(),
+            _ => {}
+        }
         pixels[frame..encoder.layout.u].fill(50 + frame as u8);
         pixels[encoder.layout.u..encoder.layout.v].fill(90);
         pixels[encoder.layout.v..].fill(200);

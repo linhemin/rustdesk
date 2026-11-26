@@ -248,12 +248,35 @@ pub enum EncodingUpdate {
     Check,
 }
 
+#[cfg(any(feature = "hwcodec", feature = "vram", test))]
+fn open_at_requested_fps<T>(
+    requested: Option<u32>,
+    default: u32,
+    mut open: impl FnMut(u32) -> ResultType<T>,
+) -> ResultType<T> {
+    if let Some(fps) = requested.filter(|fps| *fps > 0 && *fps <= i32::MAX as u32 && *fps != default) {
+        match open(fps) {
+            Ok(encoder) => return Ok(encoder),
+            Err(err) => {
+                log::warn!("Could not open encoder at {fps} FPS ({err:#}), retrying at {default} FPS");
+            }
+        }
+    }
+    open(default)
+}
+
 impl Encoder {
     pub fn new(config: EncoderCfg, i444: bool) -> ResultType<Encoder> {
-        log::info!("new encoder: {config:?}, i444: {i444}");
+        Self::new_with_fps(config, i444, None)
+    }
+
+    pub fn new_with_fps(config: EncoderCfg, i444: bool, requested_fps: Option<u32>) -> ResultType<Encoder> {
+        log::info!("new encoder: {config:?}, i444: {i444}, requested fps: {requested_fps:?}");
         #[cfg(all(windows, feature = "hwcodec"))]
         if i444 && h26x_i444::Format::from_config(&config).is_some() {
-            match h26x_i444::Encoder::from_config(&config) {
+            match open_at_requested_fps(requested_fps, 60, |fps| {
+                h26x_i444::Encoder::from_config(&config, fps)
+            }) {
                 Ok(codec) => return Ok(Encoder { codec: Box::new(codec) }),
                 Err(error) => log::warn!("H.26x 4:4:4 setup failed, using 4:2:0: {error:#}"),
             }
@@ -267,7 +290,9 @@ impl Encoder {
             }),
 
             #[cfg(feature = "hwcodec")]
-            EncoderCfg::HWRAM(ref cfg) => match HwRamEncoder::new(config.clone(), i444) {
+            EncoderCfg::HWRAM(ref cfg) => match open_at_requested_fps(requested_fps, DEFAULT_FPS as u32, |fps| {
+                HwRamEncoder::new_with_fps(config.clone(), fps)
+            }) {
                 Ok(hw) => Ok(Encoder {
                     codec: Box::new(hw),
                 }),
@@ -278,7 +303,9 @@ impl Encoder {
                 }
             },
             #[cfg(feature = "vram")]
-            EncoderCfg::VRAM(ref cfg) => match VRamEncoder::new(config.clone(), i444) {
+            EncoderCfg::VRAM(ref cfg) => match open_at_requested_fps(requested_fps, 30, |fps| {
+                VRamEncoder::new_with_fps(config.clone(), fps)
+            }) {
                 Ok(tex) => Ok(Encoder {
                     codec: Box::new(tex),
                 }),
@@ -1426,6 +1453,19 @@ fn disable_av1() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoder_accepts_the_requested_fps_or_opens_with_its_supported_default() {
+        let open = |fps| -> hbb_common::ResultType<u32> {
+            if fps > 60 {
+                hbb_common::bail!("unsupported rate");
+            }
+            Ok(fps)
+        };
+        assert_eq!(super::open_at_requested_fps(Some(60), 30, open).unwrap(), 60);
+        assert_eq!(super::open_at_requested_fps(Some(120), 30, open).unwrap(), 30);
+        assert_eq!(super::open_at_requested_fps(None, 60, open).unwrap(), 60);
+    }
 
     #[test]
     fn software_selection_respects_the_common_decoder_set() {

@@ -54,11 +54,8 @@ pub struct VRamEncoder {
     bitrate: u32,
 }
 
-impl EncoderApi for VRamEncoder {
-    fn new(cfg: EncoderCfg, _i444: bool) -> ResultType<Self>
-    where
-        Self: Sized,
-    {
+impl VRamEncoder {
+    pub(super) fn new_with_fps(cfg: EncoderCfg, fps: u32) -> ResultType<Self> {
         match cfg {
             EncoderCfg::VRAM(config) => {
                 let bitrate = Self::bitrate(
@@ -75,7 +72,7 @@ impl EncoderApi for VRamEncoder {
                         width: config.width as _,
                         height: config.height as _,
                         kbitrate: bitrate as _,
-                        framerate: 30,
+                        framerate: fps as i32,
                         gop,
                     },
                 };
@@ -91,6 +88,12 @@ impl EncoderApi for VRamEncoder {
             }
             _ => Err(anyhow!("encoder type mismatch")),
         }
+    }
+}
+
+impl EncoderApi for VRamEncoder {
+    fn new(cfg: EncoderCfg, _i444: bool) -> ResultType<Self> {
+        Self::new_with_fps(cfg, 30)
     }
 
     fn encode_to_message(

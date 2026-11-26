@@ -62,7 +62,22 @@ diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
  #include <VideoToolbox/VideoToolbox.h>
  #include <CoreVideo/CoreVideo.h>
  #include <CoreMedia/CoreMedia.h>
-@@ -2901,6 +2902,18 @@
+@@ -1605,3 +1606,14 @@
++    if ((avctx->codec_id == AV_CODEC_ID_H264 || avctx->codec_id == AV_CODEC_ID_HEVC) &&
++        avctx->framerate.num > 0 && avctx->framerate.den > 0) {
++        double fps = av_q2d(avctx->framerate);
++        CFNumberRef value = CFNumberCreate(kCFAllocatorDefault, kCFNumberDoubleType, &fps);
++        if (!value)
++            return AVERROR(ENOMEM);
++        set_encoder_property_or_log(avctx, kVTCompressionPropertyKey_ExpectedFrameRate,
++                                    "expected frame rate", value);
++        CFRelease(value);
++    }
++
+     status = VTCompressionSessionPrepareToEncodeFrames(vtctx->session);
+     if (status) {
+         av_log(avctx, AV_LOG_ERROR, "Error: cannot prepare encoder: %d\n", status);
+@@ -2901,6 +2913,18 @@
  };
  
  #define OFFSET(x) offsetof(VTEncContext, x)
@@ -81,7 +96,7 @@ diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
  static const AVOption h264_options[] = {
      { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = AV_PROFILE_UNKNOWN }, AV_PROFILE_UNKNOWN, INT_MAX, VE, .unit = "profile" },
      { "baseline",             "Baseline Profile",             0, AV_OPT_TYPE_CONST, { .i64 = AV_PROFILE_H264_BASELINE             }, INT_MIN, INT_MAX, VE, .unit = "profile" },
-@@ -2966,6 +2978,24 @@
+@@ -2966,6 +2989,24 @@
      .caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
      .hw_configs       = vt_encode_hw_configs,
  };
@@ -106,7 +121,7 @@ diff --git a/libavcodec/videotoolboxenc.c b/libavcodec/videotoolboxenc.c
  
  static const AVOption hevc_options[] = {
      { "profile", "Profile", OFFSET(profile), AV_OPT_TYPE_INT, { .i64 = AV_PROFILE_UNKNOWN }, AV_PROFILE_UNKNOWN, INT_MAX, VE, .unit = "profile" },
-@@ -3007,6 +3034,26 @@
+@@ -3007,6 +3045,26 @@
      .hw_configs       = vt_encode_hw_configs,
  };
  

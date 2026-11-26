@@ -35,6 +35,7 @@ typedef struct {
     int color_workers;
     uint8_t *planar;
     unsigned int planar_capacity;
+    int qsv_bitrate_changed;
 } Codec;
 
 typedef void (*PacketCallback)(void *, const uint8_t *, int, int64_t, int);
@@ -114,12 +115,15 @@ static Codec *allocate(const AVCodec *implementation) {
 }
 
 void rd_i444_bitrate(Codec *codec, int64_t bitrate) {
+    if (avcodec_is_open(codec->context) && codec->context->bit_rate != bitrate &&
+        !strcmp(codec->context->codec->name, "hevc_qsv"))
+        codec->qsv_bitrate_changed = 1;
     codec->context->bit_rate = bitrate;
     codec->context->rc_max_rate = bitrate;
     codec->context->rc_buffer_size = (int)bitrate;
 }
 
-Codec *rd_i444_encoder(const char *name, int width, int height, int bitrate, int gop) {
+Codec *rd_i444_encoder(const char *name, int width, int height, int bitrate, int gop, int fps) {
     const AVCodec *implementation = avcodec_find_encoder_by_name(name);
     Codec *codec = allocate(implementation);
     if (!codec)
@@ -133,7 +137,7 @@ Codec *rd_i444_encoder(const char *name, int width, int height, int bitrate, int
     context->color_range = AVCOL_RANGE_MPEG;
     context->time_base.num = 1;
     context->time_base.den = 1000;
-    context->framerate.num = 60;
+    context->framerate.num = fps;
     context->framerate.den = 1;
     context->gop_size = qsv && gop > 32767 ? 32767 : gop;
     context->max_b_frames = 0;
@@ -204,6 +208,22 @@ int rd_i444_encode(Codec *codec, const uint8_t *pixels, int stride, int64_t pts,
     }
     frame->pts = pts;
     result = avcodec_send_frame(codec->context, frame);
+    if (codec->qsv_bitrate_changed) {
+        codec->qsv_bitrate_changed = 0;
+        // Some Quick Sync drivers reject an in-place HEVC 4:4:4 CBR reset.
+        // Re-submit this picture as the first keyframe of the new configuration.
+        if (result == AVERROR(EINVAL)) {
+            AVCodecContext *old = codec->context;
+            Codec *replacement = rd_i444_encoder("hevc_qsv", old->width, old->height,
+                (int)old->bit_rate, old->gop_size, old->framerate.num);
+            if (replacement) {
+                codec->context = replacement->context;
+                replacement->context = old;
+                rd_i444_free(replacement);
+                result = avcodec_send_frame(codec->context, frame);
+            }
+        }
+    }
     if (result < 0)
         return result;
     while ((result = avcodec_receive_packet(codec->context, codec->packet)) >= 0) {

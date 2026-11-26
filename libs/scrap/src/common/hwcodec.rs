@@ -63,11 +63,8 @@ pub struct HwRamEncoder {
     config: HwRamEncoderConfig,
 }
 
-impl EncoderApi for HwRamEncoder {
-    fn new(cfg: EncoderCfg, _i444: bool) -> ResultType<Self>
-    where
-        Self: Sized,
-    {
+impl HwRamEncoder {
+    pub(super) fn new_with_fps(cfg: EncoderCfg, fps: u32) -> ResultType<Self> {
         match cfg {
             EncoderCfg::HWRAM(config) => {
                 let rc = Self::rate_control(&config);
@@ -83,7 +80,7 @@ impl EncoderApi for HwRamEncoder {
                     pixfmt: DEFAULT_PIXFMT,
                     align: HW_STRIDE_ALIGN as _,
                     kbs: bitrate as i32,
-                    fps: DEFAULT_FPS,
+                    fps: fps as i32,
                     gop,
                     quality: DEFAULT_HW_QUALITY,
                     rc,
@@ -112,6 +109,12 @@ impl EncoderApi for HwRamEncoder {
             }
             _ => Err(anyhow!("encoder type mismatch")),
         }
+    }
+}
+
+impl EncoderApi for HwRamEncoder {
+    fn new(cfg: EncoderCfg, _i444: bool) -> ResultType<Self> {
+        Self::new_with_fps(cfg, DEFAULT_FPS as u32)
     }
 
     fn encode_to_message(&mut self, input: EncodeInput, ms: i64) -> ResultType<VideoFrame> {

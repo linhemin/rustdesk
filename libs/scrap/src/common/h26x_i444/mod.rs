@@ -126,7 +126,7 @@ impl Format {
     }
 
     fn probe(self, backend: Backend) -> ResultType<()> {
-        let mut encoder = Encoder::open(self, backend, 128, 128, 1.0, None)?;
+        let mut encoder = Encoder::open(self, backend, 128, 128, 1.0, None, 60)?;
         let pixels = vec![128; encoder.layout.stride[0] * encoder.layout.h * 3];
         let mut decoder = Decoder::new(self)?;
         let mut rgb = ImageRgb::new(ImageFormat::ARGB, 1);
@@ -164,7 +164,7 @@ type FrameCallback = unsafe extern "C" fn(
 ) -> i32;
 
 extern "C" {
-    fn rd_i444_encoder(name: *const c_char, w: i32, h: i32, bitrate: i32, gop: i32) -> *mut c_void;
+    fn rd_i444_encoder(name: *const c_char, w: i32, h: i32, bitrate: i32, gop: i32, fps: i32) -> *mut c_void;
     fn rd_i444_decoder(hevc: i32, threads: i32) -> *mut c_void;
     fn rd_i444_d3d11_decoder(threads: i32) -> *mut c_void;
     fn rd_i444_free(codec: *mut c_void);
@@ -217,7 +217,7 @@ pub(super) struct Encoder {
 }
 
 impl Encoder {
-    pub(super) fn from_config(config: &EncoderCfg) -> ResultType<Self> {
+    pub(super) fn from_config(config: &EncoderCfg, fps: u32) -> ResultType<Self> {
         let format = Format::from_config(config)
             .ok_or_else(|| anyhow!("invalid H.26x 4:4:4 encoder format"))?;
         let backend = format
@@ -231,6 +231,7 @@ impl Encoder {
                 cfg.height,
                 cfg.quality,
                 cfg.keyframe_interval,
+                fps,
             ),
             #[cfg(feature = "vram")]
             EncoderCfg::VRAM(cfg) => Self::open(
@@ -240,6 +241,7 @@ impl Encoder {
                 cfg.height,
                 cfg.quality,
                 cfg.keyframe_interval,
+                fps,
             ),
             _ => bail!("invalid H.26x 4:4:4 encoder settings"),
         }
@@ -252,6 +254,7 @@ impl Encoder {
         h: usize,
         ratio: f32,
         keyframe_interval: Option<usize>,
+        fps: u32,
     ) -> ResultType<Self> {
         use std::convert::TryFrom;
         let width = i32::try_from(w)?;
@@ -273,6 +276,7 @@ impl Encoder {
                 height,
                 (bitrate * 1000) as i32,
                 gop,
+                i32::try_from(fps)?,
             )
         };
         let codec = NonNull::new(codec)
@@ -300,7 +304,7 @@ impl Encoder {
 
 impl EncoderApi for Encoder {
     fn new(config: EncoderCfg, _: bool) -> ResultType<Self> {
-        Self::from_config(&config)
+        Self::from_config(&config, 60)
     }
 
     fn encode_to_message(&mut self, frame: EncodeInput, ms: i64) -> ResultType<VideoFrame> {

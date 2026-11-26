@@ -657,6 +657,7 @@ fn run(vs: VideoService) -> ResultType<()> {
     }
     let mut video_qos = VIDEO_QOS.lock().unwrap();
     let mut spf = video_qos.spf();
+    let requested_fps = vs.source.is_monitor().then(|| video_qos.auto_target_fps());
     let mut quality = video_qos.ratio();
     let refine_first_image = video_qos.latest_quality() == Quality::Best;
     let record_incoming = config::option2bool(
@@ -674,6 +675,7 @@ fn run(vs: VideoService) -> ResultType<()> {
         last_portable_service_running,
         vs.source,
         display_idx,
+        requested_fps,
     ) {
         Ok(result) => result,
         Err(err) => {
@@ -697,8 +699,16 @@ fn run(vs: VideoService) -> ResultType<()> {
                 last_portable_service_running,
                 vs.source,
                 display_idx,
+                requested_fps,
             )?
         }
+    };
+    let ffmpeg_fps = match &encoder_cfg {
+        #[cfg(feature = "hwcodec")]
+        EncoderCfg::HWRAM(_) => requested_fps,
+        #[cfg(feature = "vram")]
+        EncoderCfg::VRAM(_) => requested_fps,
+        _ => None,
     };
     #[cfg(feature = "vram")]
     c.set_output_texture(encoder.input_texture());
@@ -819,6 +829,7 @@ fn run(vs: VideoService) -> ResultType<()> {
             &mut encoder,
             &mut quality,
             &mut spf,
+            ffmpeg_fps,
             client_record,
             &mut send_counter,
             &mut second_instant,
@@ -1215,6 +1226,7 @@ fn setup_encoder(
     last_portable_service_running: bool,
     source: VideoSource,
     display_idx: usize,
+    requested_fps: Option<u32>,
 ) -> ResultType<(
     Encoder,
     EncoderCfg,
@@ -1248,7 +1260,7 @@ fn setup_encoder(
         Encoder::set_fallback(&encoder_cfg);
         let codec_format = Encoder::negotiated_codec();
         let use_i444 = Encoder::use_i444(&encoder_cfg);
-        match Encoder::new(encoder_cfg.clone(), use_i444) {
+        match Encoder::new_with_fps(encoder_cfg.clone(), use_i444, requested_fps) {
             Ok(encoder) => {
                 let recorder = get_recorder(record_incoming, display_idx, source == VideoSource::Camera);
                 return Ok((encoder, encoder_cfg, codec_format, use_i444, recorder));
@@ -1669,16 +1681,26 @@ pub fn make_display_changed_msg(
     Some(msg_out)
 }
 
+fn check_encoder_fps(qos: &VideoQoS, opened: Option<u32>) -> ResultType<()> {
+    if opened.is_some_and(|fps| fps != qos.auto_target_fps()) {
+        log::info!("switch encoder after the requested frame rate changed");
+        bail!("SWITCH");
+    }
+    Ok(())
+}
+
 fn check_qos(
     encoder: &mut Encoder,
     ratio: &mut f32,
     spf: &mut Duration,
+    ffmpeg_fps: Option<u32>,
     client_record: bool,
     send_counter: &mut usize,
     second_instant: &mut Instant,
     name: &str,
 ) -> ResultType<(bool, bool)> {
     let mut video_qos = VIDEO_QOS.lock().unwrap();
+    check_encoder_fps(&video_qos, ffmpeg_fps)?;
     let fixed_pacing = video_qos.fixed_target().is_some();
     let observe_auto_bitrate =
         video_qos.latest_quality().uses_auto_bitrate() && video_qos.in_vbr_state();
@@ -1793,6 +1815,19 @@ mod tests {
         refresh_allowed, unbounded_channel, Arc, HashSet, TokioMutex, VideoFrameController,
         FRAME_FETCHED_NOTIFIERS,
     };
+
+    #[test]
+    fn only_an_explicit_new_frame_rate_reconfigures_the_screen_encoder() {
+        let mut qos = super::VideoQoS::default();
+        qos.on_connection_open(1);
+        qos.user_custom_fps(1, 60);
+        qos.user_auto_adjust_fps(1, 15);
+        assert!(super::check_encoder_fps(&qos, Some(60)).is_ok());
+        qos.user_custom_fps(1, 30);
+        assert!(super::check_encoder_fps(&qos, Some(60)).is_err());
+        assert!(super::check_encoder_fps(&qos, Some(30)).is_ok());
+        assert!(super::check_encoder_fps(&qos, None).is_ok());
+    }
 
     #[cfg(windows)]
     #[test]
