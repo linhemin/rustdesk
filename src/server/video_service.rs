@@ -744,6 +744,7 @@ fn run(vs: VideoService) -> ResultType<()> {
         scrap::dxgi::take_prefetched_frames();
     }
     let mut last_check_displays = time::Instant::now();
+    let mut capture_deadline = start;
     #[cfg(windows)]
     let mut dxgi_first_frame_started = vs.source.is_monitor().then_some(dxgi_recovery_started.unwrap_or(start));
     #[cfg(windows)]
@@ -1173,12 +1174,22 @@ fn run(vs: VideoService) -> ResultType<()> {
         let elapsed = now.elapsed();
         // may need to enable frame(timeout)
         log::trace!("{:?} {:?}", time::Instant::now(), elapsed);
-        if elapsed < spf {
+        if vs.source.is_monitor() {
+            capture_deadline = next_capture_deadline(capture_deadline, spf, Instant::now());
+            if let Some(wait) = capture_deadline.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+        } else if elapsed < spf {
             std::thread::sleep(spf - elapsed);
         }
     }
 
     Ok(())
+}
+
+fn next_capture_deadline(previous: Instant, interval: Duration, finished: Instant) -> Instant {
+    // Keep timer wake-up jitter from accumulating, and discard missed ticks after a stall.
+    (previous + interval).max(finished)
 }
 
 struct Raii {
@@ -1815,6 +1826,23 @@ mod tests {
         refresh_allowed, unbounded_channel, Arc, HashSet, TokioMutex, VideoFrameController,
         FRAME_FETCHED_NOTIFIERS,
     };
+
+    #[test]
+    fn screen_capture_keeps_cadence_without_replaying_missed_ticks() {
+        use super::{next_capture_deadline, Duration, Instant};
+
+        let start = Instant::now();
+        let frame = Duration::from_secs_f64(1.0 / 120.0);
+        let late = Duration::from_micros(500);
+        let mut deadline = start;
+        for index in 1..=120 {
+            deadline = next_capture_deadline(deadline, frame, deadline + late);
+            assert_eq!(deadline, start + frame * index);
+        }
+        let stalled = deadline + frame * 5;
+        assert_eq!(next_capture_deadline(deadline, frame, stalled), stalled);
+        assert_eq!(next_capture_deadline(stalled, frame, stalled + late), stalled + frame);
+    }
 
     #[test]
     fn only_an_explicit_new_frame_rate_reconfigures_the_screen_encoder() {
