@@ -13,6 +13,7 @@ import 'package:flutter_hbb/desktop/widgets/session_whiteboard.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/mobile/awesun/awesun_flutter_overlay.dart';
 import 'package:flutter_hbb/mobile/widgets/macro_shortcut_bar.dart';
+import 'package:flutter_hbb/mobile/widgets/session_keyboard.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -299,6 +300,33 @@ void main() {
       expect(find.text('Alt+Tab'), findsOneWidget);
       await tester.tap(find.text('Alt+Tab'));
       expect(fired?.id, 'alt_tab');
+    });
+
+    testWidgets('TaskMgr uses Control and Shift together', (tester) async {
+      final sent = <(Set<SessionModifier>, String)>[];
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SessionKeyboard(
+            compact: false,
+            isMac: false,
+            showMouseButtons: false,
+            enabled: true,
+            modifiers: const {},
+            onModifier: (_) {},
+            onKey: (_) {},
+            onMouse: (_) {},
+            onShortcut: (modifiers, key) => sent.add((modifiers, key)),
+            onTextInput: () {},
+            onClose: () {},
+          ),
+        ),
+      ));
+      await tester.tap(find.text('Shortcuts'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('TaskMgr'));
+
+      expect(sent.single.$1, {SessionModifier.ctrl, SessionModifier.shift});
+      expect(sent.single.$2, 'VK_ESCAPE');
     });
 
     testWidgets('AwesunFlutterOverlay first-run tour steps through and dismisses',

@@ -62,7 +62,7 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
     _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
       setState(() {
-        _meterTick = (_meterTick + 1) % 6;
+        _meterTick = (_meterTick + 1) % 4;
         _updateElapsed();
       });
     });
@@ -214,7 +214,8 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
                   : active
                       ? 'Waiting'
                       : 'Disconnected');
-          final micActive = voice != VoiceCallStatus.notStarted && active;
+          final micActive = voice == VoiceCallStatus.connected && active;
+          final micRequested = voice != VoiceCallStatus.notStarted && active;
           final theme = Theme.of(context);
           final accent = micActive
               ? WorkspaceStyle.success(context)
@@ -269,26 +270,26 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
                       ],
                     ),
                     const SizedBox(height: 20),
-                    // Live microphone indicator & large one-tap toggle button.
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        for (var i = 0; i < 5; i++)
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 220),
-                            margin: const EdgeInsets.symmetric(horizontal: 3),
-                            width: 4,
-                            height: micActive
-                                ? 10.0 + ((i + _meterTick) % 4) * 6.0
-                                : 6.0,
-                            decoration: BoxDecoration(
-                              color: micActive
-                                  ? WorkspaceStyle.success(context)
-                                  : theme.dividerColor,
-                              borderRadius: BorderRadius.circular(99),
+                    SizedBox(
+                      height: 28,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          for (var i = 0; i < 5; i++)
+                            AnimatedContainer(
+                              duration: const Duration(milliseconds: 220),
+                              margin: const EdgeInsets.symmetric(horizontal: 3),
+                              width: 4,
+                              height: micActive
+                                  ? 10.0 + ((i + _meterTick) % 4) * 6.0
+                                  : 6.0,
+                              decoration: BoxDecoration(
+                                color: micActive ? accent : theme.dividerColor,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
                     const SizedBox(height: 14),
                     SizedBox(
@@ -306,7 +307,7 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
                               : theme.colorScheme.onSurface,
                         ),
                         onPressed: allowed && !_changingMicrophone
-                            ? () => _setMicrophone(!micActive)
+                            ? () => _setMicrophone(!micRequested)
                             : null,
                         child: Icon(
                           micActive ? Icons.mic_rounded : Icons.mic_off_rounded,
@@ -327,7 +328,7 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
                       subtitle: voice == VoiceCallStatus.waitingForResponse
                           ? Text(translate('Waiting'))
                           : null,
-                      value: micActive,
+                      value: micRequested,
                       onChanged: allowed && !_changingMicrophone
                           ? _setMicrophone
                           : null,

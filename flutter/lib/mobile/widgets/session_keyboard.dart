@@ -9,7 +9,8 @@ enum SessionModifier { ctrl, shift, alt, meta }
 
 enum _KeyboardPage { keys, function, shortcuts }
 
-typedef SessionShortcut = void Function(SessionModifier modifier, String key);
+typedef SessionShortcut = void Function(
+    Set<SessionModifier> modifiers, String key);
 typedef _RemoteKey = (String, String);
 
 const _editKeys = <_RemoteKey>[
@@ -198,25 +199,18 @@ class _SessionKeyboardState extends State<SessionKeyboard> {
             widget.isMac ? SessionModifier.meta : SessionModifier.ctrl;
         final label = widget.isMac ? '⌘' : 'Ctrl';
         void triggerMacro(MobileMacroShortcut macro) {
-          if (macro.keys.length == 2) {
-            final mod = switch (macro.keys.first) {
-              'Alt' => SessionModifier.alt,
-              'Meta' => SessionModifier.meta,
-              'Shift' => SessionModifier.shift,
-              _ => primary,
-            };
-            final k = macro.keys.last.toUpperCase();
-            final vk = k == 'TAB'
-                ? 'VK_TAB'
-                : k == 'SPACE'
-                    ? 'VK_SPACE'
-                    : k == 'ESCAPE'
-                        ? 'VK_ESCAPE'
-                        : 'VK_$k';
-            widget.onShortcut(mod, vk);
-          } else {
-            widget.onShortcut(SessionModifier.ctrl, 'VK_ESCAPE');
-          }
+          final modifiers = {
+            for (final key in macro.keys.take(macro.keys.length - 1))
+              switch (key) {
+                'Control' => SessionModifier.ctrl,
+                'Alt' => SessionModifier.alt,
+                'Meta' => SessionModifier.meta,
+                'Shift' => SessionModifier.shift,
+                _ => primary,
+              },
+          };
+          final key = macro.keys.last.toUpperCase();
+          widget.onShortcut(modifiers, 'VK_$key');
         }
 
         return [
@@ -227,7 +221,7 @@ class _SessionKeyboardState extends State<SessionKeyboard> {
           _row(Row(
             children: [
               for (final key in ['C', 'V', 'X', 'Z', 'A', 'S'])
-                _key('$label+$key', () => widget.onShortcut(primary, 'VK_$key'),
+                _key('$label+$key', () => widget.onShortcut({primary}, 'VK_$key'),
                     width: 64),
             ],
           )),
@@ -235,14 +229,14 @@ class _SessionKeyboardState extends State<SessionKeyboard> {
             children: [
               if (widget.isMac)
                 _key('⌘+Tab',
-                    () => widget.onShortcut(SessionModifier.meta, 'VK_TAB'),
+                    () => widget.onShortcut({SessionModifier.meta}, 'VK_TAB'),
                     width: 72)
               else ...[
                 _key('Alt+Tab',
-                    () => widget.onShortcut(SessionModifier.alt, 'VK_TAB'),
+                    () => widget.onShortcut({SessionModifier.alt}, 'VK_TAB'),
                     width: 72),
                 _key('Win+D',
-                    () => widget.onShortcut(SessionModifier.meta, 'VK_D'),
+                    () => widget.onShortcut({SessionModifier.meta}, 'VK_D'),
                     width: 72),
               ],
             ],
@@ -279,7 +273,7 @@ class _SessionKeyboardState extends State<SessionKeyboard> {
           onSelected: (entry) {
             final (label, key) = entry;
             if (label.isEmpty) {
-              widget.onShortcut(primary, key);
+              widget.onShortcut({primary}, key);
             } else {
               widget.onKey(key);
             }

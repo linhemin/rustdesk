@@ -434,10 +434,9 @@ class _GlobalActiveSessionsBanner extends StatelessWidget {
                   icon: Icon(Icons.close_rounded,
                       size: 16, color: theme.colorScheme.primary),
                   onPressed: () {
-                    for (final session in remotes) {
-                      unawaited(session.close());
-                    }
-                    if (audio != null) {
+                    if (firstRemote != null) {
+                      unawaited(firstRemote.close());
+                    } else if (audio != null) {
                       unawaited(PhoneMicrophone.disconnect(audio));
                     }
                   },

@@ -188,6 +188,33 @@ void main() {
     await tester.pump();
     expect(tester.widget<SwitchListTile>(speaker).value, isTrue);
     expect(tester.widget<SwitchListTile>(microphone).value, isFalse);
+
+    final meterBars = find.descendant(
+      of: find.byType(PhoneMicrophonePage),
+      matching: find.byType(AnimatedContainer),
+    );
+    expect(meterBars, findsNWidgets(5));
+    List<double> barHeights() => [
+          for (var i = 0; i < 5; i++) tester.getSize(meterBars.at(i)).height,
+        ];
+    final idleHeights = barHeights();
+
+    audio.chatModel.onVoiceCallWaiting();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(barHeights(), idleHeights);
+
+    audio.chatModel.onVoiceCallStarted();
+    await tester.pumpAndSettle();
+    final activeHeights = barHeights();
+    expect(activeHeights, isNot(idleHeights));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(barHeights(), isNot(activeHeights));
+
+    audio.chatModel.onVoiceCallClosed('');
+    await tester.pumpAndSettle();
+    expect(barHeights(), idleHeights);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 

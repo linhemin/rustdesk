@@ -885,10 +885,10 @@ class _RemotePageState extends State<RemotePage>
     }
   }
 
-  void _sendSessionShortcut(SessionModifier modifier, String key) {
+  void _sendSessionShortcut(Set<SessionModifier> modifiers, String key) {
     final old = _sessionModifiers;
     for (final value in SessionModifier.values) {
-      _setSessionModifier(value, value == modifier);
+      _setSessionModifier(value, modifiers.contains(value));
     }
     try {
       _sendSessionKey(key);
