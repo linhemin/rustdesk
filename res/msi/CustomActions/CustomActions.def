@@ -12,6 +12,10 @@ EXPORTS
     SetPropertyFromConfig
     AddRegSoftwareSASGeneration
     RemoveAmyuniIdd
+    DetectPhoneMicrophone
+    InstallPhoneMicrophone
+    RemovePhoneMicrophone
+    InstallVBCable
     InstallPrinter
     UninstallPrinter
     SetPrinterInstallDefault

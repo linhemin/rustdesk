@@ -1,0 +1,155 @@
+diff --git a/audio/simpleaudiosample/Source/Main/Main.vcxproj b/audio/simpleaudiosample/Source/Main/Main.vcxproj
+index b569da4..5c83220 100644
+--- a/audio/simpleaudiosample/Source/Main/Main.vcxproj
++++ b/audio/simpleaudiosample/Source/Main/Main.vcxproj
+@@ -179,20 +179,20 @@
+     </DriverSign>
+   </ItemDefinitionGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+-    <TargetName>SimpleAudioSample</TargetName>
++    <TargetName>RustDeskPhoneMicrophone</TargetName>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+-    <TargetName>SimpleAudioSample</TargetName>
++    <TargetName>RustDeskPhoneMicrophone</TargetName>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+-    <TargetName>SimpleAudioSample</TargetName>
++    <TargetName>RustDeskPhoneMicrophone</TargetName>
+   </PropertyGroup>
+   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
+-    <TargetName>SimpleAudioSample</TargetName>
++    <TargetName>RustDeskPhoneMicrophone</TargetName>
+   </PropertyGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+     <Link>
+-      <AdditionalDependencies>%(AdditionalDependencies);.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
++      <AdditionalDependencies>%(AdditionalDependencies);wdmsec.lib;.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
+     </Link>
+     <Link>
+       <AdditionalDependencies>%(AdditionalDependencies);.\..\Filters\$(IntDir)\Filters.lib</AdditionalDependencies>
+@@ -228,7 +228,7 @@
+   </ItemDefinitionGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
+     <Link>
+-      <AdditionalDependencies>%(AdditionalDependencies);.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
++      <AdditionalDependencies>%(AdditionalDependencies);wdmsec.lib;.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
+     </Link>
+     <Link>
+       <AdditionalDependencies>%(AdditionalDependencies);.\..\Filters\$(IntDir)\Filters.lib</AdditionalDependencies>
+@@ -256,7 +256,7 @@
+   </ItemDefinitionGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+     <Link>
+-      <AdditionalDependencies>%(AdditionalDependencies);.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
++      <AdditionalDependencies>%(AdditionalDependencies);wdmsec.lib;.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
+     </Link>
+     <Link>
+       <AdditionalDependencies>%(AdditionalDependencies);.\..\Filters\$(IntDir)\Filters.lib</AdditionalDependencies>
+@@ -284,7 +284,7 @@
+   </ItemDefinitionGroup>
+   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
+     <Link>
+-      <AdditionalDependencies>%(AdditionalDependencies);.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
++      <AdditionalDependencies>%(AdditionalDependencies);wdmsec.lib;.\..\Utilities\$(IntDir)\Utilities.lib</AdditionalDependencies>
+     </Link>
+     <Link>
+       <AdditionalDependencies>%(AdditionalDependencies);.\..\Filters\$(IntDir)\Filters.lib</AdditionalDependencies>
+@@ -311,6 +311,7 @@
+     </ResourceCompile>
+   </ItemDefinitionGroup>
+   <ItemGroup>
++    <ClCompile Include="pcm.cpp" />
+     <ClCompile Include="adapter.cpp" />
+     <ClCompile Include="basetopo.cpp" />
+     <ClCompile Include="common.cpp" />
+@@ -321,7 +322,7 @@
+     <ResourceCompile Include="SimpleAudioSample.rc" />
+   </ItemGroup>
+   <ItemGroup>
+-    <Inf Exclude="@(Inx)" Include="*.inx" />
++    <Inf Exclude="@(Inx)" Include="RustDeskPhoneMicrophone.inx" />
+     <FilesToPackage Include="$(TargetPath)" Condition="'$(ConfigurationType)'=='Driver' or '$(ConfigurationType)'=='DynamicLibrary'" />
+   </ItemGroup>
+   <ItemGroup>
+diff --git a/audio/simpleaudiosample/Source/Main/SimpleAudioSample.rc b/audio/simpleaudiosample/Source/Main/SimpleAudioSample.rc
+index 7fbb489..fc8b0a2 100644
+--- a/audio/simpleaudiosample/Source/Main/SimpleAudioSample.rc
++++ b/audio/simpleaudiosample/Source/Main/SimpleAudioSample.rc
+@@ -16,9 +16,9 @@ Abstract:
+ 
+ #define VER_FILETYPE                VFT_DRV
+ #define VER_FILESUBTYPE             VFT2_DRV_SOUND
+-#define VER_FILEDESCRIPTION_STR     "Microsoft Virtual Simple Audio Sample Driver"
+-#define VER_INTERNALNAME_STR        "SimpleAudioSample.sys"
+-#define VER_ORIGINALFILENAME_STR    "SimpleAudioSample.sys"
++#define VER_FILEDESCRIPTION_STR     "RustDesk Phone Microphone"
++#define VER_INTERNALNAME_STR        "RustDeskPhoneMicrophone.sys"
++#define VER_ORIGINALFILENAME_STR    "RustDeskPhoneMicrophone.sys"
+ 
+ #define VER_LEGALCOPYRIGHT_YEARS    "2013"
+ #define VER_LEGALCOPYRIGHT_STR	    "Copyright (C) Microsoft Corp." VER_LEGALCOPYRIGHT_YEARS
+diff --git a/audio/simpleaudiosample/Source/Main/adapter.cpp b/audio/simpleaudiosample/Source/Main/adapter.cpp
+index a66ee5a..492cce1 100644
+--- a/audio/simpleaudiosample/Source/Main/adapter.cpp
++++ b/audio/simpleaudiosample/Source/Main/adapter.cpp
+@@ -23,6 +23,9 @@ Abstract:
+ #include "endpoints.h"
+ #include "minipairs.h"
+ 
++NTSTATUS CreatePhoneMicrophone(PDRIVER_OBJECT);
++void DeletePhoneMicrophone(PDRIVER_OBJECT);
++
+ typedef void (*fnPcDriverUnload) (PDRIVER_OBJECT);
+ fnPcDriverUnload gPCDriverUnloadRoutine = NULL;
+ extern "C" DRIVER_UNLOAD DriverUnload;
+@@ -105,6 +108,8 @@ Environment:
+     }
+     
+     //
++    DeletePhoneMicrophone(DriverObject);
++
+     // Invoke first the port unload.
+     //
+     if (gPCDriverUnloadRoutine != NULL)
+@@ -343,6 +348,8 @@ Return Value:
+     //
+     // Hook the port class unload function
+     //
++    ntStatus = CreatePhoneMicrophone(DriverObject);
++    IF_FAILED_JUMP(ntStatus, Done);
+     gPCDriverUnloadRoutine = DriverObject->DriverUnload;
+     DriverObject->DriverUnload = DriverUnload;
+ 
+@@ -742,8 +749,7 @@ Return Value:
+     //
+     // Install wave+topology filters for render devices
+     //
+-    ntStatus = InstallAllRenderFilters(DeviceObject, Irp, pAdapterCommon);
+-    IF_FAILED_JUMP(ntStatus, Exit);
++
+ 
+     //
+     // Install wave+topology filters for capture devices
+diff --git a/audio/simpleaudiosample/Source/Main/minwavertstream.cpp b/audio/simpleaudiosample/Source/Main/minwavertstream.cpp
+index c189c93..dc98859 100644
+--- a/audio/simpleaudiosample/Source/Main/minwavertstream.cpp
++++ b/audio/simpleaudiosample/Source/Main/minwavertstream.cpp
+@@ -1389,6 +1389,8 @@ VOID CMiniportWaveRTStream::UpdatePosition
+ 
+ //=============================================================================
+ #pragma code_seg()
++void ReadPhoneMicrophone(UCHAR*, ULONG);
++
+ VOID CMiniportWaveRTStream::WriteBytes
+ (
+     _In_ ULONG ByteDisplacement
+@@ -1413,7 +1415,7 @@ ByteDisplacement - # of bytes to process.
+     {
+         ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
+         
+-        m_ToneGenerator.GenerateSine(m_pDmaBuffer + bufferOffset, runWrite);
++        ReadPhoneMicrophone(m_pDmaBuffer + bufferOffset, runWrite);
+            	
+         bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
+         ByteDisplacement -= runWrite;

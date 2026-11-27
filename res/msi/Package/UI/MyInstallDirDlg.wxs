@@ -4,6 +4,7 @@
 
 
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+    <?include ../Includes.wxi?>
     <Fragment>
         <UI>
             <Dialog Id="MyInstallDirDlg" Width="370" Height="270" Title="!(loc.InstallDirDlg_Title)">
@@ -26,6 +27,10 @@
                 <Control Id="ChkBoxStartMenuShortcuts" Type="CheckBox" X="20" Y="140" Width="290" Height="17" Property="STARTMENUSHORTCUTS" CheckBoxValue="1" Text="!(loc.MyInstallDirDlgStartMenuShortcuts)" />
                 <Control Id="ChkBoxDesktopShortcuts" Type="CheckBox" X="20" Y="160" Width="290" Height="17" Property="DESKTOPSHORTCUTS" CheckBoxValue="1" Text="!(loc.MyInstallDirDlgDesktopShortcuts)" />
                 <Control Id="ChkBoxInstallPrinter" Type="CheckBox" X="20" Y="180" Width="290" Height="17" Property="PRINTER" CheckBoxValue="1" Text="!(loc.MyInstallDirDlgPrinter)" />
+                <?ifdef VBCable ?>
+                <Control Id="ChkBoxInstallVBCable" Type="CheckBox" X="20" Y="200" Width="330" Height="17" Property="INSTALLVBCABLE" CheckBoxValue="1" Text="Install VB-CABLE for phone microphone" />
+                <Control Id="VBCableAttribution" Type="Text" X="32" Y="217" Width="320" Height="14" Text="VB-Audio donationware · www.vb-cable.com" />
+                <?endif?>
             </Dialog>
         </UI>
     </Fragment>

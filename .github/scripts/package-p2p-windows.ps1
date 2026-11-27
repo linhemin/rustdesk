@@ -1,3 +1,4 @@
+param([string]$PhoneMicrophoneDriverDirectory = $env:RUSTDESK_PHONE_MICROPHONE_DRIVER)
 $ErrorActionPreference = 'Stop'
 $payload = (Resolve-Path 'flutter/build/windows/x64/runner/Release').Path
 $exeVersion = (Get-Item -LiteralPath (Join-Path $payload 'rustdesk.exe')).VersionInfo
@@ -29,6 +30,13 @@ foreach ($name in @('WindowInjection.dll', 'printer_driver_adapter.dll', 'driver
     Copy-Item -LiteralPath (Join-Path $components $name) -Destination $payload -Recurse -Force
 }
 
+if ($PhoneMicrophoneDriverDirectory) {
+    $driver = New-Item -ItemType Directory -Force -Path (Join-Path $payload 'drivers/RustDeskPhoneMicrophone')
+    foreach ($extension in @('inf', 'cat', 'sys')) {
+        $file = "RustDeskPhoneMicrophone.$extension"
+        Copy-Item -LiteralPath (Join-Path $PhoneMicrophoneDriverDirectory $file) -Destination $driver.FullName
+    }
+}
 $output = New-Item -ItemType Directory -Path 'p2p-package' -Force
 Push-Location res/msi
 try {

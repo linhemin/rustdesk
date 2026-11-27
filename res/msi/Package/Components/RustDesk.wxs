@@ -38,7 +38,33 @@
 		     every custom client. -->
 		<CustomAction Id="InstallPrinter.SetParam" Return="check" Property="InstallPrinter" Value="[ProductName]|[INSTALLFOLDER_INNER]" />
 		<CustomAction Id="UninstallPrinter.SetParam" Return="check" Property="UninstallPrinter" Value="[ProductName]" />
-		<InstallExecuteSequence>
+        <?ifdef VBCable ?>
+        <Property Id="INSTALLVBCABLE" Value="1" Secure="yes" />
+        <CustomAction Id="InstallVBCable" DllEntry="InstallVBCable" BinaryRef="Custom_Actions_Dll" Execute="commit" Impersonate="no" Return="check" />
+        <CustomAction Id="SetVBCablePath" Property="InstallVBCable" Value="[INSTALLFOLDER_INNER]third-party\VB-CABLE\vbMmeCable64_win10.inf" />
+        <?endif?>
+        <?ifdef PhoneMicrophone ?>
+        <Property Id="RD_MIC_OS_BUILD">
+            <RegistrySearch Id="FindPhoneMicrophoneWindowsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" Bitness="always64" />
+        </Property>
+        <CustomAction Id="DetectPhoneMicrophone" DllEntry="DetectPhoneMicrophone" BinaryRef="Custom_Actions_Dll" Execute="immediate" Return="check" />
+        <CustomAction Id="InstallPhoneMicrophone" DllEntry="InstallPhoneMicrophone" BinaryRef="Custom_Actions_Dll" Execute="deferred" Impersonate="no" Return="$(var.PhoneMicrophoneInstallReturn)" />
+        <CustomAction Id="SetPhoneMicrophonePath" Property="InstallPhoneMicrophone" Value="[INSTALLFOLDER_INNER]drivers\RustDeskPhoneMicrophone\RustDeskPhoneMicrophone.inf" />
+        <CustomAction Id="RollbackPhoneMicrophone" DllEntry="RemovePhoneMicrophone" BinaryRef="Custom_Actions_Dll" Execute="rollback" Impersonate="no" Return="check" />
+        <CustomAction Id="RemovePhoneMicrophone" DllEntry="RemovePhoneMicrophone" BinaryRef="Custom_Actions_Dll" Execute="commit" Impersonate="no" Return="check" />
+        <?endif?>
+        <InstallExecuteSequence>
+            <?ifdef VBCable ?>
+            <Custom Action="SetVBCablePath" Before="InstallVBCable" Condition='INSTALLVBCABLE="1" AND NOT REMOVE' />
+            <Custom Action="InstallVBCable" Before="InstallFinalize" Condition='INSTALLVBCABLE="1" AND NOT REMOVE' />
+            <?endif?>
+            <?ifdef PhoneMicrophone ?>
+            <Custom Action="DetectPhoneMicrophone" Before="RollbackPhoneMicrophone" Condition="RD_MIC_OS_BUILD &gt;= 22000 AND NOT REMOVE" />
+            <Custom Action="RollbackPhoneMicrophone" Before="InstallPhoneMicrophone" Condition="RD_MIC_OS_BUILD &gt;= 22000 AND NOT REMOVE AND NOT RD_MIC_PRESENT" />
+            <Custom Action="SetPhoneMicrophonePath" Before="InstallPhoneMicrophone" Condition="RD_MIC_OS_BUILD &gt;= 22000 AND NOT REMOVE" />
+            <Custom Action="InstallPhoneMicrophone" After="InstallFiles" Condition="RD_MIC_OS_BUILD &gt;= 22000 AND NOT REMOVE" />
+            <Custom Action="RemovePhoneMicrophone" Before="InstallFinalize" Condition='REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+            <?endif?>
 
 			<Custom Action="SetPropertyIsServiceRunning" After="InstallInitialize" Condition="Installed" />
 			<Custom Action="SetPropertyIsServiceRunning.SetParam.AppName" Before="SetPropertyIsServiceRunning" Condition="Installed" />

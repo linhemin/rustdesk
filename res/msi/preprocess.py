@@ -45,6 +45,10 @@ def default_revision_version():
 def make_parser():
     parser = argparse.ArgumentParser(description="Msi preprocess script.")
     parser.add_argument(
+        "--allow-unsigned-phone-microphone", action="store_true",
+        help="Package a development microphone driver and allow app installation if Windows rejects it.",
+    )
+    parser.add_argument(
         "-d",
         "--dist-dir",
         type=str,
@@ -242,6 +246,28 @@ def put_app_exe_on_media2():
 
 
 def gen_pre_vars(args, dist_dir):
+    driver = dist_dir / "drivers" / "RustDeskPhoneMicrophone"
+    vb_cable = dist_dir / "third-party" / "VB-CABLE"
+    if vb_cable.is_dir():
+        import subprocess
+        catalog = vb_cable / "vbaudio_cable64_win10.cat"
+        for name in ("vbMmeCable64_win10.inf", "vbaudio_cable64_win10.sys"):
+            subprocess.run(
+                ["signtool", "verify", "/kp", "/c", str(catalog), str(vb_cable / name)],
+                check=True,
+            )
+    if args.allow_unsigned_phone_microphone:
+        for suffix in ("cat", "inf", "sys"):
+            member = driver / f"RustDeskPhoneMicrophone.{suffix}"
+            if not member.is_file():
+                raise FileNotFoundError(member)
+    elif driver.exists():
+        import subprocess
+        catalog = driver / "RustDeskPhoneMicrophone.cat"
+        for suffix in ("inf", "sys"):
+            member = driver / f"RustDeskPhoneMicrophone.{suffix}"
+            subprocess.run(["signtool", "verify", "/kp", "/c", str(catalog), str(member)], check=True)
+
     def func(lines, index_start):
         upgrade_code = uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".exe")
 
@@ -261,6 +287,12 @@ def gen_pre_vars(args, dist_dir):
             f'{indent}<?define UpgradeCode = "{upgrade_code}" ?>\n',
         ]
 
+        if vb_cable.is_dir():
+            to_insert_lines.append(f'{indent}<?define VBCable="1" ?>\n')
+        if driver.is_dir():
+            to_insert_lines.append(f'{indent}<?define PhoneMicrophone="1" ?>\n')
+            install_return = "ignore" if args.allow_unsigned_phone_microphone else "check"
+            to_insert_lines.append(f'{indent}<?define PhoneMicrophoneInstallReturn="{install_return}" ?>\n')
         for i, line in enumerate(to_insert_lines):
             lines.insert(index_start + i + 1, line)
         return lines
