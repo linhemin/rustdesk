@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../../common.dart';
+import '../relay_probe.dart';
 import '../relay_servers.dart';
+import 'workspace.dart';
 
 class _RelayRow {
   _RelayRow(RelayEndpoint entry)
@@ -15,6 +17,8 @@ class _RelayRow {
   final TextEditingController publicKey;
   final addressFocus = FocusNode();
   bool custom;
+  EndpointProbeResult? probeResult;
+  bool probing = false;
 
   void dispose() {
     addressFocus.dispose();
@@ -30,13 +34,15 @@ class RelayServersField extends StatefulWidget {
       this.error,
       this.enabled = true,
       this.readOnly = false,
-      this.onEdited});
+      this.onEdited,
+      this.probeConnector});
 
   final TextEditingController controller;
   final String? error;
   final bool enabled;
   final bool readOnly;
   final VoidCallback? onEdited;
+  final TcpProbeConnector? probeConnector;
 
   @override
   State<RelayServersField> createState() => _RelayServersFieldState();
@@ -121,6 +127,78 @@ class _RelayServersFieldState extends State<RelayServersField> {
     final row = _RelayRow(const RelayEndpoint(''));
     setState(() => _rows.add(row));
     row.addressFocus.requestFocus();
+  }
+
+  bool get _anyProbing => _rows.any((r) => r.probing);
+
+  Future<void> _probeAll() async {
+    final targets =
+        _rows.where((r) => r.address.text.trim().isNotEmpty).toList();
+    if (targets.isEmpty || _anyProbing) return;
+    setState(() {
+      for (final row in targets) {
+        row.probing = true;
+        row.probeResult = null;
+      }
+    });
+    await Future.wait(targets.map((row) async {
+      final result = await probeTcpEndpoint(
+        row.address.text.trim(),
+        defaultPort: 21117,
+        connector: widget.probeConnector,
+      );
+      if (!mounted) return;
+      setState(() {
+        row.probing = false;
+        row.probeResult = result;
+      });
+    }));
+  }
+
+  Widget _probeBadge(BuildContext context, _RelayRow row) {
+    if (row.probing) {
+      return const Padding(
+        padding: EdgeInsets.only(left: 8),
+        child: SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    }
+    final res = row.probeResult;
+    if (res == null) return const SizedBox.shrink();
+    final Color color;
+    final String label;
+    if (res.reachable) {
+      final ms = res.latencyMs ?? 1;
+      color = ms <= 120
+          ? WorkspaceStyle.success(context)
+          : WorkspaceStyle.warning(context);
+      label = '$ms ms';
+    } else {
+      color = WorkspaceStyle.danger(context);
+      label = res.error ?? translate('Failed');
+    }
+    return Container(
+      margin: const EdgeInsets.only(left: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.14),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
+    );
   }
 
   @override
@@ -213,6 +291,17 @@ class _RelayServersFieldState extends State<RelayServersField> {
                   size: 20, color: colors.onSurfaceVariant),
             ),
         ]),
+        if (row.probing || row.probeResult != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              children: [
+                Icon(Icons.speed_rounded,
+                    size: 14, color: colors.onSurfaceVariant),
+                Flexible(child: _probeBadge(context, row)),
+              ],
+            ),
+          ),
         const SizedBox(height: 4),
         Row(children: [
           ExcludeSemantics(
@@ -312,6 +401,12 @@ class _RelayServersFieldState extends State<RelayServersField> {
                 Text('${translate("Relay nodes")}  ${_rows.length} / 8',
                     style: theme.textTheme.labelLarge
                         ?.copyWith(color: colors.onSurfaceVariant)),
+                if (_rows.any((r) => r.address.text.trim().isNotEmpty))
+                  TextButton.icon(
+                    onPressed: _anyProbing ? null : _probeAll,
+                    icon: const Icon(Icons.speed_rounded, size: 16),
+                    label: Text(translate('Test')),
+                  ),
                 if (widget.readOnly)
                   Text(translate('Managed by your administrator'),
                       style: theme.textTheme.bodySmall)

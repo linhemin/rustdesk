@@ -30,6 +30,7 @@ import 'package:window_size/window_size.dart' as window_size;
 
 import '../consts.dart';
 import 'common/widgets/overlay.dart';
+import 'common/widgets/network_tools_dialogs.dart';
 import 'common/relay_servers.dart';
 import 'common/widgets/workspace.dart';
 import 'mobile/pages/file_manager_page.dart';
@@ -1310,11 +1311,21 @@ void msgBox(SessionID sessionId, String type, String title, String text,
   if (link.isNotEmpty) {
     buttons.insert(0, dialogButton('JumpLink', onPressed: jumplink));
   }
+  final showDiag =
+      !isWeb && type.contains('error') && title == 'Connection Error';
   dialogManager.show(
     (setState, close, context) => CustomAlertDialog(
       title: null,
       content: SelectionArea(child: msgboxContent(type, title, text)),
-      actions: buttons,
+      actions: [
+        if (showDiag)
+          dialogButton(
+            'Diagnostics',
+            onPressed: () => showNetworkDiagnosticsDialog(context),
+            isOutline: true,
+          ),
+        ...buttons,
+      ],
       onSubmit: hasOk ? submit : null,
       onCancel: hasCancel == true ? cancel : null,
     ),
