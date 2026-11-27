@@ -29,7 +29,11 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
+import '../../common/brand_links.dart';
+import '../../common/widgets/account_sync_card.dart';
+import '../../common/widgets/network_tools_dialogs.dart';
 import '../../common/widgets/dialog.dart';
+import '../widgets/settings_search_index.dart';
 import '../widgets/settings_workspace.dart';
 import '../../common/widgets/login.dart';
 
@@ -49,7 +53,7 @@ const String _kSettingPageControllerTag = 'settingPageController';
 const String _kSettingPageTabKeyTag = 'settingPageTabKey';
 
 bool get _expandedDesktopSettings =>
-    usesWorkspaceStyle && (isWindows || isMacOS);
+    usesWorkspaceStyle && (isWindows || isMacOS || isLinux);
 
 class _TabInfo {
   late final SettingsTabKey key;
@@ -362,11 +366,16 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
       final theme = Theme.of(context);
       final tabs = _settingTabs();
       final query = _searchQuery.trim().toLowerCase();
+      final searchResult = searchDesktopSettings(
+        query: query,
+        availableTabs: [for (final t in tabs) t.key],
+      );
       final filteredIndices = <int>[
         for (var i = 0; i < tabs.length; i++)
           if (query.isEmpty ||
               translate(tabs[i].label).toLowerCase().contains(query) ||
-              tabs[i].label.toLowerCase().contains(query))
+              tabs[i].label.toLowerCase().contains(query) ||
+              searchResult.matchingTabs.contains(tabs[i].key))
             i,
       ];
       return Scaffold(
@@ -1154,6 +1163,17 @@ class _GeneralState extends State<_General> {
     }
 
     builder(devices, currentDevice, setDevice) {
+      final list = devices.whereType<String>().toList();
+      final virtualMic = list.firstWhereOrNull((d) {
+        final lower = d.toLowerCase();
+        return lower.contains('vb-cable') ||
+            lower.contains('cable input') ||
+            lower.contains('cable output') ||
+            lower.contains('blackhole');
+      });
+      final micColor = virtualMic != null
+          ? WorkspaceStyle.success(context)
+          : WorkspaceStyle.warning(context);
       final child = ComboBox(
         keys: devices,
         values: devices,
@@ -1163,7 +1183,37 @@ class _GeneralState extends State<_General> {
           setState(() {});
         },
       ).marginOnly(left: _kContentHMargin);
-      return _Card(title: 'Audio Input Device', children: [child]);
+      return _Card(title: 'Audio Input Device', children: [
+        child,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(_kContentHMargin, 10, 12, 4),
+          child: Row(
+            children: [
+              Icon(
+                virtualMic != null
+                    ? Icons.check_circle_outline_rounded
+                    : Icons.mic_none_rounded,
+                size: 16,
+                color: micColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  virtualMic != null
+                      ? '${translate('Audio mode')}: $virtualMic'
+                      : '${translate('Audio mode')}: ${isWindows ? 'VB-Cable (CABLE Output)' : 'VB-Cable'}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: micColor),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ]);
     }
 
     return AudioInput(builder: builder, isCm: false, isVoiceCall: false);
@@ -2414,6 +2464,22 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                             setState(() {});
                         },
                 ),
+              if (!hideServer && !isWeb) ...[
+                divider,
+                listTile(
+                  icon: Icons.qr_code_2_rounded,
+                  title: 'Export Server Config',
+                  onTap: () => showServerConfigQrDialog(context),
+                ),
+              ],
+              if (!isWeb) ...[
+                divider,
+                listTile(
+                  icon: Icons.monitor_heart_outlined,
+                  title: 'Diagnostics',
+                  onTap: () => showNetworkDiagnosticsDialog(context),
+                ),
+              ],
               if (showDirectOnly) ...[
                 if (showServerRow) divider,
                 ListTileTheme.merge(
@@ -2892,6 +2958,7 @@ class _AccountState extends State<_Account> {
       controller: scrollController,
       children: [
         _Card(title: 'Account', children: [accountAction(), useInfo()]),
+        _Card(title: 'Local', children: [const AccountSyncCard()]),
       ],
     ).marginOnly(bottom: _kListViewBottomMargin);
   }
@@ -3225,7 +3292,7 @@ class _AboutState extends State<_About> {
                       .marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://rustdesk.com/privacy.html');
+                    launchUrlString(BrandLinks.privacyUrl);
                   },
                   child: Text(
                     translate('Privacy Statement'),
@@ -3233,7 +3300,7 @@ class _AboutState extends State<_About> {
                   ).marginSymmetric(vertical: 4.0)),
               InkWell(
                   onTap: () {
-                    launchUrlString('https://rustdesk.com');
+                    launchUrlString(BrandLinks.homepageUrl);
                   },
                   child: Text(
                     translate('Website'),

@@ -6,7 +6,12 @@ import 'package:auto_size_text/auto_size_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/brand_links.dart';
+import 'package:flutter_hbb/common/incoming_history.dart';
+import 'package:flutter_hbb/common/widgets/network_tools_dialogs.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
+import 'package:flutter_hbb/desktop/widgets/command_palette.dart';
+import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/common/widgets/animated_rotation_widget.dart';
 import 'package:flutter_hbb/common/widgets/custom_password.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart' show changeIdDialog;
@@ -59,6 +64,124 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   final GlobalKey _childKey = GlobalKey();
   int _destination = 0;
+  List<String> _activeRemoteSessionIds = const [];
+  DateTime? _dndUntil;
+  Timer? _dndTimer;
+
+  void _syncDndState() {
+    _dndUntil = loadIncomingDndUntil();
+    _dndTimer?.cancel();
+    if (_dndUntil != null) {
+      final remaining = _dndUntil!.difference(DateTime.now());
+      if (remaining.isNegative) {
+        unawaited(saveIncomingDndUntil(null));
+        _dndUntil = null;
+      } else {
+        _dndTimer = Timer(remaining, () async {
+          await saveIncomingDndUntil(null);
+          await start_service(true);
+          if (mounted) setState(() => _dndUntil = null);
+        });
+      }
+    }
+  }
+
+  Future<void> _toggleIncomingDnd({bool oneHour = false}) async {
+    if (svcStopped.value) {
+      await saveIncomingDndUntil(null);
+      _dndTimer?.cancel();
+      _dndUntil = null;
+      await start_service(true);
+    } else {
+      final until =
+          oneHour ? DateTime.now().add(const Duration(hours: 1)) : null;
+      await saveIncomingDndUntil(until);
+      _syncDndState();
+      await bind.mainSetOption(key: 'stop-service', value: 'Y');
+      svcStopped.value = true;
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refreshActiveRemoteSessions() async {
+    try {
+      final sessions = await rustDeskWinManager.call(
+          WindowType.RemoteDesktop, kWindowEventGetRemoteList, null);
+      final ids = sessions.result is String
+          ? (sessions.result as String)
+              .split(',')
+              .where((id) => id.isNotEmpty)
+              .toList()
+          : const <String>[];
+      if (mounted) {
+        setState(() => _activeRemoteSessionIds = ids);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _openCommandPalette(BuildContext context) async {
+    final peers = <Peer>[];
+    try {
+      final raw = await bind.mainLoadRecentPeersForAb(filter: '');
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        for (final item in decoded) {
+          if (item is Map<String, dynamic>) {
+            peers.add(Peer.fromJson(item));
+          }
+        }
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    final items = <DesktopCommandItem>[
+      ...buildPeerCommandItems(
+        peers: peers,
+        onConnectPeer: (peer, {isFileTransfer = false, isTerminal = false}) {
+          connect(
+            context,
+            peer.id,
+            isFileTransfer: isFileTransfer,
+            isTerminal: isTerminal,
+          );
+        },
+      ),
+      if (!bind.isOutgoingOnly())
+        DesktopCommandItem(
+          id: 'nav:desktop',
+          title: translate('Your Desktop'),
+          subtitle: translate('ID'),
+          icon: Icons.laptop_mac_rounded,
+          onRun: () => setState(() => _destination = 1),
+        ),
+      if (!bind.isDisableSettings())
+        DesktopCommandItem(
+          id: 'nav:settings',
+          title: translate('Settings'),
+          subtitle: translate('Settings'),
+          icon: Icons.settings_outlined,
+          onRun: DesktopTabPage.onAddSetting,
+        ),
+      DesktopCommandItem(
+        id: 'tool:diagnostics',
+        title: translate('Diagnostics'),
+        subtitle: translate('Network'),
+        icon: Icons.monitor_heart_outlined,
+        onRun: () => showNetworkDiagnosticsDialog(context),
+      ),
+      DesktopCommandItem(
+        id: 'tool:qr',
+        title: translate('Export Server Config'),
+        subtitle: translate('ID/Relay Server'),
+        icon: Icons.qr_code_2_rounded,
+        onRun: () => showServerConfigQrDialog(context),
+      ),
+    ];
+    await showDesktopCommandPalette(
+      context,
+      items: items,
+      onConnectRawId: (id) => connect(context, id),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -91,7 +214,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       void select(int index) {
         FocusManager.instance.primaryFocus?.unfocus();
         setState(() => _destination = index);
-        if (index == sessionsIndex) _showExistingRemoteSession(index);
+        if (index == sessionsIndex) {
+          _refreshActiveRemoteSessions();
+          _showExistingRemoteSession(index);
+        }
       }
 
       final content = Column(children: [
@@ -100,6 +226,49 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [loadLogo(), loadPowered(context)]),
         if (incoming) buildPresetPasswordWarning(),
+        if (current == sessionsIndex && _activeRemoteSessionIds.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 14, 24, 0),
+            child: WorkspacePanel(
+              radius: 12,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.desktop_windows_outlined,
+                      size: 18, color: WorkspaceStyle.success(context)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Text(
+                          '${translate('Active sessions')} (${_activeRemoteSessionIds.length})',
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600),
+                        ),
+                        for (final sid in _activeRemoteSessionIds)
+                          ActionChip(
+                            label: Text(sid),
+                            avatar: Icon(Icons.circle,
+                                size: 8,
+                                color: WorkspaceStyle.success(context)),
+                            onPressed: () =>
+                                _showExistingRemoteSession(sessionsIndex),
+                          ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: translate('Refresh'),
+                    icon: const Icon(Icons.refresh_rounded, size: 18),
+                    onPressed: _refreshActiveRemoteSessions,
+                  ),
+                ],
+              ),
+            ),
+          ),
         Expanded(
             child: IndexedStack(
                 index: current == incomingIndex ? 1 : 0,
@@ -123,49 +292,62 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                 _identityWorkspace(context, current == incomingIndex),
             ])),
       ]);
-      return _buildBlock(
-          child: WorkspaceNavigation(
-        brand: bind.mainGetAppNameSync(),
-        mark: bind.mainGetAppNameSync() == 'RustDesk'
-            ? ExcludeSemantics(
-                child: Container(
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primary,
-                        borderRadius: BorderRadius.circular(6)),
-                    child: const Text('R',
-                        style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 14))))
-            : loadIcon(28),
-        destinations: destinations,
-        current: current,
-        onSelect: select,
-        identity: incoming ? _localIdentitySummary(context) : null,
-        footer: incoming ? const OnlineStatusWidget(compact: true) : null,
-        nativeNavigation: isMacOS
-            ? LayoutBuilder(
-                builder: (_, bounds) => AppleWorkspaceNavigation(
-                      labels: [for (final item in destinations) item.label],
-                      symbols: [
-                        'house',
-                        if (incoming) 'laptopcomputer',
-                        'display.2',
-                        'folder',
-                        'terminal',
-                      ],
-                      selected: current,
-                      compact: bounds.maxWidth < 200,
-                      navigationOnly: true,
-                      onSelect: select,
-                    ))
-            : null,
-        settings: translate('Settings'),
-        onSettings:
-            bind.isDisableSettings() ? null : DesktopTabPage.onAddSetting,
-        child: content,
-      ));
+      return CallbackShortcuts(
+          bindings: {
+            SingleActivator(
+              LogicalKeyboardKey.keyK,
+              meta: isMacOS,
+              control: !isMacOS,
+            ): () => _openCommandPalette(context),
+          },
+          child: Focus(
+              autofocus: false,
+              child: _buildBlock(
+                  child: WorkspaceNavigation(
+                brand: bind.mainGetAppNameSync(),
+                mark: bind.mainGetAppNameSync() == 'RustDesk'
+                    ? ExcludeSemantics(
+                        child: Container(
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primary,
+                                borderRadius: BorderRadius.circular(6)),
+                            child: const Text('R',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14))))
+                    : loadIcon(28),
+                destinations: destinations,
+                current: current,
+                onSelect: select,
+                identity: incoming ? _localIdentitySummary(context) : null,
+                footer: incoming ? const OnlineStatusWidget(compact: true) : null,
+                nativeNavigation: isMacOS
+                    ? LayoutBuilder(
+                        builder: (_, bounds) => AppleWorkspaceNavigation(
+                              labels: [
+                                for (final item in destinations) item.label
+                              ],
+                              symbols: [
+                                'house',
+                                if (incoming) 'laptopcomputer',
+                                'display.2',
+                                'folder',
+                                'terminal',
+                              ],
+                              selected: current,
+                              compact: bounds.maxWidth < 200,
+                              navigationOnly: true,
+                              onSelect: select,
+                            ))
+                    : null,
+                settings: translate('Settings'),
+                onSettings: bind.isDisableSettings()
+                    ? null
+                    : DesktopTabPage.onAddSetting,
+                child: content,
+              ))));
     }
     return _buildBlock(
         child: Row(
@@ -474,9 +656,172 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                   ),
                 ),
               if (isMacOS) _incomingMacPermissions(context),
+              _incomingHostReadinessAndVisitors(context),
               if (visible)
                 Obx(() => buildHelpCards(stateGlobal.updateUrl.value)),
             ]));
+  }
+
+  Widget _incomingHostReadinessAndVisitors(BuildContext context) {
+    final theme = Theme.of(context);
+    final visitors = loadIncomingHistory();
+    final readySvc =
+        !svcStopped.value && stateGlobal.svcStatus.value == SvcStatus.ready;
+    final hasPassword = gFFI.serverModel.serverPasswd.text.trim().isNotEmpty;
+    final macPermsOk = !isMacOS ||
+        (bind.mainIsCanScreenRecording(prompt: false) &&
+            bind.mainIsProcessTrusted(prompt: false));
+    Widget checkRow(String label, bool ok) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Icon(
+                ok ? Icons.check_circle_outline : Icons.info_outline_rounded,
+                size: 16,
+                color: ok
+                    ? WorkspaceStyle.success(context)
+                    : WorkspaceStyle.warning(context),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(label, style: theme.textTheme.bodyMedium),
+              ),
+            ],
+          ),
+        );
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 720),
+        margin: const EdgeInsets.only(top: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            WorkspacePanel(
+              radius: 12,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          translate('Status'),
+                          style: theme.textTheme.labelLarge,
+                        ),
+                      ),
+                      Obx(() => Wrap(
+                            spacing: 8,
+                            children: [
+                              OutlinedButton.icon(
+                                icon: Icon(
+                                  svcStopped.value
+                                      ? Icons.play_arrow_rounded
+                                      : Icons.do_not_disturb_on_outlined,
+                                  size: 16,
+                                ),
+                                label: Text(translate(svcStopped.value
+                                    ? 'Start service'
+                                    : 'Stop service')),
+                                onPressed: () => _toggleIncomingDnd(),
+                              ),
+                              if (!svcStopped.value)
+                                TextButton(
+                                  onPressed: () =>
+                                      _toggleIncomingDnd(oneHour: true),
+                                  child: const Text('1h'),
+                                ),
+                            ],
+                          )),
+                    ],
+                  ),
+                  if (_dndUntil != null && svcStopped.value)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        '${translate('Stop service')} → ${_dndUntil!.hour.toString().padLeft(2, '0')}:${_dndUntil!.minute.toString().padLeft(2, '0')}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                            color: WorkspaceStyle.warning(context)),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  checkRow(translate('Service is running'), readySvc),
+                  checkRow(translate('Password'), hasPassword),
+                  checkRow(translate('Permissions'), macPermsOk),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            WorkspacePanel(
+              radius: 12,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          translate('Recent Sessions'),
+                          style: theme.textTheme.labelLarge,
+                        ),
+                      ),
+                      if (visitors.isNotEmpty)
+                        TextButton(
+                          onPressed: () async {
+                            await clearIncomingHistory();
+                            if (mounted) setState(() {});
+                          },
+                          child: Text(translate('Clear')),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  if (visitors.isEmpty)
+                    Text(
+                      translate('Empty'),
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.hintColor),
+                    )
+                  else
+                    for (final rec in visitors.take(8))
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Icon(Icons.history_rounded,
+                                size: 16, color: theme.hintColor),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                rec.peerName.isNotEmpty
+                                    ? '${rec.peerName} (${rec.peerId})'
+                                    : rec.peerId,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium,
+                              ),
+                            ),
+                            Text(
+                              rec.timestampIso.length >= 16
+                                  ? rec.timestampIso
+                                      .substring(0, 16)
+                                      .replaceFirst('T', ' ')
+                                  : rec.timestampIso,
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: theme.hintColor),
+                            ),
+                          ],
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _incomingMacPermissions(BuildContext context) {
@@ -914,7 +1259,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       final isToUpdate = (isWindows || isMacOS) && bind.mainIsInstalled();
       String btnText = isToUpdate ? 'Update' : 'Download';
       GestureTapCallback onPressed = () async {
-        final Uri url = Uri.parse('https://rustdesk.com/download');
+        final Uri url = Uri.parse(BrandLinks.downloadUrl);
         await launchUrl(url);
       };
       if (isToUpdate) {
@@ -1235,6 +1580,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   void initState() {
     super.initState();
+    _syncDndState();
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
@@ -1408,6 +1754,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   @override
   void dispose() {
+    _dndTimer?.cancel();
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();

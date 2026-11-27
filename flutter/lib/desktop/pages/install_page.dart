@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/brand_links.dart';
 import 'package:flutter_hbb/desktop/widgets/install_directory_confirmation.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -198,10 +199,9 @@ class _InstallPageBodyState extends State<_InstallPageBody>
                         Text(translate('agreement_tip')).marginOnly(bottom: em),
                         InkWell(
                           hoverColor: Colors.transparent,
-                          onTap: () => launchUrlString(
-                              'https://rustdesk.com/privacy.html'),
+                          onTap: () => launchUrlString(BrandLinks.privacyUrl),
                           child: Tooltip(
-                            message: 'https://rustdesk.com/privacy.html',
+                            message: BrandLinks.privacyUrl,
                             child: Wrap(
                                 crossAxisAlignment: WrapCrossAlignment.center,
                                 children: [

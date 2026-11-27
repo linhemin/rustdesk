@@ -18,6 +18,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../common.dart';
+import '../../common/incoming_history.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
@@ -436,6 +437,15 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   void initState() {
     super.initState();
+    if (client.peerId.isNotEmpty) {
+      unawaited(recordIncomingVisitor(
+        peerId: client.peerId,
+        peerName: client.name,
+        sessionType: client.isPhoneMicrophone
+            ? 'audio'
+            : client.type_().name,
+      ));
+    }
     _timer = Timer.periodic(Duration(seconds: 1), (_) {
       if (client.authorized && !client.disconnected) {
         _time.value = _time.value + 1;
@@ -631,6 +641,10 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
   Widget buildPermissionIcon(bool enabled, IconData iconData,
       Function(bool)? onTap, String tooltipText,
       {required bool canModify}) {
+    final theme = Theme.of(context);
+    final inactiveBg = theme.brightness == Brightness.dark
+        ? Colors.white.withOpacity(0.08)
+        : Colors.black.withOpacity(0.06);
     return Tooltip(
       message: "$tooltipText: ${enabled ? "ON" : "OFF"}",
       waitDuration: Duration.zero,
@@ -638,8 +652,11 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
         decoration: BoxDecoration(
           color: enabled
               ? (canModify ? MyTheme.accent : MyTheme.accent.withOpacity(0.6))
-              : Colors.grey[700],
+              : inactiveBg,
           borderRadius: BorderRadius.circular(10.0),
+          border: Border.all(
+            color: enabled ? Colors.transparent : theme.dividerColor,
+          ),
         ),
         padding: EdgeInsets.all(8.0),
         child: InkWell(
@@ -653,7 +670,9 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
               Expanded(
                 child: Icon(
                   iconData,
-                  color: Colors.white,
+                  color: enabled
+                      ? Colors.white
+                      : theme.colorScheme.onSurface.withOpacity(0.6),
                 ),
               ),
             ],
@@ -665,6 +684,7 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final crossAxisCount = 4;
     final spacing = 10.0;
     final canModifyPermission =
@@ -672,20 +692,13 @@ class _PrivilegeBoardState extends State<_PrivilegeBoard> {
             'N';
     return Container(
       width: double.infinity,
-      height: 160.0,
-      margin: EdgeInsets.all(5.0),
-      padding: EdgeInsets.all(5.0),
+      height: 164.0,
+      margin: EdgeInsets.symmetric(horizontal: 10.0, vertical: 6.0),
+      padding: EdgeInsets.all(10.0),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(10.0),
-        color: Theme.of(context).colorScheme.background,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            spreadRadius: 1,
-            blurRadius: 1,
-            offset: Offset(0, 1.5),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(12.0),
+        color: theme.cardColor,
+        border: Border.all(color: theme.dividerColor),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -898,9 +911,39 @@ class _CmControlPanel extends StatelessWidget {
             children: [
               if (client.phoneMicrophoneCall || client.isPhoneMicrophone)
                 Expanded(
-                  child: Text(
-                    isWindows ? 'CABLE Output' : 'VB-Cable',
-                    textAlign: TextAlign.center,
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(
+                        horizontal: 8.0, vertical: 4.0),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10.0, vertical: 6.0),
+                    decoration: BoxDecoration(
+                      color: WorkspaceStyle.success(context).withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: WorkspaceStyle.success(context).withOpacity(0.35),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.mic_rounded,
+                          size: 14,
+                          color: WorkspaceStyle.success(context),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          isWindows ? 'CABLE Output' : 'VB-Cable',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: WorkspaceStyle.success(context),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 )
               else

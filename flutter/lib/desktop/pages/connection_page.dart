@@ -17,6 +17,7 @@ import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 
 import '../../common.dart';
+import '../../common/brand_links.dart';
 import '../../common/formatter/id_formatter.dart';
 import '../../common/widgets/peer_card.dart';
 import '../../common/widgets/peer_tab_page.dart';
@@ -46,7 +47,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   double? get height => bind.isIncomingOnly() ? null : em * 3;
 
   void onUsePublicServerGuide() {
-    const url = "https://rustdesk.com/pricing";
+    final url = BrandLinks.pricingUrl;
     canLaunchUrlString(url).then((can) {
       if (can) {
         launchUrlString(url);
