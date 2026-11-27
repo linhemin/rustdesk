@@ -639,6 +639,10 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn get_option(&self, k: String) -> String {
+        #[cfg(target_os = "ios")]
+        if k == crate::client::ios_remote_audio::REPORT_OPTION {
+            return self.lc.read().unwrap().ios_audio.report();
+        }
         #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
         if k == crate::p2p_remote_diagnostics::ios::OPTION {
             return if self.p2p_test_access.allowed() { "Y" } else { "N" }.to_owned();

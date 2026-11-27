@@ -74,6 +74,8 @@ use std::{
 pub struct Remote<T: InvokeUiSession> {
     handler: Session<T>,
     audio_sender: MediaSender,
+    #[cfg(target_os = "ios")]
+    ios_audio: Arc<super::ios_remote_audio::Progress>,
     receiver: mpsc::UnboundedReceiver<Data>,
     sender: mpsc::UnboundedSender<Data>,
     // Stop sending local audio to remote client.
@@ -147,9 +149,20 @@ impl<T: InvokeUiSession> Remote<T> {
         receiver: mpsc::UnboundedReceiver<Data>,
         sender: mpsc::UnboundedSender<Data>,
     ) -> Self {
+        #[cfg(target_os = "ios")]
+        let audio = {
+            let mut config = handler.lc.write().unwrap();
+            config.ios_audio = Default::default();
+            config.ios_audio.clone()
+        };
         Self {
             handler,
-            audio_sender: crate::client::start_audio_thread(),
+            #[cfg(not(target_os = "ios"))]
+            audio_sender: client::start_audio_thread(),
+            #[cfg(target_os = "ios")]
+            audio_sender: super::start_observed_audio_thread(audio.clone()),
+            #[cfg(target_os = "ios")]
+            ios_audio: audio,
             receiver,
             sender,
             udp_probe_rounds: Default::default(),
@@ -2598,6 +2611,8 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(misc::Union::AudioFormat(f)) => {
+                        #[cfg(target_os = "ios")]
+                        self.ios_audio.formats.fetch_add(1, Ordering::Relaxed);
                         self.audio_sender.send(MediaData::AudioFormat(f)).ok();
                     }
                     Some(misc::Union::ChatMessage(c)) => {
@@ -2833,7 +2848,15 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.handle_test_delay(t, peer).await;
                 }
                 Some(message::Union::AudioFrame(frame)) => {
-                    if !self.handler.lc.read().unwrap().disable_audio.v {
+                    let muted = self.handler.lc.read().unwrap().disable_audio.v;
+                    #[cfg(target_os = "ios")]
+                    {
+                        self.ios_audio.packets.fetch_add(1, Ordering::Relaxed);
+                        if muted {
+                            self.ios_audio.muted_packets.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    if !muted {
                         self.audio_sender
                             .send(MediaData::AudioFrame(Box::new(frame)))
                             .ok();

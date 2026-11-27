@@ -3,6 +3,16 @@ import Flutter
 import AVFoundation
 import Network
 
+@_cdecl("rustdesk_ios_activate_remote_audio")
+func rustdeskIosActivateRemoteAudio() -> Int32 {
+  do {
+    try AVAudioSession.sharedInstance().setActive(true)
+    return 0
+  } catch {
+    return Int32(clamping: (error as NSError).code)
+  }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate {
   private let diagnosticPath = NWPathMonitor()

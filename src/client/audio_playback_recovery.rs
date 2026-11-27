@@ -41,6 +41,13 @@ impl PlaybackRecovery {
             {
                 log::warn!("Audio playback nonterminal priority warning: {error}");
             } else {
+                #[cfg(target_os = "ios")]
+                hbb_common::throttled_log!(
+                    Duration::from_secs(5),
+                    warn,
+                    "Audio playback stream failed: {error}"
+                );
+                #[cfg(not(target_os = "ios"))]
                 log::error!("Audio playback stream failed: {error}");
                 failed = true;
             }
@@ -55,7 +62,12 @@ impl AudioHandler {
         self.audio_stream = None;
         self.playback_recovery.report_pending();
         self.playback_status.report_errors();
-        let recovery = std::mem::take(self).playback_recovery;
+        let previous = std::mem::take(self);
+        #[cfg(target_os = "ios")]
+        {
+            self.ios_audio = previous.ios_audio;
+        }
+        let recovery = previous.playback_recovery;
         self.playback_recovery.format = recovery.format;
         self.playback_recovery.retry_at = recovery.retry_at;
         self.playback_recovery.restart_not_before = recovery.restart_not_before;
@@ -77,11 +89,21 @@ impl AudioHandler {
                 self.playback_recovery.retry_at = None;
                 self.playback_recovery.awaiting_callback = true;
                 self.playback_recovery.startup_deadline = Some(now + STARTUP_CONFIRMATION_TIMEOUT);
+                #[cfg(target_os = "ios")]
+                log::trace!("Audio playback stream opened; waiting for output callback");
+                #[cfg(not(target_os = "ios"))]
                 log::info!("Audio playback stream opened; waiting for output callback");
             }
             Err(error) => {
                 self.clear_playback_stream();
                 self.playback_recovery.retry_at = Some(retry_at);
+                #[cfg(target_os = "ios")]
+                hbb_common::throttled_log!(
+                    Duration::from_secs(5),
+                    warn,
+                    "Audio playback start failed: {error:#}; retrying in {RECOVERY_INTERVAL:?}"
+                );
+                #[cfg(not(target_os = "ios"))]
                 log::error!(
                     "Audio playback start failed: {error:#}; retrying in {RECOVERY_INTERVAL:?}"
                 );
@@ -101,6 +123,13 @@ impl AudioHandler {
         }
         self.playback_recovery.awaiting_callback = false;
         self.playback_recovery.startup_deadline = None;
+        #[cfg(target_os = "ios")]
+        hbb_common::throttled_log!(
+            Duration::from_secs(10),
+            warn,
+            "Audio playback start timed out waiting for output callback"
+        );
+        #[cfg(not(target_os = "ios"))]
         log::error!("Audio playback start timed out waiting for output callback");
         true
     }
@@ -137,6 +166,9 @@ impl AudioHandler {
         {
             self.playback_recovery.awaiting_callback = false;
             self.playback_recovery.startup_deadline = None;
+            #[cfg(target_os = "ios")]
+            log::trace!("Audio playback output callback started");
+            #[cfg(not(target_os = "ios"))]
             log::info!("Audio playback output callback started");
         }
         if !self
@@ -149,6 +181,9 @@ impl AudioHandler {
         let Some(format) = self.playback_recovery.format.clone() else {
             return;
         };
+        #[cfg(target_os = "ios")]
+        log::trace!("Recreating audio playback on the current default output device");
+        #[cfg(not(target_os = "ios"))]
         log::info!("Recreating audio playback on the current default output device");
         let result = restart(self, format);
         self.finish_playback_start(result);

@@ -78,6 +78,8 @@ pub(super) struct AudioPlaybackWriter {
     recovery: AudioPlaybackRecovery,
     pub(super) status: std::sync::Arc<AudioPlaybackStatus>,
     buffer_failed: bool,
+    #[cfg(target_os = "ios")]
+    pub(super) ios_audio: Option<std::sync::Arc<super::ios_remote_audio::Progress>>,
 }
 
 impl AudioPlaybackWriter {
@@ -97,6 +99,8 @@ impl AudioPlaybackWriter {
             recovery,
             status: Default::default(),
             buffer_failed: false,
+            #[cfg(target_os = "ios")]
+            ios_audio: None,
         })
     }
 
@@ -140,6 +144,17 @@ impl AudioPlaybackWriter {
         let requested_samples = output.len().min(self.buffered_input.len());
         let channel_count = self.recovery.channels;
         let available_samples = self.read_buffer(requested_samples);
+        #[cfg(target_os = "ios")]
+        if let Some(audio) = self.ios_audio.as_ref() {
+            audio.callbacks.fetch_add(1, Ordering::Relaxed);
+            audio.pcm_samples.fetch_add(available_samples, Ordering::Relaxed);
+            if self.buffered_input[..available_samples]
+                .iter()
+                .any(|sample| sample.abs() > 0.0001)
+            {
+                audio.audible_callbacks.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let available_frames = available_samples / channel_count;
         for (frame_index, output_frame) in output.chunks_mut(channel_count).enumerate() {
             let input = if frame_index < available_frames {

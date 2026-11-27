@@ -101,8 +101,10 @@ mod relay_start;
 
 #[cfg(not(target_os = "linux"))]
 mod audio_playback;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "ios"))]
 mod audio_playback_recovery;
+#[cfg(target_os = "ios")]
+pub(crate) mod ios_remote_audio;
 #[cfg(all(test, not(target_os = "linux")))]
 #[path = "client/tests/audio_state_tests.rs"]
 mod audio_state_tests;
@@ -2761,8 +2763,10 @@ pub struct AudioHandler {
     device_channel: u16,
     #[cfg(not(target_os = "linux"))]
     playback_status: Arc<audio_playback::AudioPlaybackStatus>,
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "windows", target_os = "ios"))]
     playback_recovery: audio_playback_recovery::PlaybackRecovery,
+    #[cfg(target_os = "ios")]
+    ios_audio: Option<Arc<ios_remote_audio::Progress>>,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -2981,6 +2985,8 @@ impl AudioHandler {
     /// Start the audio playback.
     #[cfg(not(target_os = "linux"))]
     fn start_audio(&mut self, format0: AudioFormat) -> ResultType<()> {
+        #[cfg(target_os = "ios")]
+        ios_remote_audio::activate()?;
         let device = AUDIO_HOST
             .default_output_device()
             .with_context(|| "Failed to get default output device")?;
@@ -3049,7 +3055,7 @@ impl AudioHandler {
         }
         match AudioDecoder::new(f.sample_rate, if f.channels > 1 { Stereo } else { Mono }) {
             Ok(d) => {
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "ios"))]
                 let playback_failed = self.cancel_pending_playback();
                 #[cfg(target_os = "linux")]
                 let keep_existing_stream = self.simple.is_some()
@@ -3062,12 +3068,16 @@ impl AudioHandler {
                 let buffer = vec![0.; f.sample_rate as usize * f.channels as usize];
                 #[cfg(not(target_os = "linux"))]
                 let mut previous = std::mem::take(self);
-                #[cfg(target_os = "windows")]
+                #[cfg(target_os = "ios")]
+                {
+                    self.ios_audio = previous.ios_audio.clone();
+                }
+                #[cfg(any(target_os = "windows", target_os = "ios"))]
                 self.prepare_playback(&f);
                 self.audio_decoder = Some((d, buffer));
                 self.channels = f.channels as _;
                 let result = start(self, f);
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "ios"))]
                 let keep_existing_stream = keep_existing_stream
                     && !playback_failed
                     && !previous.playback_recovery.report_pending();
@@ -3079,9 +3089,9 @@ impl AudioHandler {
                     self.handle_audio_start_result(result, true);
                     return;
                 }
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "ios"))]
                 self.finish_playback_replacement(result, keep_existing_stream.then_some(previous));
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(not(any(target_os = "windows", target_os = "ios")))]
                 self.handle_audio_start_result(result, keep_existing_stream);
             }
             Err(err) => {
@@ -3130,6 +3140,10 @@ impl AudioHandler {
                     return;
                 }
             };
+            #[cfg(target_os = "ios")]
+            if let Some(audio) = self.ios_audio.as_ref() {
+                audio.decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
             let channels = self.channels;
             let n = decoded_frames * channels as usize;
             #[cfg(not(target_os = "linux"))]
@@ -3169,9 +3183,9 @@ impl AudioHandler {
         device: &Device,
     ) -> ResultType<()> {
         self.device_channel = config.channels;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "ios"))]
         let err_fn = self.playback_recovery.new_error_callback();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "ios")))]
         let err_fn = move |err| {
             // too many errors, will improve later
             log::trace!("an error occurred on stream: {}", err);
@@ -3188,6 +3202,10 @@ impl AudioHandler {
             audio_buffer,
             discontinuity_generation,
         )?;
+        #[cfg(target_os = "ios")]
+        {
+            playback_writer.ios_audio = self.ios_audio.clone();
+        }
         let playback_status = playback_writer.status.clone();
         let timeout = None;
         let stream = device.build_output_stream(
@@ -3451,6 +3469,8 @@ pub struct LoginConfigHandler {
     /// one the probe latched to the raw pipe logs in without asking, so an
     /// upgraded peer keeps giving it the raw pipe.
     pub(crate) port_forward_multiplex: bool,
+    #[cfg(target_os = "ios")]
+    pub(crate) ios_audio: Arc<ios_remote_audio::Progress>,
     /// Set once per window, before its mappings start: every accept's claim
     /// reads it.
     pub(crate) port_forward_mux: bool,
@@ -5059,13 +5079,31 @@ pub fn start_video_thread<F, T>(
 /// Start an audio thread
 /// Return a audio [`MediaSender`]
 pub fn start_audio_thread() -> MediaSender {
+    start_audio_thread_impl(
+        #[cfg(target_os = "ios")]
+        None,
+    )
+}
+
+#[cfg(target_os = "ios")]
+fn start_observed_audio_thread(audio: Arc<ios_remote_audio::Progress>) -> MediaSender {
+    start_audio_thread_impl(Some(audio))
+}
+
+fn start_audio_thread_impl(
+    #[cfg(target_os = "ios")] ios_audio: Option<Arc<ios_remote_audio::Progress>>,
+) -> MediaSender {
     let (audio_sender, audio_receiver) = mpsc::channel::<MediaData>();
     std::thread::spawn(move || {
         let mut audio_handler = AudioHandler::default();
+        #[cfg(target_os = "ios")]
+        {
+            audio_handler.ios_audio = ios_audio;
+        }
         loop {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "ios"))]
             let received = audio_handler.receive_audio(&audio_receiver);
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "windows", target_os = "ios")))]
             let received = audio_receiver.recv();
             if let Ok(data) = received {
                 match data {

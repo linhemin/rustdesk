@@ -27,6 +27,9 @@ impl AudioHandler {
         previous.audio_decoder = self.audio_decoder.take();
         let candidate = std::mem::replace(self, previous);
         self.playback_recovery.pending_output = Some(Box::new(candidate));
+        #[cfg(target_os = "ios")]
+        log::trace!("Audio playback replacement pending; continuing on the compatible output");
+        #[cfg(not(target_os = "ios"))]
         log::info!("Audio playback replacement pending; continuing on the compatible output");
         self.recover_playback_with(Instant::now(), Self::restart_playback);
     }
@@ -44,6 +47,13 @@ impl AudioHandler {
             candidate.playback_recovery.report_pending();
             candidate.playback_status.report_errors();
             if !previous_failed {
+                #[cfg(target_os = "ios")]
+                hbb_common::throttled_log!(
+                    std::time::Duration::from_secs(10),
+                    warn,
+                    "Audio playback replacement failed before startup confirmation; keeping the existing compatible stream"
+                );
+                #[cfg(not(target_os = "ios"))]
                 log::error!("Audio playback replacement failed before startup confirmation; keeping the existing compatible stream");
             }
             return Some(previous_failed);
