@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_breadcrumb/flutter_breadcrumb.dart';
 import 'package:flutter_hbb/models/file_model.dart';
 import 'package:get/get.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:rustdesk_ui/rustdesk_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
@@ -277,6 +279,36 @@ class _FileManagerPageState extends State<FileManagerPage> {
     }
   }
 
+  Future<void> _pickAndSendMedia() async {
+    try {
+      final files = await ImagePicker().pickMultipleMedia();
+      if (files.isEmpty || !mounted) return;
+      final dest = model.remoteController.directoryData();
+      if (dest.directory.path.isEmpty) {
+        showToast(translate('Waiting'));
+        return;
+      }
+      final selected = SelectedItems(isLocal: true);
+      for (final xfile in files) {
+        final f = File(xfile.path);
+        if (!await f.exists()) continue;
+        final stat = await f.stat();
+        final entry = Entry()
+          ..name = xfile.name
+          ..path = xfile.path
+          ..size = stat.size
+          ..entryType = 4; // EntryType.file
+        selected.add(entry);
+      }
+      if (selected.items.isNotEmpty) {
+        model.localController.sendFiles(selected, dest);
+        showToast('${translate('Send')} (${selected.items.length})');
+      }
+    } catch (_) {
+      showToast(translate('Failed'));
+    }
+  }
+
   void _createFolder() {
     final name = TextEditingController();
     String? errorText;
@@ -425,6 +457,12 @@ class _FileManagerPageState extends State<FileManagerPage> {
           centerTitle: false,
           title: _headerTitle(),
           actions: [
+            if (isAndroid || isIOS)
+              IconButton(
+                tooltip: translate('Send'),
+                icon: const Icon(Icons.photo_library_outlined, size: 19),
+                onPressed: _pickAndSendMedia,
+              ),
             if (isAndroid || isIOS)
               IconButton(
                 tooltip: translate('Audio mode'),
@@ -993,24 +1031,40 @@ class _FileManagerViewState extends State<FileManagerView> {
                           ? Icon(Icons.chevron_right_rounded,
                               size: 18, color: theme.hintColor)
                           : widget.sessionActions
-                              ? Checkbox(
-                                  shape: const CircleBorder(),
-                                  value: selected,
-                                  onChanged: (v) {
-                                    if (v == null) return;
-                                    if (!showCheckBox) {
-                                      if (widget.selectMode.value !=
-                                          SelectMode.none) return;
-                                      _selectedItems.clear();
-                                      widget.selectMode.toggle(isLocal);
-                                    }
-                                    if (v && !selected) {
-                                      _selectedItems.add(entry);
-                                    } else if (!v && selected) {
-                                      _selectedItems.remove(entry);
-                                    }
-                                    setState(() {});
-                                  })
+                              ? Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (isLocal && entry.isFile && !showCheckBox)
+                                      IconButton(
+                                        tooltip: translate('Open'),
+                                        visualDensity: VisualDensity.compact,
+                                        icon: const Icon(
+                                            Icons.open_in_new_rounded,
+                                            size: 17),
+                                        onPressed: () {
+                                          launchUrl(Uri.file(entry.path));
+                                        },
+                                      ),
+                                    Checkbox(
+                                        shape: const CircleBorder(),
+                                        value: selected,
+                                        onChanged: (v) {
+                                          if (v == null) return;
+                                          if (!showCheckBox) {
+                                            if (widget.selectMode.value !=
+                                                SelectMode.none) return;
+                                            _selectedItems.clear();
+                                            widget.selectMode.toggle(isLocal);
+                                          }
+                                          if (v && !selected) {
+                                            _selectedItems.add(entry);
+                                          } else if (!v && selected) {
+                                            _selectedItems.remove(entry);
+                                          }
+                                          setState(() {});
+                                        }),
+                                  ],
+                                )
                               : null,
                   onTap: !widget.sessionActions && entry.isFile ? null : () {
                     if (showCheckBox) {

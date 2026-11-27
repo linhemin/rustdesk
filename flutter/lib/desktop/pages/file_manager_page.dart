@@ -20,6 +20,7 @@ import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/models/file_model.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_hbb/web/dummy.dart'
     if (dart.library.html) 'package:flutter_hbb/web/web_unique.dart';
 
@@ -88,7 +89,8 @@ class _FileManagerPageState extends State<FileManagerPage>
     with AutomaticKeepAliveClientMixin, WidgetsBindingObserver {
   final _mouseFocusScope = Rx<MouseFocusScope>(MouseFocusScope.none);
 
-  final _dropMaskVisible = false.obs; // TODO impl drop mask
+  final _dropMaskLocal = false.obs;
+  final _dropMaskRemote = false.obs;
   final _overlayKeyState = OverlayKeyState();
   final _uniqueKey = UniqueKey();
 
@@ -170,7 +172,7 @@ class _FileManagerPageState extends State<FileManagerPage>
       OverlayEntry(builder: (_) {
         return willPopScope(Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-          body: isWindows || isMacOS
+          body: isWindows || isMacOS || isLinux
               ? FileTransferWorkspace(
                   local: dropArea(FileManagerView(
                       model.localController, _ffi, _mouseFocusScope)),
@@ -206,23 +208,73 @@ class _FileManagerPageState extends State<FileManagerPage>
   }
 
   Widget dropArea(FileManagerView fileView) {
+    final isLocal = fileView.controller.isLocal;
+    final maskVisible = isLocal ? _dropMaskLocal : _dropMaskRemote;
     return Builder(
         builder: (context) => DropTarget(
             onDragDone: (detail) {
+              maskVisible.value = false;
               // Native drop events bypass Flutter's Offstage hit testing.
               if (context.findAncestorWidgetOfExactType<Offstage>()?.offstage ==
                   true) {
                 return;
               }
-              handleDragDone(detail, fileView.controller.isLocal);
+              handleDragDone(detail, isLocal);
             },
             onDragEntered: (enter) {
-              _dropMaskVisible.value = true;
+              maskVisible.value = true;
             },
             onDragExited: (exit) {
-              _dropMaskVisible.value = false;
+              maskVisible.value = false;
             },
-            child: fileView));
+            child: Stack(
+              children: [
+                fileView,
+                Obx(() {
+                  if (!maskVisible.value) return const SizedBox.shrink();
+                  final primary = Theme.of(context).colorScheme.primary;
+                  return Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        margin: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: primary.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: primary, width: 2),
+                        ),
+                        child: Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).cardColor,
+                              borderRadius: BorderRadius.circular(10),
+                              border:
+                                  Border.all(color: primary.withOpacity(0.5)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.file_upload_outlined,
+                                    color: primary, size: 20),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${translate('Transfer file')} → ${translate(isLocal ? 'Local' : 'Remote')}',
+                                  style: TextStyle(
+                                    color: primary,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ],
+            )));
   }
 
   Widget generateCard(Widget child) {
@@ -263,12 +315,25 @@ class _FileManagerPageState extends State<FileManagerPage>
 
     statusListView(List<JobProgress> jobs) => ListView.builder(
           controller: ScrollController(),
-          padding: isWindows || isMacOS ? const EdgeInsets.only(bottom: 12) : null,
+          padding: isWindows || isMacOS || isLinux
+              ? const EdgeInsets.only(bottom: 12)
+              : null,
           itemBuilder: (BuildContext context, int index) {
             final item = jobs[index];
             final status = item.getStatus();
-            if (isWindows || isMacOS) {
+            if (isWindows || isMacOS || isLinux) {
               final theme = Theme.of(context);
+              final remaining = item.totalSize - item.finishedSize;
+              final etaSec = item.state == JobState.inProgress &&
+                      item.speed > 0 &&
+                      remaining > 0
+                  ? (remaining / item.speed).ceil()
+                  : null;
+              final etaLabel = etaSec == null
+                  ? ''
+                  : etaSec < 60
+                      ? ' · ~${etaSec}s'
+                      : ' · ~${(etaSec / 60).ceil()}m';
               return Container(
                 margin: const EdgeInsets.only(top: 6),
                 padding: const EdgeInsets.fromLTRB(12, 3, 6, 3),
@@ -308,7 +373,7 @@ class _FileManagerPageState extends State<FileManagerPage>
                               child: Tooltip(
                                   message: status,
                                   child: Text(
-                                      '$status${item.state == JobState.inProgress ? " · ${item.percentText}${item.recvJobRes ? " · ${readableFileSize(item.speed)}/s" : ""}" : ""}',
+                                      '$status${item.state == JobState.inProgress ? " · ${item.percentText}${item.recvJobRes ? " · ${readableFileSize(item.speed)}/s$etaLabel" : ""}" : ""}',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
@@ -331,15 +396,39 @@ class _FileManagerPageState extends State<FileManagerPage>
                                   backgroundColor: theme.dividerColor)),
                         ],
                       ])),
-                  if (item.state == JobState.paused)
+                  if (item.state == JobState.paused ||
+                      item.state == JobState.error)
                     IconButton(
-                        tooltip: translate('Resume'),
+                        tooltip: translate(
+                            item.state == JobState.error ? 'Refresh' : 'Resume'),
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints.tightFor(
                             width: 32, height: 32),
                         onPressed: () => jobController.resumeJob(item.id),
-                        icon: const Icon(Icons.play_arrow_rounded, size: 18)),
+                        icon: Icon(
+                          item.state == JobState.error
+                              ? Icons.refresh_rounded
+                              : Icons.play_arrow_rounded,
+                          size: 18,
+                        )),
+                  if (item.state == JobState.done &&
+                      item.isRemoteToLocal &&
+                      model.localController.directory.value.path.isNotEmpty)
+                    IconButton(
+                        tooltip: translate('Open folder'),
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints.tightFor(
+                            width: 32, height: 32),
+                        onPressed: () {
+                          final dirPath =
+                              model.localController.directory.value.path;
+                          if (dirPath.isNotEmpty) {
+                            launchUrl(Uri.file(dirPath));
+                          }
+                        },
+                        icon: const Icon(Icons.folder_open_outlined, size: 17)),
                   IconButton(
                       tooltip: translate(item.state == JobState.done ||
                               item.state == JobState.error
@@ -1129,6 +1218,32 @@ class _FileManagerViewState extends State<FileManagerView> {
                       ),
                       color: Theme.of(context).cardColor,
                       hoverColor: Theme.of(context).hoverColor,
+                    ),
+                    PopupMenuButton<String>(
+                      tooltip: translate('Directory'),
+                      padding: EdgeInsets.zero,
+                      icon: Icon(
+                        Icons.bookmarks_outlined,
+                        size: 18,
+                        color: Theme.of(context).tabBarTheme.labelColor,
+                      ),
+                      onSelected: (folder) {
+                        final home = controller.homePath;
+                        if (home.isEmpty) return;
+                        final target = PathUtil.join(
+                          home,
+                          folder,
+                          controller.options.value.isWindows,
+                        );
+                        controller.openDirectory(target);
+                      },
+                      itemBuilder: (_) => const [
+                        PopupMenuItem(value: 'Desktop', child: Text('Desktop')),
+                        PopupMenuItem(
+                            value: 'Downloads', child: Text('Downloads')),
+                        PopupMenuItem(
+                            value: 'Documents', child: Text('Documents')),
+                      ],
                     ),
                     MenuButton(
                       tooltip: translate('Create Folder'),
