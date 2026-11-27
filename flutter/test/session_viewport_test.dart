@@ -147,4 +147,108 @@ void main() {
     expect(canvas.scale, 1);
     canvas.dispose();
   });
+
+  test('pointer pan keeps viewport steady inside free zone and pans smoothly at edges',
+      () {
+    const display = Rect.fromLTWH(0, 0, 1920, 1080);
+    const visible = Rect.fromLTWH(200, 100, 400, 600);
+
+    // Moving across the center of the viewport must NOT jitter or pan the screen.
+    final mid = computePointerPanStep(
+      cursor: const Offset(390, 390),
+      remoteDelta: const Offset(40, 30),
+      visible: visible,
+      display: display,
+      scale: 1.0,
+      allowCanvasPan: true,
+    );
+    expect(mid.cursorDelta, const Offset(40, 30));
+    expect(mid.canvasPanScreen, Offset.zero);
+
+    // Moving outward into the right edge margin smoothly pans the viewport left.
+    final edge = computePointerPanStep(
+      cursor: const Offset(550, 390),
+      remoteDelta: const Offset(40, 0),
+      visible: visible,
+      display: display,
+      scale: 1.0,
+      allowCanvasPan: true,
+    );
+    expect(edge.cursorDelta, const Offset(40, 0));
+    expect(edge.canvasPanScreen.dx, lessThan(0));
+    expect(edge.canvasPanScreen.dy, 0);
+
+    // Locked canvas never pans and keeps cursor inside visible bounds.
+    final locked = computePointerPanStep(
+      cursor: const Offset(580, 390),
+      remoteDelta: const Offset(50, 0),
+      visible: visible,
+      display: display,
+      scale: 1.0,
+      allowCanvasPan: false,
+    );
+    expect(locked.canvasPanScreen, Offset.zero);
+    expect(locked.cursorDelta.dx, 20);
+
+    // When only 5px of hidden desktop remains, canvas finishes panning 5px and
+    // cursor still travels the full remaining distance to the outer edge.
+    const nearEnd = Rect.fromLTWH(1515, 100, 400, 600);
+    final finish = computePointerPanStep(
+      cursor: const Offset(1890, 390),
+      remoteDelta: const Offset(25, 0),
+      visible: nearEnd,
+      display: display,
+      scale: 1.0,
+      allowCanvasPan: true,
+    );
+    expect(finish.canvasPanScreen.dx, closeTo(-5, 0.001));
+    expect(finish.cursorDelta.dx, 25);
+  });
+
+  test('Awesun edge pan velocity stays zero inside viewport and ramps smoothly past edges',
+      () {
+    const minC = Offset(100, 80);
+    const maxC = Offset(320, 720);
+
+    // Inside bounds or within deadzone -> zero velocity.
+    expect(
+      computeAwesunEdgePanVelocity(
+        requestedCenter: const Offset(200, 400),
+        minCenter: minC,
+        maxCenter: maxC,
+      ),
+      Offset.zero,
+    );
+    expect(
+      computeAwesunEdgePanVelocity(
+        requestedCenter: const Offset(323, 400),
+        minCenter: minC,
+        maxCenter: maxC,
+      ),
+      Offset.zero,
+    );
+
+    // Gentle push vs strong push ramps smoothly in negative canvas direction.
+    final gentle = computeAwesunEdgePanVelocity(
+      requestedCenter: const Offset(335, 400),
+      minCenter: minC,
+      maxCenter: maxC,
+    );
+    final firm = computeAwesunEdgePanVelocity(
+      requestedCenter: const Offset(400, 400),
+      minCenter: minC,
+      maxCenter: maxC,
+    );
+    expect(gentle.dx, lessThan(0));
+    expect(firm.dx, lessThan(gentle.dx));
+    expect(firm.dx, closeTo(-520, 0.01));
+
+    // Left push pans canvas positive.
+    final leftPush = computeAwesunEdgePanVelocity(
+      requestedCenter: const Offset(60, 400),
+      minCenter: minC,
+      maxCenter: maxC,
+    );
+    expect(leftPush.dx, greaterThan(0));
+  });
 }

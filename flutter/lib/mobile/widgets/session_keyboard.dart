@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../common.dart';
 import '../../models/input_model.dart';
+import 'macro_shortcut_bar.dart';
 import 'session_controls.dart';
 
 enum SessionModifier { ctrl, shift, alt, meta }
@@ -196,7 +197,33 @@ class _SessionKeyboardState extends State<SessionKeyboard> {
         final primary =
             widget.isMac ? SessionModifier.meta : SessionModifier.ctrl;
         final label = widget.isMac ? '⌘' : 'Ctrl';
+        void triggerMacro(MobileMacroShortcut macro) {
+          if (macro.keys.length == 2) {
+            final mod = switch (macro.keys.first) {
+              'Alt' => SessionModifier.alt,
+              'Meta' => SessionModifier.meta,
+              'Shift' => SessionModifier.shift,
+              _ => primary,
+            };
+            final k = macro.keys.last.toUpperCase();
+            final vk = k == 'TAB'
+                ? 'VK_TAB'
+                : k == 'SPACE'
+                    ? 'VK_SPACE'
+                    : k == 'ESCAPE'
+                        ? 'VK_ESCAPE'
+                        : 'VK_$k';
+            widget.onShortcut(mod, vk);
+          } else {
+            widget.onShortcut(SessionModifier.ctrl, 'VK_ESCAPE');
+          }
+        }
+
         return [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: MobileMacroBar(onTrigger: triggerMacro),
+          ),
           _row(Row(
             children: [
               for (final key in ['C', 'V', 'X', 'Z', 'A', 'S'])

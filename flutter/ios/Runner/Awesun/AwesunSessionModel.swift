@@ -28,6 +28,29 @@ struct AwesunFunctionItem: Identifiable {
     var symbol = false
 }
 
+struct AwesunGroupedAction: Identifiable {
+    let id: Int
+    let title: String
+    let group: String
+    let danger: Bool
+
+    init?(_ values: [String: Any]) {
+        guard let id = values["index"] as? Int,
+              let title = values["title"] as? String else { return nil }
+        self.id = id
+        self.title = title
+        self.group = values["group"] as? String ?? "remote"
+        self.danger = values["danger"] as? Bool == true
+    }
+
+    init(id: Int, title: String, group: String = "remote", danger: Bool = false) {
+        self.id = id
+        self.title = title
+        self.group = group
+        self.danger = danger
+    }
+}
+
 final class AwesunSessionModel: ObservableObject {
     @Published var active = false
     @Published var keyboardInset: CGFloat = 0
@@ -35,10 +58,19 @@ final class AwesunSessionModel: ObservableObject {
     @Published var mode: AwesunMode = .pointer
     @Published var soundOn = true
     @Published var displayLocked = false
+    @Published var showRemoteCursor = false
+    @Published var canShowRemoteCursor = false
+    @Published var canMinimize = false
     private static let mouseVisibleKey = "awesun.mouse.enabled"
     private static let mousePlacementKey = "awesun.mouse.placement"
-    @Published private(set) var mouseVisible = UserDefaults.standard.bool(forKey: AwesunSessionModel.mouseVisibleKey)
-    @Published private(set) var mouseCollapsed = true
+    private static func defaultMouseVisible() -> Bool {
+        if UserDefaults.standard.object(forKey: mouseVisibleKey) == nil {
+            return true
+        }
+        return UserDefaults.standard.bool(forKey: mouseVisibleKey)
+    }
+    @Published private(set) var mouseVisible = AwesunSessionModel.defaultMouseVisible()
+    @Published private(set) var mouseCollapsed = !AwesunSessionModel.defaultMouseVisible()
     @Published var mouseAnchor: CGPoint?
     @Published var videoViewport: CGRect?
     @Published var holdsMouseInScreenSpace = false
@@ -61,6 +93,7 @@ final class AwesunSessionModel: ObservableObject {
     @Published var functionsOpen = false
     @Published var sheet: AwesunSheetKind?
     @Published var actions: [String] = []
+    @Published var groupedActions: [AwesunGroupedAction] = []
     @Published var displayOptions: [AwesunDisplayOption] = []
     @Published private(set) var performance = AwesunPerformanceStatus()
     @Published var accessoryKeys = AwesunKeyboardLayout.savedAccessoryKeys()
@@ -80,12 +113,13 @@ final class AwesunSessionModel: ObservableObject {
     private var menuRevision = 0
 
     @Published private var functionOrder = [
-        "quit", "mouse", "kbd", "mode", "lock", "guide", "shot", "sound", "screen",
+        "quit", "minimize", "mouse", "kbd", "mode", "lock", "guide", "shot", "sound", "screen",
         "display", "quality", "chat", "fullKeyboard", "layout", "keys", "game", "actions"
     ]
 
     var functions: [AwesunFunctionItem] {
         let items = [
+            AwesunFunctionItem(id: "minimize", title: "最小化", icon: "arrow.down.right.and.arrow.up.left", symbol: true),
             AwesunFunctionItem(id: "mouse", title: "虚拟鼠标", icon: AwesunIcons.mouse),
             AwesunFunctionItem(id: "kbd", title: "系统键盘", icon: AwesunIcons.keyboard),
             AwesunFunctionItem(id: "fullKeyboard", title: "虚拟键盘", icon: "keyboard", symbol: true),
@@ -101,17 +135,18 @@ final class AwesunSessionModel: ObservableObject {
             AwesunFunctionItem(id: "layout", title: "自定义键盘", icon: "keyboard.badge.ellipsis", symbol: true),
             AwesunFunctionItem(id: "keys", title: "更多按键", icon: "ellipsis", symbol: true),
             AwesunFunctionItem(id: "game", title: "游戏键盘", icon: "gamecontroller", symbol: true),
-            AwesunFunctionItem(id: "actions", title: "更多操作", icon: AwesunIcons.more),
+            AwesunFunctionItem(id: "actions", title: "更多工具", icon: AwesunIcons.more),
             AwesunFunctionItem(id: "quit", title: "断开", icon: AwesunIcons.quit)
         ]
         return functionOrder.compactMap { id in
             if !canInput && ["mouse", "kbd", "fullKeyboard", "keys", "layout", "game"].contains(id) { return nil }
             switch id {
+            case "minimize" where !canMinimize: return nil
             case "mode" where !canSwitchMode: return nil
             case "sound" where !canSound: return nil
             case "shot" where !canScreenshot: return nil
             case "screen" where displayCount < 2: return nil
-            case "actions" where actions.isEmpty: return nil
+            case "actions" where actions.isEmpty && groupedActions.isEmpty: return nil
             default: return items.first { $0.id == id }
             }
         }
@@ -155,7 +190,15 @@ final class AwesunSessionModel: ObservableObject {
         if let count = values["displays"] as? Int { displayCount = count }
         if let selection = values["selectedDisplay"] as? Int { selectedDisplay = selection }
         if let quality = values["quality"] as? Bool { qualityVisible = quality }
+        if let remoteCursor = values["showRemoteCursor"] as? Bool { showRemoteCursor = remoteCursor }
+        if let allowRemoteCursor = values["canShowRemoteCursor"] as? Bool { canShowRemoteCursor = allowRemoteCursor }
+        if let allowMinimize = values["canMinimize"] as? Bool { canMinimize = allowMinimize }
         if let labels = values["actions"] as? [String] { actions = labels }
+        if let items = values["actionItems"] as? [[String: Any]] {
+            groupedActions = items.compactMap(AwesunGroupedAction.init)
+        } else {
+            groupedActions = actions.enumerated().map { AwesunGroupedAction(id: $0.offset, title: $0.element) }
+        }
     }
 
     func closeFunctions() {
@@ -248,6 +291,8 @@ final class AwesunSessionModel: ObservableObject {
         case "display":
             sheet = .displaySettings
             loadDisplayOptions()
+        case "minimize":
+            AwesunBridge.shared.command("minimize")
         case "shot":
             takeScreenshot()
         case "chat", "quality":
@@ -361,11 +406,25 @@ final class AwesunSessionModel: ObservableObject {
         return AwesunDockPlacement(fraction: 0.47)
     }
 
+    func setShowRemoteCursor(_ shown: Bool) {
+        guard showRemoteCursor != shown else { return }
+        AwesunBridge.shared.command("showRemoteCursor") { [weak self] response in
+            if let value = response as? Bool {
+                self?.showRemoteCursor = value
+                self?.showToast(value ? "已显示远程鼠标" : "已隐藏远程鼠标")
+            }
+        }
+    }
+
     func setMouseVisible(_ shown: Bool) {
         guard mouseVisible != shown else { return }
         UserDefaults.standard.set(shown, forKey: Self.mouseVisibleKey)
         mouseVisible = shown
-        collapseMouse()
+        if shown {
+            expandMouse()
+        } else {
+            collapseMouse()
+        }
     }
 
     func collapseMouse() {

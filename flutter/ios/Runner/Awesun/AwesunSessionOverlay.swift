@@ -187,6 +187,10 @@ final class AwesunSessionOverlay {
         model.mode = touchMode ? .touch : .pointer
         model.active = active
         surface.isHidden = !active
+        if active {
+            AwesunBridge.shared.pointerVisible(model.mouseVisible && !model.mouseCollapsed)
+            model.refreshMouseIdleTimer()
+        }
         return true
     }
 
@@ -563,16 +567,10 @@ private final class AwesunMouseInput: UIView {
     }
 
     private func panVelocity(at point: CGPoint, layout: AwesunMouseGeometry) -> CGSize {
-        if region == .hub {
-            return AwesunMouseGeometry.hubVelocity(from: startingHub, toward: point)
-        }
-        return layout.canvasVelocity(toward: requestedCenter(for: point))
+        layout.canvasVelocity(toward: requestedCenter(for: point))
     }
 
     private func panExcursion(at point: CGPoint, layout: AwesunMouseGeometry) -> CGFloat {
-        if region == .hub {
-            return max(0, hypot(point.x - startingHub.midX, point.y - startingHub.midY) - startingHub.width / 2)
-        }
         let target = requestedCenter(for: point)
         return hypot(target.x - layout.center.x, target.y - layout.center.y)
     }

@@ -357,22 +357,27 @@ struct AwesunMouseGeometry {
     let maxCenter: CGPoint
     let scale: CGFloat
 
-    static func hubVelocity(from hub: CGRect, toward touch: CGPoint) -> CGSize {
-        let dx = touch.x - hub.midX
-        let dy = touch.y - hub.midY
-        let distance = hypot(dx, dy)
-        let radius = hub.width / 2
-        guard distance > radius else { return .zero }
-        let speed = min(600, (distance - radius) * 8)
-        return CGSize(width: -dx / distance * speed, height: -dy / distance * speed)
-    }
-
     func canvasVelocity(toward requestedCenter: CGPoint) -> CGSize {
-        let speed: CGFloat = 600
+        let deadzone: CGFloat = 4
+        let rampDistance: CGFloat = 76
+        let minSpeed: CGFloat = 60
+        let maxSpeed: CGFloat = 520
         func axis(_ requested: CGFloat, _ lower: CGFloat, _ upper: CGFloat) -> CGFloat {
-            if requested < lower { return speed }
-            if requested > upper { return -speed }
-            return 0
+            let push: CGFloat
+            let sign: CGFloat
+            if requested < lower {
+                push = lower - requested
+                sign = 1
+            } else if requested > upper {
+                push = requested - upper
+                sign = -1
+            } else {
+                return 0
+            }
+            guard push > deadzone else { return 0 }
+            let t = min(1, max(0, (push - deadzone) / rampDistance))
+            let speed = minSpeed + (maxSpeed - minSpeed) * t * t
+            return sign * speed
         }
         return CGSize(width: axis(requestedCenter.x, minCenter.x, maxCenter.x),
                       height: axis(requestedCenter.y, minCenter.y, maxCenter.y))

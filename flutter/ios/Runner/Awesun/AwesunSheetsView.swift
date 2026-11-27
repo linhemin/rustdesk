@@ -85,7 +85,7 @@ struct AwesunFunctionSheet: View {
     @State private var editing = false
     @State private var picked: Int?
 
-    private let quickIDs = ["quit", "shot", "sound", "screen", "chat", "actions"]
+    private let quickIDs = ["quit", "minimize", "shot", "sound", "screen", "chat", "actions"]
     private let keyboardIDs = ["kbd", "fullKeyboard", "layout", "game"]
     private let displayIDs = ["display", "quality"]
 
@@ -175,7 +175,16 @@ struct AwesunFunctionSheet: View {
                 }
             }
             if item("mouse") != nil {
-                option("虚拟鼠标", value: model.mouseVisible, action: model.setMouseVisible)
+                option("虚拟鼠标", subtitle: "环形左右键 · 中键 · 旋转滚轮环", icon: "computermouse",
+                       value: model.mouseVisible, action: model.setMouseVisible)
+            }
+            if model.canShowRemoteCursor {
+                option("显示远程鼠标", subtitle: "显示被控端系统指针", icon: "cursorarrow.click.2",
+                       value: model.showRemoteCursor, action: model.setShowRemoteCursor)
+            }
+            if item("lock") != nil {
+                option("锁定画面", subtitle: "防止误触拖动或缩放画面", icon: "lock.display",
+                       value: model.displayLocked, action: model.setDisplayLocked)
             }
         }
     }
@@ -212,16 +221,17 @@ struct AwesunFunctionSheet: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func option(_ title: String, value: Bool, action: @escaping (Bool) -> Void) -> some View {
+    private func option(_ title: String, subtitle: String, icon: String, value: Bool,
+                        action: @escaping (Bool) -> Void) -> some View {
         HStack {
-            Image(systemName: title == "虚拟鼠标" ? "computermouse" : "lock.display")
+            Image(systemName: icon)
                 .font(.system(size: 17))
                 .foregroundColor(AwesunPalette.activeIce)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title == "虚拟鼠标" ? "悬浮虚拟鼠标" : title)
+                Text(title == "虚拟鼠标" ? "显示本地鼠标" : title)
                     .font(.system(size: 12, weight: .medium))
-                Text("环形左右键 · 中键 · 旋转滚轮环")
+                Text(subtitle)
                     .font(.system(size: 10))
                     .foregroundColor(AwesunPalette.textSecondary.opacity(0.7))
             }
@@ -668,25 +678,99 @@ struct AwesunDisplayPanel: View {
 struct AwesunActionPanel: View {
     @ObservedObject var model: AwesunSessionModel
     let height: CGFloat
+    @State private var diagnosticsExpanded = false
+
+    private func actions(in group: String) -> [AwesunGroupedAction] {
+        model.groupedActions.filter { $0.group == group }
+    }
 
     var body: some View {
-        AwesunSheetShell(title: "更多操作", onClose: model.closeSheet) {
+        AwesunSheetShell(title: "更多工具", onClose: model.closeSheet) {
             ScrollView {
-                VStack(spacing: 6) {
-                    if let entry = model.functions.first(where: { $0.id == "keys" }) {
-                        Button { model.perform(entry) } label: {
-                            AwesunActionRow(icon: "keyboard", title: entry.title)
+                VStack(alignment: .leading, spacing: 14) {
+                    let canvasItems = actions(in: "canvas")
+                    let hasExtraKeys = model.functions.contains { $0.id == "keys" }
+                    if !canvasItems.isEmpty {
+                        sectionHeader("画面与光标")
+                        VStack(spacing: 6) {
+                            ForEach(canvasItems) { item in
+                                Button { model.chooseAction(item.id) } label: {
+                                    AwesunActionRow(icon: symbol(for: item.title), title: item.title)
+                                }
+                            }
                         }
                     }
-                    if let entry = model.functions.first(where: { $0.id == "lock" }) {
-                        Button { model.setDisplayLocked(!model.displayLocked) } label: {
-                            AwesunActionRow(icon: "lock.display", title: model.displayLocked ? "解除锁定" : entry.title)
+
+                    let remoteItems = actions(in: "remote")
+                    if hasExtraKeys || !remoteItems.isEmpty {
+                        sectionHeader("远端控制")
+                        VStack(spacing: 6) {
+                            if let entry = model.functions.first(where: { $0.id == "keys" }) {
+                                Button { model.perform(entry) } label: {
+                                    AwesunActionRow(icon: "keyboard", title: entry.title)
+                                }
+                            }
+                            ForEach(remoteItems) { item in
+                                Button { model.chooseAction(item.id) } label: {
+                                    AwesunActionRow(icon: symbol(for: item.title), title: item.title)
+                                }
+                            }
                         }
                     }
-                    ForEach(Array(model.actions.enumerated()), id: \.offset) { index, title in
-                        Button { model.chooseAction(index) } label: {
-                            AwesunActionRow(icon: symbol(for: title), title: title)
+
+                    let powerItems = actions(in: "power")
+                    if !powerItems.isEmpty {
+                        sectionHeader("电源操作")
+                        VStack(spacing: 6) {
+                            ForEach(powerItems) { item in
+                                Button { model.chooseAction(item.id) } label: {
+                                    AwesunActionRow(icon: "power", title: item.title, danger: true)
+                                }
+                            }
                         }
+                    }
+
+                    let diagItems = actions(in: "diagnostics")
+                    if !diagItems.isEmpty {
+                        VStack(spacing: 0) {
+                            Button {
+                                withAnimation(.easeOut(duration: 0.16)) {
+                                    diagnosticsExpanded.toggle()
+                                }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "waveform.path.ecg")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(AwesunPalette.textSecondary)
+                                    Text("连接诊断")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(AwesunPalette.textSecondary)
+                                    Spacer()
+                                    Image(systemName: diagnosticsExpanded ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(AwesunPalette.textSecondary)
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 42)
+                                .contentShape(Rectangle())
+                            }
+                            if diagnosticsExpanded {
+                                Divider().overlay(AwesunPalette.tileStroke)
+                                VStack(spacing: 6) {
+                                    ForEach(diagItems) { item in
+                                        Button { model.chooseAction(item.id) } label: {
+                                            AwesunActionRow(icon: symbol(for: item.title), title: item.title)
+                                        }
+                                    }
+                                }
+                                .padding(8)
+                            }
+                        }
+                        .background(Color.white.opacity(0.05))
+                        .cornerRadius(12)
+                        .overlay(RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(AwesunPalette.tileStroke)
+                            .allowsHitTesting(false))
                     }
                 }
             }
@@ -694,6 +778,12 @@ struct AwesunActionPanel: View {
             .padding(.top, 12)
             .buttonStyle(.plain)
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(AwesunPalette.textSecondary.opacity(0.78))
     }
 
     private func symbol(for title: String) -> String {
@@ -704,6 +794,8 @@ struct AwesunActionPanel: View {
         if text.contains("密码") || text.contains("password") { return "key" }
         if text.contains("录制") || text.contains("record") { return "record.circle" }
         if text.contains("重启") || text.contains("restart") { return "power" }
+        if text.contains("锁") || text.contains("lock") { return "lock" }
+        if text.contains("剪贴板") || text.contains("clipboard") { return "doc.on.clipboard" }
         return "bolt"
     }
 }
@@ -711,18 +803,20 @@ struct AwesunActionPanel: View {
 struct AwesunActionRow: View {
     let icon: String
     let title: String
+    var danger: Bool = false
 
     var body: some View {
+        let fg: Color = danger ? Color(awesun: 0xFFFCA5A5) : .white
         HStack(spacing: 11) {
             Image(systemName: icon)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundColor(fg)
                 .frame(width: 30, height: 30)
-                .background(Color.white.opacity(0.12))
+                .background(danger ? AwesunPalette.brandRed.opacity(0.20) : Color.white.opacity(0.12))
                 .cornerRadius(7)
             Text(title)
                 .font(.system(size: 14))
-                .foregroundColor(.white)
+                .foregroundColor(fg)
                 .multilineTextAlignment(.leading)
             Spacer()
             Image(systemName: "chevron.right")
@@ -731,7 +825,7 @@ struct AwesunActionRow: View {
         }
         .padding(.horizontal, 10)
         .frame(minHeight: 46)
-        .background(Color.white.opacity(0.07))
+        .background(danger ? AwesunPalette.brandRed.opacity(0.14) : Color.white.opacity(0.07))
         .cornerRadius(9)
         .contentShape(Rectangle())
     }

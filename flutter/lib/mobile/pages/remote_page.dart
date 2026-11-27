@@ -39,6 +39,7 @@ import '../session_ime.dart';
 import '../session_viewport.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
+import '../widgets/session_action_sheet.dart';
 import '../widgets/session_controls.dart';
 import '../widgets/session_keyboard.dart';
 import '../widgets/session_quality_monitor.dart';
@@ -126,6 +127,7 @@ class _RemotePageState extends State<RemotePage>
     with WidgetsBindingObserver, TickerProviderStateMixin {
   late final FFI gFFI = widget.workspaceSession?.ffi ?? app.gFFI;
   late final _sessionOpened = widget.workspaceSession?.openedAt ?? DateTime.now();
+  late final RxBool _showRemoteCursor = ShowRemoteCursorState.find(widget.id);
   Timer? _timer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
@@ -294,6 +296,8 @@ class _RemotePageState extends State<RemotePage>
     _blockableOverlayState.applyFfi(gFFI);
     void onImageReady(String peerId) {
       if (!mounted) return;
+      _showRemoteCursor.value = bind.sessionGetToggleOptionSync(
+          sessionId: sessionId, arg: 'show-remote-cursor');
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
       if (!resuming && gFFI.recordingModel.start) {
@@ -1236,6 +1240,17 @@ class _RemotePageState extends State<RemotePage>
         }
       case 'releaseModifiers':
         _clearSessionModifiers();
+      case 'minimize':
+        if (widget.workspaceSession != null && _sessionReady) {
+          await _minimizeRemoteSession();
+        }
+      case 'showRemoteCursor':
+        if (_canToggleRemoteCursor(model)) {
+          await bind.sessionToggleOption(
+              sessionId: sessionId, value: 'show-remote-cursor');
+          _showRemoteCursor.value = _nativeOption('show-remote-cursor');
+        }
+        return _showRemoteCursor.value;
       case 'lock':
         gFFI.canvasModel.setLocked(arguments['locked'] == true);
         return gFFI.canvasModel.locked;
@@ -1262,12 +1277,47 @@ class _RemotePageState extends State<RemotePage>
     return null;
   }
 
+  bool _canToggleRemoteCursor(FfiModel model) =>
+      !model.viewOnly &&
+      !model.isPeerAndroid &&
+      !gFFI.canvasModel.cursorEmbedded &&
+      !model.pi.isWayland;
+
+  Future<void> _toggleRemoteCursor(bool value) async {
+    final model = gFFI.ffiModel;
+    if (!_canToggleRemoteCursor(model)) return;
+    final current = bind.sessionGetToggleOptionSync(
+        sessionId: sessionId, arg: 'show-remote-cursor');
+    if (current != value) {
+      await bind.sessionToggleOption(
+          sessionId: sessionId, value: 'show-remote-cursor');
+    }
+    _showRemoteCursor.value = bind.sessionGetToggleOptionSync(
+        sessionId: sessionId, arg: 'show-remote-cursor');
+    if (mounted) setState(() {});
+  }
+
   Map<String, Object?> _nativeMenu(FfiModel model) {
     final actions = <VoidCallback>[];
     final titles = <String>[];
-    void add(String title, VoidCallback action) {
+    final actionItems = <Map<String, Object?>>[];
+    void add(
+      String title,
+      VoidCallback action, {
+      String? actionId,
+      MobileActionCategory? category,
+    }) {
+      final resolvedCategory = category ??
+          classifyMobileSessionAction(actionId: actionId, rawTitle: title);
+      final index = actions.length;
       titles.add(title);
       actions.add(action);
+      actionItems.add({
+        'index': index,
+        'title': title,
+        'group': resolvedCategory.name,
+        'danger': resolvedCategory == MobileActionCategory.power,
+      });
     }
 
     String? label(Widget child) => switch (child) {
@@ -1285,37 +1335,63 @@ class _RemotePageState extends State<RemotePage>
       final title = menu.actionId == kShortcutActionToggleBlockInput
           ? translate(blocked ? 'Unblock user input' : 'Block user input')
           : label(menu.child);
-      if (command != null && title != null) add(title, command);
+      if (command != null && title != null) {
+        add(title, command, actionId: menu.actionId);
+      }
       if (command != null && title == translate('OS Password')) {
-        add('${translate('Edit')} $title',
-            () => handleOsPasswordEditIcon(sessionId, gFFI.dialogManager));
+        add(
+          '${translate('Edit')} $title',
+          () => handleOsPasswordEditIcon(sessionId, gFFI.dialogManager),
+          category: MobileActionCategory.remote,
+        );
       }
     }
     if (_canSendSessionInput && !model.isPeerAndroid) {
-      add(translate('Center cursor'), () => _queueVirtualMouse(() async {
-            if (mounted && _canSendSessionInput) {
-              await _ensureVisibleCursor(recenter: true);
-            }
-          }));
+      add(
+        translate('Center cursor'),
+        () => _queueVirtualMouse(() async {
+              if (mounted && _canSendSessionInput) {
+                await _ensureVisibleCursor(recenter: true);
+              }
+            }),
+        category: MobileActionCategory.canvas,
+      );
     }
     if (gFFI.qualityMonitorModel.udpReports.isNotEmpty) {
-      add('UDP · ${translate("Remote device")}', () => showPeerUdpReport(context, gFFI.qualityMonitorModel));
+      add(
+        'UDP · ${translate("Remote device")}',
+        () => showPeerUdpReport(context, gFFI.qualityMonitorModel),
+        category: MobileActionCategory.diagnostics,
+      );
     }
     if (recordIosP2pDiagnostics) {
-      add(translate('Copy P2P diagnostics'), _copyP2pDiagnostics);
+      add(
+        translate('Copy P2P diagnostics'),
+        _copyP2pDiagnostics,
+        category: MobileActionCategory.diagnostics,
+      );
     }
     if (isIOS) {
-      add(translate('Diagnostics'), _copyAudioDiagnostics);
-    }
-    if (widget.workspaceSession != null && _sessionReady) {
-      add(translate('Minimize'), () => unawaited(_minimizeRemoteSession()));
+      add(
+        translate('Diagnostics'),
+        _copyAudioDiagnostics,
+        category: MobileActionCategory.diagnostics,
+      );
     }
     if (_showRemoteP2pTest) {
-      add(translate('Remote P2P test'), _showP2pTestConsent);
+      add(
+        translate('Remote P2P test'),
+        _showP2pTestConsent,
+        category: MobileActionCategory.diagnostics,
+      );
     }
     _nativeActions = actions;
     return {
       'actions': titles,
+      'actionItems': actionItems,
+      'canMinimize': widget.workspaceSession != null && _sessionReady,
+      'showRemoteCursor': _showRemoteCursor.value,
+      'canShowRemoteCursor': _canToggleRemoteCursor(model),
       'canInput': _canSendSessionInput,
       'canSwitchMode': _canSendSessionInput && !model.isPeerAndroid,
       'locked': gFFI.canvasModel.locked,
@@ -1725,6 +1801,24 @@ class _RemotePageState extends State<RemotePage>
               soundOn: !soundMuted,
               qualityVisible: gFFI.qualityMonitorModel.show,
               displayCount: peer.displays.length,
+              showRemoteCursor: _showRemoteCursor.value,
+              canShowRemoteCursor: _canToggleRemoteCursor(model),
+              onToggleRemoteCursor: (value) =>
+                  unawaited(_toggleRemoteCursor(value)),
+              onMinimize: widget.workspaceSession != null && _sessionReady
+                  ? () => unawaited(_minimizeRemoteSession())
+                  : null,
+              showFirstRunTour:
+                  bind.getLocalFlutterOption(k: 'mobile-awesun-tour-seen') !=
+                      'Y',
+              onDismissFirstRunTour: () {
+                unawaited(bind.setLocalFlutterOption(
+                    k: 'mobile-awesun-tour-seen', v: 'Y'));
+              },
+              onPanCanvas: (local, panDelta) => _moveNativePointer(
+                _androidAwesunGlobalPoint(local),
+                panDelta,
+              ),
               translateLabel: translate,
               onMovePointer: (local) => _moveNativePointer(
                 _androidAwesunGlobalPoint(local),
@@ -2263,7 +2357,21 @@ class _RemotePageState extends State<RemotePage>
                       ).workaroundFreezeLinuxMint(),
               ),
           ];
-          if (showCursorPaint && !_nativePointerVisible) {
+          if (isMobile) {
+            if (showCursorPaint) {
+              paints.add(Obx(() =>
+                  (gFFI.ffiModel.viewOnly || _showRemoteCursor.value)
+                      ? CursorPaint(widget.id)
+                      : const SizedBox.shrink()));
+            }
+            if (!_nativePointerVisible &&
+                !gFFI.ffiModel.viewOnly &&
+                gFFI.ffiModel.keyboard &&
+                !gFFI.ffiModel.isPeerAndroid &&
+                !gFFI.ffiModel.touchMode) {
+              paints.add(const _LocalMobileCursorPaint());
+            }
+          } else if (showCursorPaint && !_nativePointerVisible) {
             paints.add(CursorPaint(widget.id));
           }
           if (!_usesAwesunOverlay && gFFI.ffiModel.touchMode && !isMobile) {
@@ -2427,6 +2535,96 @@ class _RemotePageState extends State<RemotePage>
   }
 
   void showActions(String id) async {
+    if (isMobile) {
+      String? label(Widget child) => switch (child) {
+            Text(:final data) => data,
+            Row(:final children) when children.isNotEmpty =>
+              label(children.first),
+            _ => null,
+          };
+
+      final items = <MobileSessionActionItem>[];
+      if (_canSendSessionInput && !gFFI.ffiModel.isPeerAndroid) {
+        items.add(MobileSessionActionItem(
+          title: translate('Center cursor'),
+          category: MobileActionCategory.canvas,
+          icon: Icons.center_focus_strong_rounded,
+          onPressed: () => _queueVirtualMouse(() async {
+            if (mounted && _canSendSessionInput) {
+              await _ensureVisibleCursor(recenter: true);
+            }
+          }),
+        ));
+      }
+      for (final menu in [
+        ..._getMobileActionMenus(),
+        ...toolbarControls(context, id, gFFI),
+      ]) {
+        final command = menu.onPressed;
+        if (command == null) continue;
+        final blocked = BlockInputState.find(id).value;
+        final title = menu.actionId == kShortcutActionToggleBlockInput
+            ? translate(blocked ? 'Unblock user input' : 'Block user input')
+            : label(menu.child);
+        if (title == null || title.isEmpty) continue;
+        final category = classifyMobileSessionAction(
+          actionId: menu.actionId,
+          rawTitle: title,
+        );
+        items.add(MobileSessionActionItem(
+          title: title,
+          category: category,
+          icon: iconForMobileSessionAction(
+            actionId: menu.actionId,
+            rawTitle: title,
+            category: category,
+          ),
+          danger: category == MobileActionCategory.power,
+          trailing: menu.trailingIcon,
+          onPressed: command,
+        ));
+      }
+      if (gFFI.qualityMonitorModel.udpReports.isNotEmpty) {
+        items.add(MobileSessionActionItem(
+          title: 'UDP · ${translate("Remote device")}',
+          category: MobileActionCategory.diagnostics,
+          onPressed: () => showPeerUdpReport(context, gFFI.qualityMonitorModel),
+        ));
+      }
+      if (isIOS) {
+        items.add(MobileSessionActionItem(
+          title: translate('Diagnostics'),
+          category: MobileActionCategory.diagnostics,
+          onPressed: _copyAudioDiagnostics,
+        ));
+      }
+      if (isIOS && recordIosP2pDiagnostics) {
+        items.add(MobileSessionActionItem(
+          title: translate('Copy P2P diagnostics'),
+          category: MobileActionCategory.diagnostics,
+          onPressed: _copyP2pDiagnostics,
+        ));
+      }
+      if (_showRemoteP2pTest) {
+        items.add(MobileSessionActionItem(
+          title: translate('Remote P2P test'),
+          category: MobileActionCategory.diagnostics,
+          onPressed: _showP2pTestConsent,
+        ));
+      }
+      if (!mounted || items.isEmpty) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: Colors.transparent,
+        isScrollControlled: true,
+        builder: (_) => Align(
+          alignment: Alignment.bottomCenter,
+          child: MobileSessionMoreSheet(items: items),
+        ),
+      );
+      return;
+    }
+
     final size = MediaQuery.of(context).size;
     final x = 120.0;
     final y = size.height;
@@ -2873,6 +3071,25 @@ class ImagePaint extends StatelessWidget {
     return CustomPaint(
       painter: ImagePainter(
           image: m.image, x: c.x / s, y: (c.y + adjust) / s, scale: s),
+    );
+  }
+}
+
+class _LocalMobileCursorPaint extends StatelessWidget {
+  const _LocalMobileCursorPaint();
+
+  @override
+  Widget build(BuildContext context) {
+    final m = Provider.of<CursorModel>(context);
+    final c = Provider.of<CanvasModel>(context);
+    final adjust = c.getAdjustY();
+    final left = m.x * c.scale + c.x;
+    final top = m.y * c.scale + c.y + adjust;
+    if (!left.isFinite || !top.isFinite) return const SizedBox.shrink();
+    return Positioned(
+      left: left,
+      top: top,
+      child: const LocalPointerArrow(),
     );
   }
 }

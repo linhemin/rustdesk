@@ -3560,66 +3560,35 @@ class CursorModel with ChangeNotifier {
     double dx = delta.dx;
     double dy = delta.dy;
     if (parent.target?.imageModel.image == null) return;
-    final scale = parent.target?.canvasModel.scale ?? 1.0;
+    final canvasModel = parent.target?.canvasModel;
+    final scale = canvasModel?.scale ?? 1.0;
     dx /= scale;
     dy /= scale;
-    final r = getVisibleRect();
-    var cx = r.center.dx;
-    var cy = r.center.dy;
-    var tryMoveCanvasX = false;
-    final displayRect = parent.target?.ffiModel.rect;
-    if (dx > 0) {
-      final maxCanvasCanMove = _displayOriginX +
-          (displayRect?.width ?? 1280) -
-          r.right.roundToDouble();
-      tryMoveCanvasX = _x + dx > cx && maxCanvasCanMove > 0;
-      if (tryMoveCanvasX) {
-        dx = min(dx, maxCanvasCanMove);
-      } else {
-        final maxCursorCanMove = r.right - _x;
-        dx = min(dx, maxCursorCanMove);
-      }
-    } else if (dx < 0) {
-      final maxCanvasCanMove = _displayOriginX - r.left.roundToDouble();
-      tryMoveCanvasX = _x + dx < cx && maxCanvasCanMove < 0;
-      if (tryMoveCanvasX) {
-        dx = max(dx, maxCanvasCanMove);
-      } else {
-        final maxCursorCanMove = r.left - _x;
-        dx = max(dx, maxCursorCanMove);
-      }
-    }
-    var tryMoveCanvasY = false;
-    if (dy > 0) {
-      final mayCanvasCanMove = _displayOriginY +
-          (displayRect?.height ?? 720) -
-          r.bottom.roundToDouble();
-      tryMoveCanvasY = _y + dy > cy && mayCanvasCanMove > 0;
-      if (tryMoveCanvasY) {
-        dy = min(dy, mayCanvasCanMove);
-      } else {
-        final mayCursorCanMove = r.bottom - _y;
-        dy = min(dy, mayCursorCanMove);
-      }
-    } else if (dy < 0) {
-      final mayCanvasCanMove = _displayOriginY - r.top.roundToDouble();
-      tryMoveCanvasY = _y + dy < cy && mayCanvasCanMove < 0;
-      if (tryMoveCanvasY) {
-        dy = max(dy, mayCanvasCanMove);
-      } else {
-        final mayCursorCanMove = r.top - _y;
-        dy = max(dy, mayCursorCanMove);
-      }
-    }
-
-    if (dx == 0 && dy == 0) return;
-
-    Point<double>? newPos;
     final rect = parent.target?.ffiModel.rect;
     if (rect == null) {
       // unreachable
       return;
     }
+    final displayBounds = Rect.fromLTWH(
+      _displayOriginX,
+      _displayOriginY,
+      rect.width,
+      rect.height,
+    );
+    final step = computePointerPanStep(
+      cursor: Offset(_x, _y),
+      remoteDelta: Offset(dx, dy),
+      visible: getVisibleRect(),
+      display: displayBounds,
+      scale: scale,
+      allowCanvasPan: !(canvasModel?.locked ?? false),
+    );
+    dx = step.cursorDelta.dx;
+    dy = step.cursorDelta.dy;
+
+    if (dx == 0 && dy == 0) return;
+
+    Point<double>? newPos;
     newPos = InputModel.getPointInRemoteRect(
         false,
         parent.target?.ffiModel.pi.platform,
@@ -3636,11 +3605,11 @@ class CursorModel with ChangeNotifier {
     dy = newPos.y - _y;
     _x = newPos.x;
     _y = newPos.y;
-    if (tryMoveCanvasX && dx != 0) {
-      parent.target?.canvasModel.panX(-dx * scale);
+    if (dx != 0 && step.canvasPanScreen.dx != 0) {
+      canvasModel?.panX(step.canvasPanScreen.dx);
     }
-    if (tryMoveCanvasY && dy != 0) {
-      parent.target?.canvasModel.panY(-dy * scale);
+    if (dy != 0 && step.canvasPanScreen.dy != 0) {
+      canvasModel?.panY(step.canvasPanScreen.dy);
     }
 
     parent.target?.inputModel.moveMouse(_x, _y);

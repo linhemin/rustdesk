@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../session_viewport.dart';
 
 /// Pure geometry and hit-testing mirroring `AwesunControlLayout` in iOS Swift.
 enum AwesunMouseRegion {
@@ -163,9 +166,17 @@ class AwesunFlutterOverlay extends StatefulWidget {
     this.onToggleSound,
     this.onSwitchDisplay,
     this.onPointerVisibilityChanged,
+    this.onPanCanvas,
+    this.onMinimize,
+    this.onScreenshot,
+    this.showRemoteCursor = false,
+    this.canShowRemoteCursor = false,
+    this.onToggleRemoteCursor,
     this.translateLabel,
     this.initialMouseVisible = true,
     this.initialMouseCollapsed = false,
+    this.showFirstRunTour = false,
+    this.onDismissFirstRunTour,
   });
 
   final bool touchMode;
@@ -194,9 +205,17 @@ class AwesunFlutterOverlay extends StatefulWidget {
   final VoidCallback? onToggleSound;
   final VoidCallback? onSwitchDisplay;
   final ValueChanged<bool>? onPointerVisibilityChanged;
+  final void Function(Offset pointer, Offset panDelta)? onPanCanvas;
+  final VoidCallback? onMinimize;
+  final VoidCallback? onScreenshot;
+  final bool showRemoteCursor;
+  final bool canShowRemoteCursor;
+  final ValueChanged<bool>? onToggleRemoteCursor;
   final String Function(String key)? translateLabel;
   final bool initialMouseVisible;
   final bool initialMouseCollapsed;
+  final bool showFirstRunTour;
+  final VoidCallback? onDismissFirstRunTour;
 
   @override
   State<AwesunFlutterOverlay> createState() => _AwesunFlutterOverlayState();
@@ -227,8 +246,105 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
 
   bool _functionsOpen = false;
   bool _guideOpen = false;
+  late bool _tourOpen = widget.showFirstRunTour;
+  int _tourStep = 0;
+
+  static const double _edgePanIntervalSec = 1.0 / 30.0;
+  static const double _panReversalThreshold = 3.0;
+  Timer? _edgePanTimer;
+  Offset _lastRequestedCenter = Offset.zero;
+  Size _lastViewportSize = Size.zero;
+  double _panPeakExcursion = 0;
+  bool _panBraked = false;
+  double _panBrakeLow = 0;
 
   String _tr(String key) => widget.translateLabel?.call(key) ?? key;
+
+  void _stopEdgePan() {
+    _edgePanTimer?.cancel();
+    _edgePanTimer = null;
+  }
+
+  void _resetEdgePan() {
+    _stopEdgePan();
+    _panPeakExcursion = 0;
+    _panBraked = false;
+    _panBrakeLow = 0;
+  }
+
+  void _advanceEdgePan() {
+    if (!mounted ||
+        widget.displayLocked ||
+        widget.onPanCanvas == null ||
+        (_pressedRegion != AwesunMouseRegion.hub &&
+            _pressedRegion != AwesunMouseRegion.left)) {
+      _stopEdgePan();
+      return;
+    }
+    final layout = AwesunControlGeometry.layoutFor(
+      _mouseAnchor,
+      _lastViewportSize,
+    );
+    final velocity = computeAwesunEdgePanVelocity(
+      requestedCenter: _lastRequestedCenter,
+      minCenter: layout.minCenter,
+      maxCenter: layout.maxCenter,
+    );
+    if (velocity == Offset.zero) {
+      _stopEdgePan();
+      return;
+    }
+    widget.onPanCanvas!(
+      layout.pointer,
+      velocity * _edgePanIntervalSec,
+    );
+  }
+
+  void _updateEdgePan(
+    Offset requestedCenter,
+    AwesunMouseLayout layout,
+    Size viewportSize,
+  ) {
+    _lastRequestedCenter = requestedCenter;
+    _lastViewportSize = viewportSize;
+    if (widget.displayLocked || widget.onPanCanvas == null) {
+      _resetEdgePan();
+      return;
+    }
+    final velocity = computeAwesunEdgePanVelocity(
+      requestedCenter: requestedCenter,
+      minCenter: layout.minCenter,
+      maxCenter: layout.maxCenter,
+    );
+    if (velocity == Offset.zero) {
+      _resetEdgePan();
+      return;
+    }
+    final excursion = (requestedCenter - layout.center).distance;
+    if (!_panBraked) {
+      if (_panPeakExcursion - excursion >= _panReversalThreshold) {
+        _panBraked = true;
+        _panBrakeLow = excursion;
+        _stopEdgePan();
+        return;
+      }
+      if (excursion > _panPeakExcursion) _panPeakExcursion = excursion;
+    } else {
+      if (excursion < _panBrakeLow) _panBrakeLow = excursion;
+      if (excursion - _panBrakeLow < _panReversalThreshold) {
+        return;
+      }
+      _panBraked = false;
+      _panPeakExcursion = excursion;
+    }
+    if (_edgePanTimer == null) {
+      _edgePanTimer = Timer.periodic(
+        const Duration(milliseconds: 33),
+        (_) => _advanceEdgePan(),
+      );
+      _advanceEdgePan();
+    }
+  }
 
   void _notifyPointerVisibility() {
     widget.onPointerVisibilityChanged?.call(
@@ -247,6 +363,9 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
   @override
   void didUpdateWidget(covariant AwesunFlutterOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.displayLocked && !oldWidget.displayLocked) {
+      _resetEdgePan();
+    }
     if (oldWidget.canInput != widget.canInput) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _notifyPointerVisibility();
@@ -256,6 +375,7 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
 
   @override
   void dispose() {
+    _resetEdgePan();
     if (_leftDragging) {
       widget.onLeftDragEnd();
     }
@@ -339,10 +459,12 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
       final next = AwesunControlGeometry.layoutFor(requested, viewportSize);
       setState(() => _mouseAnchor = next.center);
       widget.onMovePointer(next.pointer);
+      _updateEdgePan(requested, next, viewportSize);
     }
   }
 
   void _handleMousePanEnd(Size viewportSize) {
+    _resetEdgePan();
     final region = _pressedRegion;
     if (region == null) return;
     final layout = AwesunControlGeometry.layoutFor(_mouseAnchor, viewportSize);
@@ -553,9 +675,83 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
 
           if (_functionsOpen) _buildActionsSheet(context),
           if (_guideOpen) _buildGuideSheet(context),
+          if (_tourOpen && !_functionsOpen && !_guideOpen)
+            _buildFirstRunTourBanner(context, padding.top),
         ],
       );
     });
+  }
+
+  Widget _buildFirstRunTourBanner(BuildContext context, double topInset) {
+    const steps = [
+      '1/3 · Drag the center disc to move the pointer; push screen edge to pan',
+      '2/3 · Tap left/right arcs to click, or top/bottom dots to open scroll ring',
+      '3/3 · Tap the bottom-right wheel for actions, cursor toggles, and more tools',
+    ];
+    void dismiss() {
+      setState(() => _tourOpen = false);
+      widget.onDismissFirstRunTour?.call();
+    }
+
+    return Positioned(
+      top: topInset + 12,
+      left: 16,
+      right: 68,
+      child: Material(
+        color: AwesunVisualPalette.sheetFill,
+        elevation: 6,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AwesunVisualPalette.mouseStroke),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_awesome_rounded,
+                  size: 18, color: AwesunVisualPalette.activeIce),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  steps[_tourStep.clamp(0, steps.length - 1)],
+                  style: const TextStyle(
+                    color: AwesunVisualPalette.ink,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: dismiss,
+                child: Text(
+                  _tr('Skip'),
+                  style: const TextStyle(
+                      color: AwesunVisualPalette.dim, fontSize: 12),
+                ),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                ),
+                onPressed: () {
+                  if (_tourStep + 1 < steps.length) {
+                    setState(() => _tourStep++);
+                  } else {
+                    dismiss();
+                  }
+                },
+                child: Text(
+                  _tourStep + 1 < steps.length ? _tr('Next') : _tr('OK'),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildDockOrb({
@@ -794,6 +990,15 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
                                     widget.onDisconnect();
                                   },
                                 ),
+                                if (widget.onMinimize != null)
+                                  tile(
+                                    icon: Icons.picture_in_picture_alt_rounded,
+                                    label: _tr('Minimize'),
+                                    onTap: () {
+                                      close();
+                                      widget.onMinimize!();
+                                    },
+                                  ),
                                 if (widget.onToggleSound != null)
                                   tile(
                                     icon: widget.soundOn
@@ -802,6 +1007,15 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
                                     label: _tr('Audio'),
                                     active: widget.soundOn,
                                     onTap: widget.onToggleSound!,
+                                  ),
+                                if (widget.onScreenshot != null)
+                                  tile(
+                                    icon: Icons.camera_alt_outlined,
+                                    label: _tr('Screenshot'),
+                                    onTap: () {
+                                      close();
+                                      widget.onScreenshot!();
+                                    },
                                   ),
                                 if (widget.displayCount > 1 &&
                                     widget.onSwitchDisplay != null)
@@ -892,25 +1106,73 @@ class _AwesunFlutterOverlayState extends State<AwesunFlutterOverlay> {
                                     color: Colors.white.withOpacity(0.08),
                                   ),
                                 ),
-                                child: SwitchListTile(
-                                  dense: true,
-                                  activeColor: const Color(0xFF3B82F6),
-                                  title: Text(
-                                    _tr('Virtual mouse'),
-                                    style: const TextStyle(
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.w500,
-                                      color: AwesunVisualPalette.ink,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SwitchListTile(
+                                      dense: true,
+                                      activeColor: const Color(0xFF3B82F6),
+                                      title: Text(
+                                        _tr('Virtual mouse'),
+                                        style: const TextStyle(
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.w500,
+                                          color: AwesunVisualPalette.ink,
+                                        ),
+                                      ),
+                                      value: _mouseVisible,
+                                      onChanged: (v) {
+                                        setState(() {
+                                          _mouseVisible = v;
+                                          if (v) _mouseCollapsed = false;
+                                        });
+                                        _notifyPointerVisibility();
+                                      },
                                     ),
-                                  ),
-                                  value: _mouseVisible,
-                                  onChanged: (v) {
-                                    setState(() {
-                                      _mouseVisible = v;
-                                      if (v) _mouseCollapsed = false;
-                                    });
-                                    _notifyPointerVisibility();
-                                  },
+                                    if (widget.canShowRemoteCursor &&
+                                        widget.onToggleRemoteCursor != null) ...[
+                                      Divider(
+                                        height: 1,
+                                        indent: 16,
+                                        endIndent: 16,
+                                        color: Colors.white.withOpacity(0.08),
+                                      ),
+                                      SwitchListTile(
+                                        dense: true,
+                                        activeColor: const Color(0xFF3B82F6),
+                                        title: Text(
+                                          _tr('Show remote cursor'),
+                                          style: const TextStyle(
+                                            fontSize: 13.5,
+                                            fontWeight: FontWeight.w500,
+                                            color: AwesunVisualPalette.ink,
+                                          ),
+                                        ),
+                                        value: widget.showRemoteCursor,
+                                        onChanged: widget.onToggleRemoteCursor,
+                                      ),
+                                    ],
+                                    Divider(
+                                      height: 1,
+                                      indent: 16,
+                                      endIndent: 16,
+                                      color: Colors.white.withOpacity(0.08),
+                                    ),
+                                    SwitchListTile(
+                                      dense: true,
+                                      activeColor: const Color(0xFF3B82F6),
+                                      title: Text(
+                                        _tr('Lock canvas'),
+                                        style: const TextStyle(
+                                          fontSize: 13.5,
+                                          fontWeight: FontWeight.w500,
+                                          color: AwesunVisualPalette.ink,
+                                        ),
+                                      ),
+                                      value: widget.displayLocked,
+                                      onChanged: (_) => widget.onToggleLock(),
+                                    ),
+                                  ],
                                 ),
                               ),
                               const SizedBox(height: 16),
