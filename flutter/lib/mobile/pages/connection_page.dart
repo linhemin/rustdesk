@@ -18,7 +18,9 @@ import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
 import '../mobile_remote_sessions.dart';
+import '../phone_microphone.dart';
 import 'home_page.dart';
+import 'phone_microphone_page.dart';
 
 /// Connection page for connecting to a remote peer.
 class ConnectionPage extends StatefulWidget implements PageShape {
@@ -389,6 +391,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
                             size: isIOS ? 16 : 24,
                             color: isIOS ? theme.hintColor : MyTheme.darkGray)),
                   )),
+              if (isIOS || isAndroid)
+                IconButton(
+                  icon: const Icon(Icons.headset_mic_outlined),
+                  tooltip: translate('Audio mode'),
+                  onPressed: () {
+                    final audio = PhoneMicrophone.standalone;
+                    if (audio != null && _idController.id.isEmpty) {
+                      PhoneMicrophonePage.showSession(
+                          context, PhoneMicrophone.peerId, audio);
+                    } else {
+                      PhoneMicrophonePage.open(context, _idController.id);
+                    }
+                  },
+                ),
               if (isIOS)
                 Padding(
                   padding: const EdgeInsetsDirectional.only(end: 6),
@@ -455,7 +471,8 @@ class _ActiveMobileSessions extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Obx(() {
         final remotes = MobileRemoteSessions.sessions.toList();
-        if (remotes.isEmpty) return const SizedBox.shrink();
+        final audio = PhoneMicrophone.standalone;
+        if (remotes.isEmpty && audio == null) return const SizedBox.shrink();
 
         return Padding(
           padding: const EdgeInsetsDirectional.fromSTEB(16, 6, 16, 8),
@@ -468,6 +485,18 @@ class _ActiveMobileSessions extends StatelessWidget {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
+                    if (audio != null)
+                      AnimatedBuilder(
+                        animation: audio.ffiModel,
+                        builder: (context, _) => _sessionChip(
+                          Icons.headset_mic_outlined,
+                          PhoneMicrophone.peerId,
+                          audio.ffiModel.permissions['phone-audio-ready'] ==
+                              true,
+                          () => PhoneMicrophonePage.showSession(
+                              context, PhoneMicrophone.peerId, audio),
+                        ),
+                      ),
                     for (final remote in remotes)
                       Obx(() => _sessionChip(
                             Icons.desktop_windows_outlined,

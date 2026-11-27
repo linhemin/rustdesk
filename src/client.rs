@@ -96,6 +96,7 @@ pub use super::lang::*;
 mod direct_path;
 mod login_method;
 mod path_rtt;
+mod phone_microphone;
 mod transport_preference;
 mod relay_start;
 
@@ -3469,6 +3470,7 @@ pub struct LoginConfigHandler {
     /// one the probe latched to the raw pipe logs in without asking, so an
     /// upgraded peer keeps giving it the raw pipe.
     pub(crate) port_forward_multiplex: bool,
+    pub(crate) phone_microphone_only: bool,
     #[cfg(any(target_os = "ios", target_os = "android"))]
     pub(crate) mobile_remote_suspended: bool,
     #[cfg(target_os = "ios")]
@@ -4692,6 +4694,13 @@ impl LoginConfigHandler {
         if self.skips_saved_password() {
             lr.password.clear();
         }
+        if self.phone_microphone_only {
+            lr.option = None.into();
+            lr.set_phone_microphone(PhoneMicrophone::new());
+            let mut message = Message::new();
+            message.set_login_request(lr);
+            return message;
+        }
         match self.conn_type {
             ConnType::FILE_TRANSFER => lr.set_file_transfer(FileTransfer {
                 dir: self.get_remote_dir(),
@@ -4793,6 +4802,7 @@ pub enum MediaData {
     VideoFrame(Box<VideoFrame>),
     AudioFrame(Box<AudioFrame>),
     AudioFormat(AudioFormat),
+    StopAudio,
     Reset,
     RecordScreen(bool),
 }
@@ -5129,6 +5139,15 @@ fn start_audio_thread_impl(
                     MediaData::AudioFormat(f) => {
                         log::debug!("recved audio format, sample rate={}", f.sample_rate);
                         audio_handler.handle_format(f);
+                    }
+                    MediaData::StopAudio => {
+                        #[cfg(target_os = "ios")]
+                        let probe = audio_handler.ios_audio.clone();
+                        audio_handler = AudioHandler::default();
+                        #[cfg(target_os = "ios")]
+                        {
+                            audio_handler.ios_audio = probe;
+                        }
                     }
                     _ => {}
                 }
@@ -6030,6 +6049,8 @@ pub enum Data {
     ElevateDirect,
     ElevateWithLogon(String, String),
     NewVoiceCall,
+    NewPhoneMicrophone,
+    SetPhoneAudioPlayback(bool),
     CloseVoiceCall,
     ContinueInsecureConnection,
     ResetDecoder(Option<usize>),

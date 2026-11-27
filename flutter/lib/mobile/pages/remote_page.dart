@@ -33,6 +33,7 @@ import '../awesun/awesun_flutter_overlay.dart';
 import '../awesun/awesun_native_bridge.dart';
 import '../ios_p2p_diagnostics.dart';
 import '../session_canvas_drag.dart';
+import '../phone_microphone.dart';
 import '../mobile_remote_sessions.dart';
 import '../session_ime.dart';
 import '../session_viewport.dart';
@@ -1031,7 +1032,9 @@ class _RemotePageState extends State<RemotePage>
       case SessionAction.display:
         showOptions(context, widget.id, gFFI);
       case SessionAction.chat:
-        if (isAndroid) {
+        if (isIOS) {
+          showChatOptions(widget.id);
+        } else if (isAndroid) {
           _openSessionChat();
         } else {
           onPressedTextChat(widget.id);
@@ -1046,14 +1049,7 @@ class _RemotePageState extends State<RemotePage>
   }
 
   Future<void> _openSessionChat() async {
-    final support =
-        await gFFI.invokeMethod('get_value', 'KEY_IS_SUPPORT_VOICE_CALL');
-    if (!mounted) return;
-    if (support == true) {
-      showChatOptions(widget.id);
-    } else {
-      onPressedTextChat(widget.id);
-    }
+    showChatOptions(widget.id);
   }
 
   bool get _sessionReady =>
@@ -1307,6 +1303,9 @@ class _RemotePageState extends State<RemotePage>
     }
     if (recordIosP2pDiagnostics) {
       add(translate('Copy P2P diagnostics'), _copyP2pDiagnostics);
+    }
+    if (isIOS) {
+      add(translate('Diagnostics'), _copyAudioDiagnostics);
     }
     if (widget.workspaceSession != null && _sessionReady) {
       add(translate('Minimize'), () => unawaited(_minimizeRemoteSession()));
@@ -2096,7 +2095,7 @@ class _RemotePageState extends State<RemotePage>
                                                 Colors.white, BlendMode.srcIn))
                                         : Icon(Icons.message),
                                     onPressed: () =>
-                                        isAndroid && isSupportVoiceCall
+                                        (isAndroid || isIOS)
                                             ? showChatOptions(widget.id)
                                             : onPressedTextChat(widget.id),
                                   ))
@@ -2377,6 +2376,28 @@ class _RemotePageState extends State<RemotePage>
     }
   }
 
+  Future<void> _copyAudioDiagnostics() async {
+    final target = sessionId;
+    try {
+      final report = await bind.sessionGetOption(
+          sessionId: target, arg: 'ios-remote-audio-report');
+      if (!mounted || sessionId != target) return;
+      if (report == null || report.isEmpty) {
+        showToast(translate('Waiting'));
+        return;
+      }
+      final output = await const MethodChannel('rustdesk/phone-microphone')
+          .invokeMethod<String>('output-status')
+          .catchError((Object _) => null);
+      if (!mounted || sessionId != target) return;
+      await Clipboard.setData(
+          ClipboardData(text: [report, if (output != null) output].join('\n')));
+      if (mounted) showToast(translate('Copied'));
+    } catch (_) {
+      if (mounted) showToast(translate('Failed'));
+    }
+  }
+
   Future<void> _copyP2pDiagnostics() async {
     if (!recordIosP2pDiagnostics) return;
     try {
@@ -2414,6 +2435,12 @@ class _RemotePageState extends State<RemotePage>
         TTextMenu(
           child: Text(translate('Minimize')),
           onPressed: () => unawaited(_minimizeRemoteSession()),
+        ),
+      if (isIOS)
+        TTextMenu(
+          child: Text(translate('Diagnostics')),
+          trailingIcon: const Icon(Icons.content_copy),
+          onPressed: _copyAudioDiagnostics,
         ),
       if (isIOS && recordIosP2pDiagnostics)
         TTextMenu(
@@ -2485,6 +2512,10 @@ class _RemotePageState extends State<RemotePage>
   }
 
   showChatOptions(String id) async {
+    final canStartVoiceCall = isAndroid
+        ? await gFFI.invokeMethod('get_value', 'KEY_IS_SUPPORT_VOICE_CALL') == true
+        : !isIOS;
+    if (!mounted) return;
     onPressVoiceCall() => bind.sessionRequestVoiceCall(sessionId: sessionId);
     onPressEndVoiceCall() => bind.sessionCloseVoiceCall(sessionId: sessionId);
 
@@ -2509,9 +2540,15 @@ class _RemotePageState extends State<RemotePage>
       VoiceCallStatus.connected
     ].contains(gFFI.chatModel.voiceCallStatus.value);
     final menus = [
+      if ((isAndroid || isIOS) && !isInVoice)
+        makeTextMenu('Phone microphone', const Icon(Icons.mic_none), () async {
+          if (!await PhoneMicrophone.prepare(gFFI)) return;
+          if (!mounted) { await PhoneMicrophone.stop(gFFI); return; }
+          await bind.sessionRequestPhoneMicrophone(sessionId: sessionId);
+        }),
       makeTextMenu('Text chat', Icon(Icons.message, color: MyTheme.accent),
           () => onPressedTextChat(widget.id)),
-      isInVoice
+      if (isInVoice || canStartVoiceCall) isInVoice
           ? makeTextMenu(
               'End voice call',
               SvgPicture.asset(

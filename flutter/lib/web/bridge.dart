@@ -1208,6 +1208,10 @@ class RustdeskImpl {
     throw UnimplementedError("sessionNewRdp");
   }
 
+  bool sessionPreparePhoneMicrophone({required UuidValue sessionId, required String id, required bool forceRelay, dynamic hint}) => false;
+
+  Future<void> sessionRequestPhoneMicrophone({required UuidValue sessionId, dynamic hint}) async {}
+
   Future<void> sessionRequestVoiceCall(
       {required UuidValue sessionId, dynamic hint}) {
     throw UnimplementedError("sessionRequestVoiceCall");

@@ -198,6 +198,8 @@ mod audio_capture_queue;
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
 mod cpal_impl {
+    #[cfg(windows)]
+    use super::super::phone_microphone::{cable_in_use, is_windows_cable_endpoint};
     use self::service::{Reset, ServiceSwap};
     use super::audio_capture_error::CaptureErrorHandler;
     use super::*;
@@ -220,6 +222,8 @@ mod cpal_impl {
     #[derive(Default)]
     pub struct State {
         stream: Option<ActiveCaptureStream>,
+        #[cfg(windows)]
+        phone_cable_active: bool,
     }
 
     struct ActiveCaptureStream {
@@ -246,7 +250,7 @@ mod cpal_impl {
         sp.snapshot(|_sps: ServiceSwap<_>| Ok(()))?;
         match &state.stream {
             None => {
-                state.stream = Some(play(&sp)?);
+                state.stream = play(&sp)?;
             }
             _ => {}
         }
@@ -263,7 +267,7 @@ mod cpal_impl {
         sp.snapshot(|sps| {
             match &state.stream {
                 None => {
-                    state.stream = Some(play(&sp)?);
+                    state.stream = play(&sp)?;
                 }
                 _ => {}
             }
@@ -276,6 +280,15 @@ mod cpal_impl {
     }
 
     pub fn run(sp: EmptyExtraFieldService, state: &mut State) -> ResultType<()> {
+        #[cfg(windows)]
+        {
+            let active = cable_in_use();
+            if active != state.phone_cable_active {
+                state.phone_cable_active = active;
+                super::restart();
+                return run_restart(sp, state);
+            }
+        }
         if let Some(stream) = &state.stream {
             if stream.errors.needs_restart() {
                 // Recreate on the service thread, outside the capture callbacks.
@@ -309,6 +322,8 @@ mod cpal_impl {
         sender: audio_capture_queue::CapturePcmSender,
         sample_rate: u32,
         encode_channel: magnum_opus::Channels,
+        #[cfg(windows)]
+        uses_phone_cable: bool,
     }
 
     impl CaptureFrameProcessor {
@@ -400,7 +415,15 @@ mod cpal_impl {
     fn get_device() -> ResultType<(Device, SupportedStreamConfig)> {
         let audio_input = super::get_audio_input();
         if !audio_input.is_empty() {
-            return get_audio_input(&audio_input);
+            if !cable_in_use() {
+                return get_audio_input(&audio_input);
+            }
+            if !is_windows_cable_endpoint(&audio_input) {
+                let capture = get_audio_input(&audio_input)?;
+                if !uses_phone_cable(&capture.0) {
+                    return Ok(capture);
+                }
+            }
         }
         // The pinned CPAL uses event-driven WASAPI loopback here. Windows versions
         // before Windows 10 1703 do not signal capture events, so system audio does
@@ -471,9 +494,25 @@ mod cpal_impl {
         Ok((device, format))
     }
 
-    fn play(sp: &GenericService) -> ResultType<ActiveCaptureStream> {
+    #[cfg(windows)]
+    fn uses_phone_cable(device: &Device) -> bool {
+        device.name().is_ok_and(|name| is_windows_cable_endpoint(&name))
+    }
+
+    fn play(sp: &GenericService) -> ResultType<Option<ActiveCaptureStream>> {
         use cpal::SampleFormat::*;
         let (device, config) = get_device()?;
+        #[cfg(windows)]
+        let uses_phone_cable = uses_phone_cable(&device);
+        #[cfg(windows)]
+        if uses_phone_cable && cable_in_use() {
+            hbb_common::throttled_log!(
+                std::time::Duration::from_secs(30),
+                warn,
+                "Remote audio paused: Windows playback uses the VB-CABLE reserved for the phone microphone"
+            );
+            return Ok(None);
+        }
         let sp = sp.clone();
         // Sample rate must be one of 8000, 12000, 16000, 24000, or 48000.
         let sample_rate_0 = config.sample_rate().0;
@@ -502,6 +541,8 @@ mod cpal_impl {
             sender,
             sample_rate,
             encode_channel: ch,
+            #[cfg(windows)]
+            uses_phone_cable,
         };
         let (stream, errors) = match config.sample_format() {
             I8 => build_input_stream::<i8>(device, &config, output)?,
@@ -519,12 +560,12 @@ mod cpal_impl {
         stream.play()?;
         #[cfg(target_os = "macos")]
         log::info!("Audio capture start call succeeded");
-        Ok(ActiveCaptureStream {
+        Ok(Some(ActiveCaptureStream {
             stream: Some(Box::new(stream)),
             format: Arc::new(create_format_msg(sample_rate, ch as _)),
             _encoder_worker: encoder_worker,
             errors,
-        })
+        }))
     }
 
     fn convert_input_samples<T>(data: &[T]) -> impl Iterator<Item = f32> + '_
@@ -587,11 +628,17 @@ mod cpal_impl {
             device_channel,
             encode_channel: output.encode_channel as _,
         };
+        #[cfg(windows)]
+        let uses_phone_cable = output.uses_phone_cable;
         let mut processor = CaptureFrameProcessor::new(processor_config, output.sender)?;
         let timeout = None;
         let stream = device.build_input_stream(
             &config.config(),
             move |data: &[T], _: &InputCallbackInfo| {
+                #[cfg(windows)]
+                if uses_phone_cable && cable_in_use() {
+                    return;
+                }
                 if processor_errors.needs_restart() {
                     return;
                 }

@@ -13,6 +13,9 @@ final _sessionId = UuidValue('00000000-0000-0000-0000-000000000000');
 
 class _FakeFFI implements FFI {
   @override
+  bool get phoneAudioOnly => false;
+
+  @override
   UuidValue get sessionId => _sessionId;
 
   @override

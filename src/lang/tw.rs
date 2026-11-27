@@ -907,6 +907,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Public key source", "公鑰來源"),
         ("Both devices must use the same relay address and public key.", "雙方設定相同的中繼位址與公鑰後即可使用中繼。"),
         ("Choose Custom to set a bitrate limit.", "選擇「自訂」可設定位元率上限。"),
+        ("Phone microphone is in use", "手機麥克風使用中"),
+        ("The RustDesk microphone driver is not installed", "這台電腦尚未安裝 RustDesk 麥克風驅動程式"),
+        ("Phone microphone", "手機麥克風"),
+        ("Use this phone as a microphone?", "允許這台手機作為電腦的麥克風嗎？"),
+        ("Phone microphone unavailable", "手機麥克風無法使用"),
+        ("This computer does not support phone microphone sessions", "這台電腦不支援手機麥克風連線"),
+        ("Audio mode", "音訊模式"),
+        ("Use local microphone", "使用本機麥克風"),
+        ("Use as remote speaker", "作為遠端喇叭"),
         ("Active sessions", "進行中的連線"),
     ].iter().cloned().collect();
 }

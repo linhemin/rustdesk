@@ -907,6 +907,15 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Public key source", ""),
         ("Both devices must use the same relay address and public key.", ""),
         ("Choose Custom to set a bitrate limit.", ""),
+        ("Phone microphone is in use", ""),
+        ("The RustDesk microphone driver is not installed", ""),
+        ("Phone microphone", ""),
+        ("Use this phone as a microphone?", ""),
+        ("Phone microphone unavailable", ""),
+        ("This computer does not support phone microphone sessions", ""),
+        ("Audio mode", ""),
+        ("Use local microphone", ""),
+        ("Use as remote speaker", ""),
         ("Active sessions", ""),
     ].iter().cloned().collect();
 }

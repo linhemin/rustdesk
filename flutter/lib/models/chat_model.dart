@@ -17,6 +17,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../consts.dart';
+import '../mobile/phone_microphone.dart';
 import '../common.dart';
 import '../common/widgets/overlay.dart';
 import '../main.dart';
@@ -595,19 +596,27 @@ class ChatModel with ChangeNotifier {
   }
 
   void onVoiceCallWaiting() {
+    if (identical(PhoneMicrophone.standalone, parent.target)) {
+      parent.target?.dialogManager.dismissAll();
+    }
     _voiceCallStatus.value = VoiceCallStatus.waitingForResponse;
   }
 
   void onVoiceCallStarted() {
     _voiceCallStatus.value = VoiceCallStatus.connected;
-    if (isAndroid && _androidVoiceCallSession) {
+    if (isAndroid &&
+        _androidVoiceCallSession &&
+        !PhoneMicrophone.owns(parent.target)) {
       parent.target?.invokeMethod("on_voice_call_started");
     }
   }
 
   void onVoiceCallClosed(String reason) {
     _voiceCallStatus.value = VoiceCallStatus.notStarted;
-    if (isAndroid && _androidVoiceCallSession) {
+    if (PhoneMicrophone.owns(parent.target)) {
+      PhoneMicrophone.stop(parent.target!);
+      if (reason.isNotEmpty) showToast(translate(reason));
+    } else if (isAndroid && _androidVoiceCallSession) {
       // We can always invoke "on_voice_call_closed"
       // no matter if the `_voiceCallStatus` was `VoiceCallStatus.notStarted` or not.
       parent.target?.invokeMethod("on_voice_call_closed");

@@ -178,6 +178,7 @@ pub fn session_add_sync(
         is_shared_password,
         conn_token,
         &login_method,
+        false,
     );
     // We can't put the remove call together with `std::env::var("IS_TERMINAL_ADMIN")`.
     // Because there are some `bail!` in `session_add()`, we must make sure `IS_TERMINAL_ADMIN` is removed at last.
@@ -1783,6 +1784,17 @@ pub fn session_remove_port_forward(session_id: SessionID, local_port: i32) {
 pub fn session_new_rdp(session_id: SessionID) {
     if let Some(session) = sessions::get_session_by_session_id(&session_id) {
         session.new_rdp();
+    }
+}
+
+pub fn session_prepare_phone_microphone(session_id: SessionID, id: String, force_relay: bool) -> SyncReturn<bool> {
+    SyncReturn(session_add(&session_id, &id, false, false, false, false, false, "",
+        force_relay, String::new(), false, None, "", true).is_ok())
+}
+
+pub fn session_request_phone_microphone(session_id: SessionID) {
+    if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+        session.request_phone_microphone();
     }
 }
 

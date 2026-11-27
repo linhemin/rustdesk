@@ -12,6 +12,8 @@ import '../../common/widgets/dialog.dart';
 import '../../consts.dart';
 import '../../utils/android_documents.dart';
 import '../widgets/file_transfer_widgets.dart';
+import '../phone_microphone.dart';
+import 'phone_microphone_page.dart';
 
 class FileManagerPage extends StatefulWidget {
   FileManagerPage(
@@ -423,6 +425,16 @@ class _FileManagerPageState extends State<FileManagerPage> {
           centerTitle: false,
           title: _headerTitle(),
           actions: [
+            if (isAndroid || isIOS)
+              IconButton(
+                tooltip: translate('Audio mode'),
+                icon: const Icon(Icons.headset_mic_outlined),
+                onPressed: () async {
+                  final session = await PhoneMicrophone.startStandalone(widget.id, widget.forceRelay ?? false);
+                  if (session == null || !mounted) return;
+                  await PhoneMicrophonePage.showSession(context, widget.id, session);
+                },
+              ),
             Obx(() => IconButton(
                   tooltip: translate('Create Folder'),
                   visualDensity: VisualDensity.compact,

@@ -33,7 +33,7 @@ use base::{
         self, can_enable_overwrite_detection, get_job, get_string, new_send_confirm,
         DigestCheckResult, RemoveJobMeta,
     },
-    message_proto::{permission_info::Permission, *},
+    message_proto::{option_message::BoolOption, permission_info::Permission, *},
 };
 #[cfg(any(
     target_os = "windows",
@@ -81,7 +81,14 @@ pub struct Remote<T: InvokeUiSession> {
     // Stop sending local audio to remote client.
     stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
     voice_call_request_timestamp: Option<NonZeroI64>,
+    phone_microphone_only: bool,
+    phone_microphone_supported: bool,
+    phone_audio_playback_supported: bool,
+    phone_audio_playback: bool,
     peer_shares_transport: bool,
+    phone_microphone_pending: bool,
+    phone_microphone_started: bool,
+    phone_microphone_capture: Option<super::phone_microphone::Capture>,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
     remove_jobs: HashMap<i32, RemoveJob>,
@@ -149,6 +156,7 @@ impl<T: InvokeUiSession> Remote<T> {
         receiver: mpsc::UnboundedReceiver<Data>,
         sender: mpsc::UnboundedSender<Data>,
     ) -> Self {
+        let phone_microphone_only = handler.lc.read().unwrap().phone_microphone_only;
         #[cfg(target_os = "ios")]
         let audio = {
             let mut config = handler.lc.write().unwrap();
@@ -156,6 +164,7 @@ impl<T: InvokeUiSession> Remote<T> {
             config.ios_audio.clone()
         };
         Self {
+            phone_microphone_only,
             handler,
             #[cfg(not(target_os = "ios"))]
             audio_sender: client::start_audio_thread(),
@@ -187,7 +196,13 @@ impl<T: InvokeUiSession> Remote<T> {
             video_format: CodecFormat::Unknown,
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
+            phone_microphone_supported: false,
+            phone_audio_playback_supported: false,
+            phone_audio_playback: false,
             peer_shares_transport: false,
+            phone_microphone_pending: false,
+            phone_microphone_started: false,
+            phone_microphone_capture: None,
             elevation_requested: false,
             peer_info: Default::default(),
             video_threads: Default::default(),
@@ -445,6 +460,24 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     tokio::select! {
+                        packet = super::phone_microphone::Capture::next(&mut self.phone_microphone_capture) => {
+                            if let Some(packet) = packet {
+                                let mut message = Message::new();
+                                message.set_phone_microphone_packet(packet);
+                                if let Err(error) = peer.send(&message).await {
+                                    self.handler.on_establish_connection_error(error.to_string());
+                                    break;
+                                }
+                                if !self.phone_microphone_started {
+                                    self.phone_microphone_started = true;
+                                    self.handler.on_voice_call_started();
+                                }
+                            } else {
+                                self.phone_microphone_capture = None;
+                                self.handler.on_voice_call_closed("Microphone capture stopped");
+                                allow_err!(peer.send(&new_voice_call_request(false)).await);
+                            }
+                        }
                         allowed = &mut check_permission, if check_live_permission && (rtc_upgrade || native_upgrade) => {
                             check_live_permission = false;
                             allow_live_direct = allowed;
@@ -651,7 +684,7 @@ impl<T: InvokeUiSession> Remote<T> {
                             self.video_threads.iter().for_each(|(_, v)| {
                                 *v.frame_count.write().unwrap() = 0;
                             });
-                            self.fps_control(direct, fps.clone(), &mut peer).await;
+                            if !self.phone_microphone_only { self.fps_control(direct, fps.clone(), &mut peer).await; }
                             let chroma = self.chroma.read().unwrap().clone();
                             let chroma = match chroma {
                                 Some(Chroma::I444) => "4:4:4",
@@ -733,7 +766,16 @@ impl<T: InvokeUiSession> Remote<T> {
         Some(hbb_common::sodiumoxide::crypto::hash::sha256::hash(&context).0)
     }
 
-    fn handle_disconnected(&self, round: u32) {
+    fn handle_disconnected(&mut self, round: u32) {
+        if self.phone_microphone_only {
+            self.handler.set_permission("phone-audio-ready", false);
+            self.handler.set_permission("phone-audio-playing", false);
+        }
+        if self.phone_microphone_capture.take().is_some() || self.phone_microphone_pending
+            || self.phone_microphone_only {
+            self.phone_microphone_pending = false;
+            self.handler.on_voice_call_closed("Disconnected");
+        }
         // set_disconnected_ok is used to check if new connection round is started.
         let set_disconnected_ok = self
             .handler
@@ -1626,8 +1668,41 @@ impl<T: InvokeUiSession> Remote<T> {
                 allow_err!(peer.send(&msg).await);
                 self.elevation_requested = true;
             }
-            Data::NewVoiceCall => {
-                let msg = new_voice_call_request(true);
+            Data::SetPhoneAudioPlayback(enabled) => {
+                if self.phone_microphone_only && self.is_connected
+                    && self.phone_audio_playback_supported && peer.is_secured()
+                {
+                    let mut misc = Misc::new();
+                    misc.set_option(OptionMessage {
+                        disable_audio: (if enabled { BoolOption::No } else { BoolOption::Yes }).into(),
+                        ..Default::default()
+                    });
+                    let mut msg = Message::new();
+                    msg.set_misc(misc);
+                    if !enabled {
+                        self.phone_audio_playback = false;
+                        self.audio_sender.send(MediaData::StopAudio).ok();
+                    }
+                    if peer.send(&msg).await.is_ok() {
+                        self.phone_audio_playback = enabled;
+                        self.handler.set_permission("phone-audio-playing", enabled);
+                    }
+                }
+            }
+            Data::NewPhoneMicrophone | Data::NewVoiceCall => {
+                if self.voice_call_request_timestamp.is_some() || self.phone_microphone_capture.is_some()
+                    || self.stop_voice_call_sender.is_some() { return true; }
+                let microphone = matches!(data, Data::NewPhoneMicrophone);
+                if self.phone_microphone_only && (!microphone || !self.is_connected) {
+                    return true;
+                }
+                if microphone && (!peer.is_secured() || !self.phone_microphone_supported) {
+                    self.handler.on_voice_call_closed("Phone microphone unavailable");
+                    return true;
+                }
+                self.phone_microphone_pending = microphone;
+                let mut msg = new_voice_call_request(true);
+                msg.mut_voice_call_request().phone_microphone = microphone;
                 // Save the voice call request timestamp for the further validation.
                 self.voice_call_request_timestamp = Some(
                     NonZeroI64::new(msg.voice_call_request().req_timestamp)
@@ -1637,10 +1712,16 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handler.on_voice_call_waiting();
             }
             Data::CloseVoiceCall => {
+                self.phone_microphone_capture = None;
+                self.phone_microphone_pending = false;
+                self.voice_call_request_timestamp = None;
                 self.stop_voice_call();
                 let msg = new_voice_call_request(false);
-                self.handler
-                    .on_voice_call_closed("Closed manually by the peer");
+                self.handler.on_voice_call_closed(if self.phone_microphone_only {
+                    ""
+                } else {
+                    "Closed manually by the peer"
+                });
                 allow_err!(peer.send(&msg).await);
             }
             Data::ResetDecoder(display) => match display {
@@ -1986,6 +2067,11 @@ impl<T: InvokeUiSession> Remote<T> {
 
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
+            if self.phone_microphone_only
+                && !super::phone_microphone::accepts_server_message(&msg_in, self.phone_audio_playback)
+            {
+                return true;
+            }
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
                     #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -2043,6 +2129,12 @@ impl<T: InvokeUiSession> Remote<T> {
                     }
                 }
                 Some(message::Union::Hash(hash)) => {
+                    self.phone_microphone_supported = hash.phone_microphone && peer.is_secured();
+                    self.phone_audio_playback_supported = hash.phone_audio_playback && peer.is_secured();
+                    if self.phone_microphone_only && !self.phone_microphone_supported {
+                        self.handler.on_error("This computer does not support phone microphone sessions");
+                        return false;
+                    }
                     if !self
                         .handler
                         .handle_hash(
@@ -2068,6 +2160,17 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                     }
                     Some(login_response::Union::PeerInfo(pi)) => {
+                        if self.phone_microphone_only {
+                            self.set_peer_info(&pi);
+                            self.is_connected = true;
+                            self.handler.lc.write().unwrap().handle_peer_info(&pi);
+                            self.handler.close_success();
+                            self.handler.set_permission(
+                                "phone-audio-supported", self.phone_audio_playback_supported
+                            );
+                            self.handler.set_permission("phone-audio-ready", true);
+                            return true;
+                        }
                         let peer_version = pi.version.clone();
                         let peer_platform = pi.platform.clone();
                         if !self.is_connected && self.handler.is_default() && !pi.displays.is_empty() {
@@ -2648,6 +2751,11 @@ impl<T: InvokeUiSession> Remote<T> {
                                 self.handler.set_permission("clipboard", p.enabled);
                             }
                             Ok(Permission::Audio) => {
+                                if self.phone_microphone_only && !p.enabled {
+                                    self.phone_audio_playback = false;
+                                    self.audio_sender.send(MediaData::StopAudio).ok();
+                                    self.handler.set_permission("phone-audio-playing", false);
+                                }
                                 self.handler.set_permission("audio", p.enabled);
                             }
                             Ok(Permission::File) => {
@@ -2863,7 +2971,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         let suspended = login.mobile_remote_suspended;
                         #[cfg(not(any(target_os = "ios", target_os = "android")))]
                         let suspended = false;
-                        login.disable_audio.v || suspended
+                        !self.phone_microphone_only && (login.disable_audio.v || suspended)
                     };
                     #[cfg(target_os = "ios")]
                     {
@@ -2934,6 +3042,11 @@ impl<T: InvokeUiSession> Remote<T> {
                         // TODO: maybe we will do a voice call from the peer in the future.
                     } else {
                         log::debug!("The remote has requested to close the voice call");
+                        if self.phone_microphone_capture.take().is_some() || self.phone_microphone_pending {
+                            self.phone_microphone_pending = false;
+                            self.voice_call_request_timestamp = None;
+                            self.handler.on_voice_call_closed("");
+                        }
                         if let Some(sender) = self.stop_voice_call_sender.take() {
                             allow_err!(sender.send(()));
                             self.handler.on_voice_call_closed("");
@@ -2946,6 +3059,28 @@ impl<T: InvokeUiSession> Remote<T> {
                         if response.req_timestamp != ts.get() {
                             log::debug!("Possible encountering a voice call attack.");
                         } else {
+                            if std::mem::take(&mut self.phone_microphone_pending) {
+                                if response.accepted {
+                                    match super::phone_microphone::Capture::start() {
+                                        Ok(capture) => {
+                                            self.phone_microphone_capture = Some(capture);
+                                            self.phone_microphone_started = false;
+                                        }
+                                        Err(error) => {
+                                            self.handler.on_voice_call_closed(&error.to_string());
+                                            allow_err!(peer.send(&new_voice_call_request(false)).await);
+                                        }
+                                    }
+                                } else {
+                                    let reason = match response.microphone_error.enum_value_or_default() {
+                                        voice_call_response::MicrophoneError::DeviceMissing => "The RustDesk microphone driver is not installed",
+                                        voice_call_response::MicrophoneError::DeviceBusy => "Phone microphone is in use",
+                                        _ => "Phone microphone unavailable",
+                                    };
+                                    self.handler.on_voice_call_closed(reason);
+                                }
+                                return true;
+                            }
                             if response.accepted {
                                 // The peer accepted the voice call.
                                 self.handler.on_voice_call_started();

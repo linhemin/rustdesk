@@ -1313,6 +1313,7 @@ pub fn session_add(
     is_shared_password: bool,
     conn_token: Option<String>,
     login_method: &str,
+    phone_microphone: bool,
 ) -> ResultType<FlutterSession> {
     let conn_type = if is_file_transfer {
         ConnType::FILE_TRANSFER
@@ -1376,6 +1377,7 @@ pub fn session_add(
         login_method,
     );
 
+    session.lc.write().unwrap().phone_microphone_only = phone_microphone;
     let session = Arc::new(session.clone());
     sessions::insert_session(session_id.to_owned(), conn_type, session.clone());
 
@@ -2053,7 +2055,7 @@ pub mod sessions {
 
     lazy_static::lazy_static! {
         // peer -> peer session, peer session -> ui sessions
-        static ref SESSIONS: RwLock<HashMap<(String, ConnType), FlutterSession>> = Default::default();
+        static ref SESSIONS: RwLock<HashMap<(String, ConnType, bool), FlutterSession>> = Default::default();
     }
 
     #[inline]
@@ -2061,7 +2063,7 @@ pub mod sessions {
         SESSIONS
             .read()
             .unwrap()
-            .get(&(peer_id, conn_type))
+            .get(&(peer_id, conn_type, false))
             .map(|s| s.ui_handler.session_handlers.read().unwrap().len())
             .unwrap_or(0)
     }
@@ -2072,7 +2074,7 @@ pub mod sessions {
             .read()
             .unwrap()
             .iter()
-            .find_map(|((peer_id, t), s)| {
+            .find_map(|((peer_id, t, _), s)| {
                 if *t == conn_type
                     && s.ui_handler
                         .session_handlers
@@ -2105,7 +2107,7 @@ pub mod sessions {
 
     #[inline]
     pub fn get_session_by_peer_id(peer_id: String, conn_type: ConnType) -> Option<FlutterSession> {
-        SESSIONS.read().unwrap().get(&(peer_id, conn_type)).cloned()
+        SESSIONS.read().unwrap().get(&(peer_id, conn_type, false)).cloned()
     }
 
     pub fn set_display_fps(session: &FlutterSession, id: &SessionID, value: &str) {
@@ -2305,10 +2307,11 @@ pub mod sessions {
 
     #[inline]
     pub fn insert_session(session_id: SessionID, conn_type: ConnType, session: FlutterSession) {
+        let microphone = session.lc.read().unwrap().phone_microphone_only;
         SESSIONS
             .write()
             .unwrap()
-            .entry((session.get_id(), conn_type))
+            .entry((session.get_id(), conn_type, microphone))
             .or_insert(session)
             .ui_handler
             .session_handlers
@@ -2332,7 +2335,7 @@ pub mod sessions {
         session_id: SessionID,
         displays: Vec<i32>,
     ) -> bool {
-        if let Some(s) = SESSIONS.read().unwrap().get(&(peer_id, conn_type)) {
+        if let Some(s) = SESSIONS.read().unwrap().get(&(peer_id, conn_type, false)) {
             let mut h = SessionHandler::default();
             h.displays = displays.iter().map(|x| *x as usize).collect::<_>();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -2367,16 +2370,16 @@ pub mod sessions {
     #[inline]
     #[cfg(not(target_os = "ios"))]
     pub fn has_sessions_running(conn_type: ConnType) -> bool {
-        SESSIONS.read().unwrap().iter().any(|((_, r#type), s)| {
-            *r#type == conn_type && s.session_handlers.read().unwrap().len() != 0
+        SESSIONS.read().unwrap().iter().any(|((_, r#type, mic), s)| {
+            !mic && *r#type == conn_type && s.session_handlers.read().unwrap().len() != 0
         })
     }
 
     #[inline]
     #[cfg(not(target_os = "ios"))]
     pub fn has_connected_sessions_running(conn_type: ConnType) -> bool {
-        SESSIONS.read().unwrap().iter().any(|((_, r#type), s)| {
-            *r#type == conn_type
+        SESSIONS.read().unwrap().iter().any(|((_, r#type, mic), s)| {
+            !mic && *r#type == conn_type
                 && s.session_handlers.read().unwrap().len() != 0
                 && s.connection_round_state.lock().unwrap().is_connected()
         })

@@ -7,6 +7,7 @@ import 'dart:ui' as ui;
 import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter_hbb/mobile/image_ready_samples.dart';
+import 'package:flutter_hbb/mobile/phone_microphone.dart';
 import 'package:flutter_hbb/mobile/session_viewport.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -227,6 +228,14 @@ class FfiModel with ChangeNotifier {
       ffi?.onSessionClosed?.call();
       return;
     }
+    if (evt['phone-audio-ready'] == 'true') {
+      ffi?.dialogManager.dismissAll();
+    } else if (evt['phone-audio-ready'] == 'false' &&
+        ffi != null &&
+        (_permissions['phone-audio-ready'] == true || !ffi.phoneAudioVisible)) {
+      unawaited(PhoneMicrophone.disconnect(ffi));
+      return;
+    }
     // Track previous keyboard permission to detect revocation.
     final hadKeyboardPerm = _permissions['keyboard'] != false;
 
@@ -235,7 +244,7 @@ class FfiModel with ChangeNotifier {
       _permissions[k] = v == 'true';
     });
     // Only inited at remote page
-    if (parent.target?.connType == ConnType.defaultConn) {
+    if (ffi?.connType == ConnType.defaultConn && ffi?.phoneAudioOnly != true) {
       KeyboardEnabledState.find(id).value = _permissions['keyboard'] != false;
     }
 
@@ -291,6 +300,10 @@ class FfiModel with ChangeNotifier {
     _direct = direct;
     if (changed) {
       parent.target?.qualityMonitorModel.connectionTypeChanged();
+    }
+    if (parent.target?.phoneAudioOnly == true) {
+      if (changed) notifyListeners();
+      return;
     }
     try {
       var connectionType = ConnectionTypeState.find(peerId);
@@ -924,7 +937,9 @@ class FfiModel with ChangeNotifier {
   /// Handle the message box event based on [evt] and [id].
   handleMsgBox(Map<String, dynamic> evt, SessionID sessionId, String peerId) {
     final ffi = parent.target;
-    if (ffi == null || ffi.mobileRemoteSuspended) return;
+    if (ffi == null ||
+        ffi.mobileRemoteSuspended ||
+        (ffi.phoneAudioOnly && !ffi.phoneAudioVisible)) return;
     final dialogManager = ffi.dialogManager;
     final type = evt['type'];
     final title = evt['title'];
@@ -4255,6 +4270,8 @@ class FFI {
   var connType = ConnType.defaultConn;
   var closed = false;
   bool mobileRemoteSuspended = false;
+  bool phoneAudioOnly = false;
+  bool phoneAudioVisible = false;
   VoidCallback? onSessionClosed;
 
   /// dialogManager use late to ensure init after main page binding [globalKey]
@@ -4335,6 +4352,7 @@ class FFI {
   void start(
     String id, {
     bool isFileTransfer = false,
+    bool phoneMicrophoneOnly = false,
     bool isViewCamera = false,
     bool isPortForward = false,
     bool isRdp = false,
@@ -4350,6 +4368,7 @@ class FFI {
     String loginMethod = '',
   }) {
     closed = false;
+    phoneAudioOnly = phoneMicrophoneOnly;
     if (isMobile) mobileReset();
     assert(
         (!(isPortForward && isViewCamera)) &&
@@ -4378,7 +4397,12 @@ class FFI {
     final isNewPeer = tabWindowId == null;
     // If tabWindowId != null, this session is a "tab -> window" one.
     // Else this session is a new one.
-    if (isNewPeer) {
+    if (isNewPeer && phoneMicrophoneOnly) {
+      if (!bind.sessionPreparePhoneMicrophone(
+          sessionId: sessionId, id: id, forceRelay: forceRelay ?? false)) {
+        throw StateError('Could not create phone microphone session');
+      }
+    } else if (isNewPeer) {
       // ignore: unused_local_variable
       final addRes = bind.sessionAddSync(
         sessionId: sessionId,
@@ -4415,7 +4439,7 @@ class FFI {
     }
     _controllerDisplay?.dispose();
     _controllerDisplay = null;
-    if (!isWeb && connType == ConnType.defaultConn) {
+    if (!isWeb && !phoneMicrophoneOnly && connType == ConnType.defaultConn) {
       final nativeChannel = isIOS
           ? const MethodChannel('awesun/session')
           : isWindows || isLinux
@@ -4432,7 +4456,7 @@ class FFI {
             value: fps?.toString() ?? ''),
       )..refresh();
     }
-    if (isDesktop && connType == ConnType.defaultConn) {
+    if (isDesktop && !phoneMicrophoneOnly && connType == ConnType.defaultConn) {
       textureModel.updateCurrentDisplay(display ?? 0);
     }
     // FIXME: separate cameras displays or shift all indices.
@@ -4441,7 +4465,7 @@ class FFI {
       textureModel.updateCurrentDisplay(display ?? 0);
     }
 
-    if (isDesktop) {
+    if (isDesktop && !phoneMicrophoneOnly) {
       inputModel.updateTrackpadSpeed();
     }
 
@@ -4514,6 +4538,7 @@ class FFI {
         if (message is EventToUI_Event) {
           if (message.field0 == "close") {
             closed = true;
+            if (phoneMicrophoneOnly) PhoneMicrophone.connectionEnded(this);
             onSessionClosed?.call();
             debugPrint('Exit session event loop');
             return;

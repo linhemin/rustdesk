@@ -292,6 +292,7 @@ struct StartCmIpcPara {
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum AuthConnType {
     Remote,
+    PhoneMicrophone,
     FileTransfer,
     PortForward,
     ViewCamera,
@@ -302,6 +303,7 @@ impl AuthConnType {
     fn as_str(self) -> &'static str {
         match self {
             AuthConnType::Remote => "remote",
+            AuthConnType::PhoneMicrophone => "phone_microphone",
             AuthConnType::FileTransfer => "file_transfer",
             AuthConnType::PortForward => "port_forward",
             AuthConnType::ViewCamera => "view_camera",
@@ -323,6 +325,12 @@ enum ConnAuditPrimaryAuth {
 impl ConnAuditPrimaryAuth {
     fn as_i64(self) -> i64 {
         self as i64
+    }
+
+    fn can_auto_accept_phone_microphone(self, scope: Option<AuthConnType>, secured: bool) -> bool {
+        secured
+            && matches!(scope, Some(AuthConnType::PhoneMicrophone | AuthConnType::Remote))
+            && matches!(self, Self::TemporaryPassword | Self::PermanentPassword)
     }
 }
 
@@ -432,6 +440,9 @@ pub struct Connection {
     from_switch: bool,
     voice_call_request_timestamp: Option<NonZeroI64>,
     voice_calling: bool,
+    #[cfg(any(windows, target_os = "macos"))]
+    phone_microphone: Option<super::phone_microphone::Sink>,
+    phone_microphone_requested: bool,
     share_transport: bool,
     shared_channel: bool,
     options_in_login: Option<OptionMessage>,
@@ -592,6 +603,8 @@ impl Connection {
             raii::ControlPermissionsID::new(id, &control_permissions);
         let salt = Config::get_effective_permanent_password_salt();
         let hash = Hash {
+            phone_microphone: cfg!(any(windows, target_os = "macos")) && stream.is_secured(),
+            phone_audio_playback: cfg!(any(windows, target_os = "macos")) && stream.is_secured(),
             salt,
             challenge: Config::get_auto_password(6),
             ..Default::default()
@@ -685,6 +698,9 @@ impl Connection {
             audio_sender: None,
             voice_call_request_timestamp: None,
             voice_calling: false,
+            #[cfg(any(windows, target_os = "macos"))]
+            phone_microphone: None,
+            phone_microphone_requested: false,
             share_transport: shared_accept.is_some(),
             shared_channel,
             options_in_login: None,
@@ -873,6 +889,18 @@ impl Connection {
                         ipc::Data::SwitchPermission{name, enabled} => {
                             log::info!("Change permission {} -> {}", name, enabled);
                             // Android broadcasts these to every connection; only remote sessions use them.
+                            if conn.lr.has_phone_microphone() {
+                                if name == "audio" {
+                                    conn.audio = enabled;
+                                    if !enabled {
+                                        conn.set_phone_audio_playback(false);
+                                        conn.close_voice_call().await;
+                                        conn.send(new_voice_call_request(false)).await;
+                                    }
+                                    conn.send_permission(Permission::Audio, enabled).await;
+                                }
+                                continue;
+                            }
                             if (&name == "keyboard" || &name == "clipboard") && !conn.is_remote() {
                                 continue;
                             }
@@ -904,6 +932,11 @@ impl Connection {
                                 }
                             } else if &name == "audio" {
                                 conn.audio = enabled;
+                                #[cfg(any(windows, target_os = "macos"))]
+                                if !enabled && conn.phone_microphone.is_some() {
+                                    conn.close_voice_call().await;
+                                    conn.send(new_voice_call_request(false)).await;
+                                }
                                 conn.send_permission(Permission::Audio, enabled).await;
                                 if conn.authorized {
                                     if let Some(s) = conn.server.upgrade() {
@@ -1254,6 +1287,12 @@ impl Connection {
                     #[allow(unused_mut)]
                     let mut msg = value;
 
+                    if conn.lr.has_phone_microphone() && !conn.audio_enabled()
+                        && (matches!(msg.union.as_ref(), Some(message::Union::AudioFrame(_)))
+                            || msg.misc().has_audio_format())
+                    {
+                        continue;
+                    }
                     if latency > 1000 {
                         match &msg.union {
                             Some(message::Union::AudioFrame(_)) => {
@@ -2087,7 +2126,9 @@ impl Connection {
         // Releases the budget `check_id_whitelist` charges against this address: only a peer
         // that got this far proved more than a self-reported id.
         self.clear_id_whitelist_failures();
-        let (conn_type, auth_conn_type) = if self.file_transfer.is_some() {
+        let (conn_type, auth_conn_type) = if self.lr.has_phone_microphone() {
+            (5, AuthConnType::PhoneMicrophone)
+        } else if self.file_transfer.is_some() {
             (1, AuthConnType::FileTransfer)
         } else if self.is_port_forward() {
             (2, AuthConnType::PortForward)
@@ -2301,10 +2342,10 @@ impl Connection {
         #[allow(unused_mut)]
         let mut wait_session_id_confirm = false;
         #[cfg(windows)]
-        if !self.terminal {
+        if !self.terminal && !self.lr.has_phone_microphone() {
             self.handle_windows_specific_session(&mut pi, &mut wait_session_id_confirm);
         }
-        if self.file_transfer.is_some() || self.terminal {
+        if self.file_transfer.is_some() || self.terminal || self.lr.has_phone_microphone() {
             res.set_peer_info(pi);
         } else if self.view_camera {
             let supported_encoding = scrap::codec::Encoder::supported_encoding();
@@ -2441,7 +2482,7 @@ impl Connection {
 
     #[inline]
     fn is_remote(&self) -> bool {
-        self.file_transfer.is_none()
+        !self.lr.has_phone_microphone() && self.file_transfer.is_none()
             && !self.is_port_forward()
             && !self.view_camera
             && !self.terminal
@@ -2456,6 +2497,7 @@ impl Connection {
         match lr.union.as_ref() {
             None => Some(AuthConnType::Remote),
             Some(login_request::Union::FileTransfer(_)) => Some(AuthConnType::FileTransfer),
+            Some(login_request::Union::PhoneMicrophone(_)) => Some(AuthConnType::PhoneMicrophone),
             _ => None,
         }
     }
@@ -2594,6 +2636,7 @@ impl Connection {
     fn try_start_cm(&mut self, peer_id: String, name: String, authorized: bool) {
         self.send_to_cm(ipc::Data::Login {
             id: self.inner.id(),
+            is_phone_microphone: self.lr.has_phone_microphone(),
             is_file_transfer: self.file_transfer.is_some(),
             is_view_camera: self.view_camera,
             is_terminal: self.terminal,
@@ -2995,6 +3038,7 @@ impl Connection {
         // Payloads are destructured exhaustively: a new field fails to compile until it is
         // either latched here or deliberately ignored.
         match lr.union.as_ref() {
+            Some(login_request::Union::PhoneMicrophone(_)) => push(b"phone_microphone"),
             Some(login_request::Union::FileTransfer(ft)) => {
                 let FileTransfer {
                     dir,
@@ -3038,6 +3082,7 @@ impl Connection {
     // Logging only; security decisions compare digests.
     fn login_scope_kind(lr: &LoginRequest) -> &'static str {
         match lr.union.as_ref() {
+            Some(login_request::Union::PhoneMicrophone(_)) => "phone_microphone",
             Some(login_request::Union::FileTransfer(_)) => "file_transfer",
             Some(login_request::Union::ViewCamera(_)) => "view_camera",
             Some(login_request::Union::Terminal(_)) => "terminal",
@@ -3145,6 +3190,14 @@ impl Connection {
                 return false;
             }
             match lr.union {
+                Some(login_request::Union::PhoneMicrophone(_)) => {
+                    if !self.hash.phone_microphone || !self.audio {
+                        self.send_login_error("Phone microphone unavailable").await;
+                        return false;
+                    }
+                    self.keyboard = false;
+                    self.disable_audio = true;
+                }
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(
                         keys::OPTION_ENABLE_FILE_TRANSFER,
@@ -4180,6 +4233,10 @@ impl Connection {
                     Some(misc::Union::Option(o)) => {
                         if self.authed_conn_type() == Some(AuthConnType::Remote) {
                             self.update_options(&o).await;
+                        } else if self.authed_conn_type() == Some(AuthConnType::PhoneMicrophone) {
+                            if let Some(enabled) = Self::phone_audio_output_option(&o) {
+                                self.set_phone_audio_playback(enabled);
+                            }
                         } else if let Some(option) = self.scoped_update_option_message(&o) {
                             self.update_options(&option).await;
                         }
@@ -4355,6 +4412,15 @@ impl Connection {
                     }
                     _ => {}
                 },
+                #[cfg(any(windows, target_os = "macos"))]
+                Some(message::Union::PhoneMicrophonePacket(packet)) => {
+                    if let Some(sink) = self.phone_microphone.as_ref().filter(|_| self.audio) {
+                        if sink.packet(packet).is_err() {
+                            self.close_voice_call().await;
+                            self.send(new_voice_call_request(false)).await;
+                        }
+                    }
+                }
                 Some(message::Union::AudioFrame(frame)) => {
                     if !self.disable_audio {
                         if let Some(sender) = &self.audio_sender {
@@ -4368,12 +4434,34 @@ impl Connection {
                 }
                 Some(message::Union::VoiceCallRequest(request)) => {
                     if request.is_connect {
+                        if self.lr.has_phone_microphone() && !request.phone_microphone {
+                            return false;
+                        }
+                        if self.phone_microphone_requested || (request.phone_microphone &&
+                            (!self.hash.phone_microphone || !self.audio || self.voice_calling || self.voice_call_request_timestamp.is_some()))
+                            || self.phone_microphone_active() {
+                            self.send(new_voice_call_response(request.req_timestamp, false)).await;
+                            return true;
+                        }
+                        self.phone_microphone_requested = request.phone_microphone;
                         self.voice_call_request_timestamp = Some(
                             NonZeroI64::new(request.req_timestamp)
                                 .unwrap_or(NonZeroI64::new(get_time()).unwrap()),
                         );
-                        // Notify the connection manager.
-                        self.send_to_cm(Data::VoiceCallIncoming);
+                        if request.phone_microphone
+                            && self.authorized
+                            && self.conn_audit_primary_auth.can_auto_accept_phone_microphone(
+                                self.authed_conn_type(), self.stream.is_secured()
+                            )
+                        {
+                            self.handle_voice_call(true).await;
+                        } else {
+                            self.send_to_cm(if request.phone_microphone {
+                                Data::PhoneMicrophoneIncoming
+                            } else {
+                                Data::VoiceCallIncoming
+                            });
+                        }
                     } else {
                         self.close_voice_call().await;
                     }
@@ -5152,8 +5240,42 @@ impl Connection {
         }
     }
 
+    fn phone_microphone_active(&self) -> bool {
+        #[cfg(any(windows, target_os = "macos"))]
+        { self.phone_microphone.is_some() }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        { false }
+    }
+
     pub async fn handle_voice_call(&mut self, accepted: bool) {
         if let Some(ts) = self.voice_call_request_timestamp.take() {
+            if std::mem::take(&mut self.phone_microphone_requested) {
+                use voice_call_response::MicrophoneError;
+                #[allow(unused_mut)]
+                let mut device_error = MicrophoneError::None;
+                #[cfg(any(windows, target_os = "macos"))]
+                if accepted && self.audio {
+                    match super::phone_microphone::Sink::open().await {
+                        Ok(sink) => self.phone_microphone = Some(sink),
+                        Err(e) => {
+                            device_error = match e.downcast_ref::<std::io::Error>().map(|e| e.kind()) {
+                                Some(std::io::ErrorKind::NotFound) => MicrophoneError::DeviceMissing,
+                                Some(std::io::ErrorKind::WouldBlock) => MicrophoneError::DeviceBusy,
+                                _ => MicrophoneError::None,
+                            };
+                            log::warn!("Cannot open phone microphone: {e}");
+                        }
+                    }
+                }
+                let active = self.phone_microphone_active();
+                self.voice_calling = active;
+                if active { self.send_to_cm(Data::PhoneMicrophoneStarted); }
+                else { self.send_to_cm(Data::CloseVoiceCall("Phone microphone unavailable".into())); }
+                let mut response = new_voice_call_response(ts.get(), active);
+                response.mut_voice_call_response().microphone_error = device_error.into();
+                self.send(response).await;
+                return;
+            }
             let msg = new_voice_call_response(ts.get(), accepted);
             if accepted {
                 crate::audio_service::set_voice_call_input_device(
@@ -5181,6 +5303,15 @@ impl Connection {
     }
 
     pub async fn close_voice_call(&mut self) {
+        self.voice_call_request_timestamp = None;
+        let microphone = std::mem::take(&mut self.phone_microphone_requested) || self.lr.has_phone_microphone() || self.phone_microphone_active();
+        if microphone {
+            #[cfg(any(windows, target_os = "macos"))]
+            { self.phone_microphone.take(); }
+            self.send_to_cm(Data::CloseVoiceCall(String::new()));
+            self.voice_calling = false;
+            return;
+        }
         crate::audio_service::set_voice_call_input_device(None, true);
         // Notify the connection manager that the voice call has been closed.
         self.send_to_cm(Data::CloseVoiceCall("".to_owned()));
@@ -5600,7 +5731,7 @@ impl Connection {
         // We can add a (Vec<conn_id>, input device) to avoid this.
         // But it's not necessary now and we have to consider two audio services(client, server).
         // A pre-login path probe never owns the voice input of an active desktop.
-        if self.authorized {
+        if self.authorized && !self.lr.has_phone_microphone() {
             crate::audio_service::set_voice_call_input_device(None, true);
         }
         log::info!("#{} Connection closed: {}", self.inner.id(), reason);
@@ -6110,7 +6241,7 @@ impl Connection {
             peer_id: self.lr.my_id.clone(),
             name: self.lr.my_name.clone(),
             session_id: self.lr.session_id,
-            shared_scope: if self.shared_channel {
+            shared_scope: if self.shared_channel || self.lr.has_phone_microphone() {
                 Self::shared_login_scope(&self.lr)
             } else { None },
         }
@@ -6154,7 +6285,7 @@ impl Connection {
         match self.authed_conn_type() {
             Some(AuthConnType::ViewCamera) => Self::scoped_view_camera_option(option).0,
             Some(AuthConnType::Terminal) => Self::scoped_terminal_login_option(option).0,
-            Some(AuthConnType::Remote | AuthConnType::FileTransfer | AuthConnType::PortForward)
+            Some(AuthConnType::Remote | AuthConnType::FileTransfer | AuthConnType::PortForward | AuthConnType::PhoneMicrophone)
             | None => None,
         }
     }
@@ -6233,7 +6364,7 @@ impl Connection {
             AuthConnType::Remote => (Some(option.clone()), None),
             AuthConnType::ViewCamera => Self::scoped_view_camera_option(option),
             AuthConnType::Terminal => Self::scoped_terminal_login_option(option),
-            AuthConnType::FileTransfer | AuthConnType::PortForward => {
+            AuthConnType::FileTransfer | AuthConnType::PortForward | AuthConnType::PhoneMicrophone => {
                 let violation = Self::option_has_any_field(option).then_some("login.option");
                 (None, violation)
             }
@@ -6280,12 +6411,47 @@ impl Connection {
         }
         let allowed = match conn_type {
             AuthConnType::Remote => true,
+            AuthConnType::PhoneMicrophone => match msg.union.as_ref() {
+                Some(message::Union::PhoneMicrophonePacket(_) | message::Union::VoiceCallRequest(_)) => true,
+                Some(message::Union::Misc(misc)) => matches!(
+                    misc.union.as_ref(),
+                    Some(misc::Union::Option(option)) if Self::phone_audio_output_option(option).is_some()
+                ),
+                _ => false,
+            },
             AuthConnType::FileTransfer => Self::is_file_transfer_scoped_message(msg),
             AuthConnType::PortForward => Self::is_port_forward_scoped_message(msg),
             AuthConnType::ViewCamera => Self::is_view_camera_scoped_message(msg),
             AuthConnType::Terminal => Self::is_terminal_scoped_message(msg),
         };
         (!allowed).then(|| Self::message_family(msg))
+    }
+
+    fn phone_audio_output_option(option: &OptionMessage) -> Option<bool> {
+        let value = option.disable_audio.enum_value().ok()?;
+        if value == BoolOption::NotSet
+            || *option != (OptionMessage {
+                disable_audio: value.into(),
+                ..Default::default()
+            })
+        {
+            return None;
+        }
+        Some(value == BoolOption::No)
+    }
+
+    fn set_phone_audio_playback(&mut self, enabled: bool) {
+        if !self.authorized || !self.hash.phone_audio_playback || !self.stream.is_secured() {
+            return;
+        }
+        self.disable_audio = !enabled || !self.audio;
+        if let Some(server) = self.server.upgrade() {
+            server.write().unwrap().subscribe(
+                super::audio_service::NAME,
+                self.inner.clone(),
+                self.audio_enabled(),
+            );
+        }
     }
 
     fn is_render_broadcast_noop_compat_message(msg: &Message) -> bool {
@@ -6505,6 +6671,7 @@ impl Connection {
     fn message_family(msg: &Message) -> &'static str {
         match msg.union.as_ref() {
             Some(message::Union::MouseEvent(_)) => "mouse_event",
+            Some(message::Union::PhoneMicrophonePacket(_)) => "phone_microphone_packet",
             Some(message::Union::AudioFrame(_)) => "audio_frame",
             Some(message::Union::PointerDeviceEvent(_)) => "pointer_device_event",
             Some(message::Union::KeyEvent(_)) => "key_event",
@@ -7943,8 +8110,43 @@ pub(super) mod test {
     }
 
     #[test]
+    fn phone_microphone_reuses_only_verified_password_sessions() {
+        let standalone = Some(AuthConnType::PhoneMicrophone);
+        let desktop = Some(AuthConnType::Remote);
+        assert!(ConnAuditPrimaryAuth::PermanentPassword
+            .can_auto_accept_phone_microphone(standalone, true));
+        assert!(ConnAuditPrimaryAuth::TemporaryPassword
+            .can_auto_accept_phone_microphone(desktop, true));
+        assert!(!ConnAuditPrimaryAuth::Click.can_auto_accept_phone_microphone(standalone, true));
+        assert!(!ConnAuditPrimaryAuth::None.can_auto_accept_phone_microphone(standalone, true));
+        assert!(!ConnAuditPrimaryAuth::PermanentPassword
+            .can_auto_accept_phone_microphone(standalone, false));
+        assert!(!ConnAuditPrimaryAuth::PermanentPassword
+            .can_auto_accept_phone_microphone(Some(AuthConnType::ViewCamera), true));
+    }
+
+    #[test]
     fn session_scope_allows_only_messages_for_authenticated_session_type() {
         let cases = [
+            (
+                AuthConnType::PhoneMicrophone,
+                vec![
+                    (msg(|m| m.set_phone_microphone_packet(vec![1].into())), None),
+                    (msg(|m| m.set_voice_call_request(VoiceCallRequest::new())), None),
+                    (option_msg(|o| o.disable_audio = BoolOption::No.into()), None),
+                    (option_msg(|o| o.disable_audio = BoolOption::Yes.into()), None),
+                    (
+                        option_msg(|o| {
+                            o.disable_audio = BoolOption::No.into();
+                            o.image_quality = ImageQuality::Balanced.into();
+                        }),
+                        Some("misc.option"),
+                    ),
+                    (msg(|m| m.set_file_action(FileAction::new())), Some("file_action")),
+                    (msg(|m| m.set_key_event(KeyEvent::new())), Some("key_event")),
+                    (msg(|m| m.set_screenshot_request(ScreenshotRequest::new())), Some("screenshot_request")),
+                ],
+            ),
             (
                 AuthConnType::FileTransfer,
                 vec![

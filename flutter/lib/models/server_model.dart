@@ -602,7 +602,7 @@ class ServerModel with ChangeNotifier {
   void showLoginDialog(Client client) {
     showClientDialog(
       client,
-      client.isFileTransfer
+      client.isPhoneMicrophone ? "Audio mode" : client.isFileTransfer
           ? "Transfer file"
           : client.isViewCamera
               ? "View camera"
@@ -760,6 +760,7 @@ class ServerModel with ChangeNotifier {
       final index = _clients.indexWhere((element) => element.id == client.id);
       if (index != -1) {
         _clients[index].inVoiceCall = client.inVoiceCall;
+        _clients[index].phoneMicrophoneCall = client.phoneMicrophoneCall;
         _clients[index].incomingVoiceCall = client.incomingVoiceCall;
         if (client.incomingVoiceCall) {
           if (isAndroid) {
@@ -799,6 +800,7 @@ class ServerModel with ChangeNotifier {
 }
 
 enum ClientType {
+  phoneMicrophone,
   remote,
   file,
   camera,
@@ -809,6 +811,8 @@ enum ClientType {
 class Client {
   int id = 0; // client connections inner count id
   bool authorized = false;
+  bool isPhoneMicrophone = false;
+  bool phoneMicrophoneCall = false;
   bool isFileTransfer = false;
   bool isViewCamera = false;
   bool isTerminal = false;
@@ -837,6 +841,8 @@ class Client {
   Client.fromJson(Map<String, dynamic> json) {
     id = json['id'];
     authorized = json['authorized'];
+    isPhoneMicrophone = json['is_phone_microphone'] ?? false;
+    phoneMicrophoneCall = json['phone_microphone_call'] ?? false;
     isFileTransfer = json['is_file_transfer'];
     // TODO: no entry then default.
     isViewCamera = json['is_view_camera'];
@@ -863,6 +869,8 @@ class Client {
     final Map<String, dynamic> data = <String, dynamic>{};
     data['id'] = id;
     data['authorized'] = authorized;
+    data['is_phone_microphone'] = isPhoneMicrophone;
+    data['phone_microphone_call'] = phoneMicrophoneCall;
     data['is_file_transfer'] = isFileTransfer;
     data['is_view_camera'] = isViewCamera;
     data['is_terminal'] = isTerminal;
@@ -886,6 +894,7 @@ class Client {
   }
 
   ClientType type_() {
+    if (isPhoneMicrophone) return ClientType.phoneMicrophone;
     if (isFileTransfer) {
       return ClientType.file;
     } else if (isViewCamera) {

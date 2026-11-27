@@ -17,6 +17,9 @@ import android.content.ServiceConnection
 import android.content.ClipboardManager
 import android.os.Bundle
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.ResultReceiver
 import android.os.IBinder
 import android.util.Log
 import android.view.KeyEvent
@@ -667,6 +670,23 @@ class MainActivity : FlutterActivity() {
                     } else {
                         result.success(null)
                     }
+                }
+                "prepare_phone_microphone" -> {
+                    try {
+                        val intent = Intent(this, PhoneMicrophoneService::class.java)
+                        intent.putExtra(PhoneMicrophoneService.READY, object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                                result.success(resultCode == RESULT_OK)
+                            }
+                        })
+                        androidx.core.content.ContextCompat.startForegroundService(this, intent)
+                    } catch (e: RuntimeException) {
+                        result.error("microphone", e.localizedMessage, null)
+                    }
+                }
+                "stop_phone_microphone" -> {
+                    stopService(Intent(this, PhoneMicrophoneService::class.java))
+                    result.success(true)
                 }
                 "on_voice_call_started" -> {
                     onVoiceCallStarted()

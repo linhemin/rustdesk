@@ -131,6 +131,7 @@ pub struct Client {
     pub id: i32,
     pub authorized: bool,
     pub disconnected: bool,
+    pub is_phone_microphone: bool,
     pub is_file_transfer: bool,
     pub is_view_camera: bool,
     pub is_terminal: bool,
@@ -149,6 +150,7 @@ pub struct Client {
     pub from_switch: bool,
     pub in_voice_call: bool,
     pub incoming_voice_call: bool,
+    pub phone_microphone_call: bool,
     #[serde(skip)]
     #[cfg(not(any(target_os = "ios")))]
     tx: UnboundedSender<Data>,
@@ -218,6 +220,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
     fn add_connection(
         &self,
         id: i32,
+        is_phone_microphone: bool,
         is_file_transfer: bool,
         is_view_camera: bool,
         is_terminal: bool,
@@ -241,6 +244,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             id,
             authorized,
             disconnected: false,
+            is_phone_microphone,
             is_file_transfer,
             is_view_camera,
             is_terminal,
@@ -261,6 +265,7 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
             tx,
             in_voice_call: false,
             incoming_voice_call: false,
+            phone_microphone_call: false,
         };
         CLIENTS
             .write()
@@ -322,8 +327,9 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
     }
 
     #[cfg(not(target_os = "ios"))]
-    fn voice_call_started(&self, id: i32) {
+    fn voice_call_started(&self, id: i32, microphone: bool) {
         if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
+            client.phone_microphone_call = microphone;
             client.incoming_voice_call = false;
             client.in_voice_call = true;
             self.ui_handler.update_voice_call_state(client);
@@ -331,8 +337,9 @@ impl<T: InvokeUiCM> ConnectionManager<T> {
     }
 
     #[cfg(not(target_os = "ios"))]
-    fn voice_call_incoming(&self, id: i32) {
+    fn voice_call_incoming(&self, id: i32, microphone: bool) {
         if let Some(client) = CLIENTS.write().unwrap().get_mut(&id) {
+            client.phone_microphone_call = microphone;
             client.incoming_voice_call = true;
             client.in_voice_call = false;
             self.ui_handler.update_voice_call_state(client);
@@ -554,9 +561,9 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                         }
                         Ok(Some(data)) => {
                             match data {
-                                Data::Login{id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch} => {
+                                Data::Login{id, is_phone_microphone, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, file_transfer_enabled: _file_transfer_enabled, restart, recording, block_input, privacy_mode, from_switch} => {
                                     log::debug!("conn_id: {}", id);
-                                    self.cm.add_connection(id, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, self.tx.clone());
+                                    self.cm.add_connection(id, is_phone_microphone, is_file_transfer, is_view_camera, is_terminal, port_forward, peer_id, name, avatar, authorized, keyboard, clipboard, audio, file, restart, recording, block_input, privacy_mode, from_switch, self.tx.clone());
                                     self.conn_id = id;
                                     #[cfg(target_os = "windows")]
                                     {
@@ -676,10 +683,16 @@ impl<T: InvokeUiCM> IpcTaskRunner<T> {
                                     self.cm.show_elevation(show);
                                 }
                                 Data::StartVoiceCall => {
-                                    self.cm.voice_call_started(self.conn_id);
+                                    self.cm.voice_call_started(self.conn_id, false);
+                                }
+                                Data::PhoneMicrophoneStarted => {
+                                    self.cm.voice_call_started(self.conn_id, true);
+                                }
+                                Data::PhoneMicrophoneIncoming => {
+                                    self.cm.voice_call_incoming(self.conn_id, true);
                                 }
                                 Data::VoiceCallIncoming => {
-                                    self.cm.voice_call_incoming(self.conn_id);
+                                    self.cm.voice_call_incoming(self.conn_id, false);
                                 }
                                 Data::CloseVoiceCall(reason) => {
                                     self.cm.voice_call_closed(self.conn_id, reason.as_str());
@@ -902,6 +915,7 @@ pub async fn start_listen<T: InvokeUiCM>(
         match rx.recv().await {
             Some(Data::Login {
                 id,
+                is_phone_microphone,
                 is_file_transfer,
                 is_view_camera,
                 is_terminal,
@@ -924,6 +938,7 @@ pub async fn start_listen<T: InvokeUiCM>(
                 current_id = id;
                 cm.add_connection(
                     id,
+                    is_phone_microphone,
                     is_file_transfer,
                     is_view_camera,
                     is_terminal,
@@ -964,10 +979,10 @@ pub async fn start_listen<T: InvokeUiCM>(
                 break;
             }
             Some(Data::StartVoiceCall) => {
-                cm.voice_call_started(current_id);
+                cm.voice_call_started(current_id, false);
             }
             Some(Data::VoiceCallIncoming) => {
-                cm.voice_call_incoming(current_id);
+                cm.voice_call_incoming(current_id, false);
             }
             Some(Data::CloseVoiceCall(reason)) => {
                 cm.voice_call_closed(current_id, reason.as_str());

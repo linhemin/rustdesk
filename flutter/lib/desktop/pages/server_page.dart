@@ -369,7 +369,7 @@ Widget buildConnectionCard(Client client) {
       key: ValueKey(client.id),
       children: [
         _CmHeader(client: client),
-        client.type_() == ClientType.file ||
+        client.isPhoneMicrophone || client.type_() == ClientType.file ||
                 client.type_() == ClientType.portForward ||
                 client.type_() == ClientType.terminal ||
                 client.disconnected
@@ -499,6 +499,8 @@ class _CmHeaderState extends State<_CmHeader>
                         fontFeatures: const [FontFeature.tabularFigures()]),
                   ),
                 ),
+                if (client.isPhoneMicrophone)
+                  Text(translate("Audio mode"), style: TextStyle(color: theme.hintColor, fontSize: 12)),
                 if (client.type_() == ClientType.terminal)
                   FittedBox(
                     child: Text(
@@ -894,6 +896,14 @@ class _CmControlPanel extends StatelessWidget {
           offstage: !client.inVoiceCall,
           child: Row(
             children: [
+              if (client.phoneMicrophoneCall || client.isPhoneMicrophone)
+                Expanded(
+                  child: Text(
+                    isWindows ? 'CABLE Output' : 'VB-Cable',
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              else
               Expanded(
                 child: buildButton(context,
                     color: MyTheme.accent,
@@ -959,23 +969,26 @@ class _CmControlPanel extends StatelessWidget {
                     text: "Audio input",
                     textColor: Colors.white),
               ),
-              Expanded(
-                child: buildButton(
-                  context,
-                  color: Colors.red,
-                  onClick: () => closeVoiceCall(),
-                  icon: Icon(
-                    Icons.call_end_rounded,
-                    color: Colors.white,
-                    size: 14,
+              if (!client.isPhoneMicrophone)
+                Expanded(
+                  child: buildButton(
+                    context,
+                    color: Colors.red,
+                    onClick: () => closeVoiceCall(),
+                    icon: Icon(
+                      Icons.call_end_rounded,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                    text: "Stop voice call",
+                    textColor: Colors.white,
                   ),
-                  text: "Stop voice call",
-                  textColor: Colors.white,
                 ),
-              )
             ],
           ),
         ),
+        if (client.incomingVoiceCall && client.phoneMicrophoneCall)
+          Text(translate("Use this phone as a microphone?")),
         Offstage(
           offstage: !client.incomingVoiceCall,
           child: Row(

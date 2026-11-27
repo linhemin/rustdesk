@@ -70,6 +70,8 @@ pub mod input_service {
     pub const NAME_WINDOW_FOCUS: &'static str = "";
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+mod phone_microphone;
 mod connection;
 pub(crate) use connection::ip_allowed;
 mod login_failure_check;

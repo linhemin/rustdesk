@@ -342,6 +342,8 @@ pub enum SwitchSidesUuidAction {
 pub enum Data {
     Login {
         id: i32,
+        #[serde(default)]
+        is_phone_microphone: bool,
         is_file_transfer: bool,
         is_view_camera: bool,
         is_terminal: bool,
@@ -422,6 +424,8 @@ pub enum Data {
     SwitchSidesBack,
     UrlLink(String),
     VoiceCallIncoming,
+    PhoneMicrophoneIncoming,
+    PhoneMicrophoneStarted,
     StartVoiceCall,
     VoiceCallResponse(bool),
     CloseVoiceCall(String),

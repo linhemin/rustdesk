@@ -52,6 +52,47 @@ func rustdeskIosActivateRemoteAudio() -> Int32 {
   func sceneWillConnect(window: UIWindow?, launchURL: URL?) {
     self.window = window
     GeneratedPluginRegistrant.register(with: self)
+    if let registrar = registrar(forPlugin: "PhoneMicrophone") {
+      let channel = FlutterMethodChannel(name: "rustdesk/phone-microphone", binaryMessenger: registrar.messenger())
+      var previousAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
+      channel.setMethodCallHandler { call, result in
+        let session = AVAudioSession.sharedInstance()
+        switch call.method {
+        case "prepare":
+          session.requestRecordPermission { granted in
+            DispatchQueue.main.async {
+              guard granted, UIApplication.shared.applicationState == .active else { result(false); return }
+              do {
+                previousAudio = (session.category, session.mode, session.categoryOptions)
+                try session.setCategory(.playAndRecord, options: [.allowBluetooth, .defaultToSpeaker])
+                try session.setActive(true)
+                result(true)
+              } catch {
+                result(FlutterError(code: "microphone", message: error.localizedDescription, details: nil))
+              }
+            }
+          }
+        case "output-status":
+          let ports = session.currentRoute.outputs.map { $0.portType.rawValue }
+          result("route=\(ports.joined(separator: ",")) volume=\(session.outputVolume) category=\(session.category.rawValue)")
+        case "stop":
+          do {
+            let keepPlayback = call.arguments as? Bool ?? false
+            if !keepPlayback {
+              try session.setActive(false, options: .notifyOthersOnDeactivation)
+            }
+            if let previous = previousAudio {
+              try session.setCategory(previous.0, mode: previous.1, options: previous.2)
+              previousAudio = nil
+            }
+            result(nil)
+          } catch {
+            result(FlutterError(code: "microphone", message: error.localizedDescription, details: nil))
+          }
+        default: result(FlutterMethodNotImplemented)
+        }
+      }
+    }
     if let registrar = registrar(forPlugin: "AppleWorkspaceNavigation") {
       AppleWorkspaceNavigationFactory.register(with: registrar)
     }

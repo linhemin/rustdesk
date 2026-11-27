@@ -16,6 +16,7 @@ import '../../models/peer_model.dart';
 import '../../models/platform_model.dart';
 import '../../desktop/widgets/material_mod_popup_menu.dart' as mod_menu;
 import '../../desktop/widgets/popup_menu.dart';
+import '../../mobile/pages/phone_microphone_page.dart';
 import 'dart:math' as math;
 
 typedef PopupMenuEntryBuilder = Future<List<mod_menu.PopupMenuEntry<String>>>
@@ -24,6 +25,13 @@ typedef PopupMenuEntryBuilder = Future<List<mod_menu.PopupMenuEntry<String>>>
 enum PeerUiType { grid, tile, list }
 
 final peerCardUiType = PeerUiType.grid.obs;
+
+bool _canConnectPhoneMicrophone(Peer peer) =>
+    !isWeb &&
+    isMobile &&
+    (peer.platform == kPeerPlatformWindows ||
+        peer.platform == kPeerPlatformMacOS ||
+        peer.platform.isEmpty);
 
 class ConnectionPeerList extends InheritedWidget {
   const ConnectionPeerList({super.key, this.onConnect, required super.child});
@@ -175,6 +183,13 @@ class _PeerCardState extends State<_PeerCard>
             ),
             onPressed: () => connectInPeerTab(context, peer, widget.tab,
                 isFileTransfer: true),
+          ),
+        if (!model.multiSelectionMode && _canConnectPhoneMicrophone(peer))
+          IconButton(
+            tooltip: translate('Audio mode'),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.headset_mic_outlined, size: 18),
+            onPressed: () => PhoneMicrophonePage.open(context, peer.id),
           ),
         if (!model.multiSelectionMode)
           Builder(builder: (menuContext) => IconButton(
@@ -945,6 +960,14 @@ abstract class BasePeerCard extends StatelessWidget {
       BuildContext context) async {
     final List<MenuEntryBase<String>> menuItems = [
       _connectAction(context),
+      if (_canConnectPhoneMicrophone(peer))
+        MenuEntryButton<String>(
+          childBuilder: (style) =>
+              Text(translate('Audio mode'), style: style),
+          proc: () => PhoneMicrophonePage.open(context, peer.id),
+          padding: menuPadding,
+          dismissOnClicked: true,
+        ),
       _transferFileAction(context),
       _viewCameraAction(context),
       _terminalAction(context),

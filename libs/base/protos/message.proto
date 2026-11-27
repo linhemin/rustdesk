@@ -79,6 +79,7 @@ message LoginRequest {
     PortForward port_forward = 8;
     ViewCamera view_camera = 15;
     Terminal terminal = 16;
+    PhoneMicrophone phone_microphone = 20;
   }
   bool video_ack_required = 9;
   uint64 session_id = 10;
@@ -336,7 +337,11 @@ message CursorPosition {
   sint32 y = 2;
 }
 
+message PhoneMicrophone {}
+
 message Hash {
+  bool phone_microphone = 3;
+  bool phone_audio_playback = 4;
   string salt = 1;
   string challenge = 2;
 }
@@ -960,12 +965,19 @@ message VoiceCallRequest {
   int64 req_timestamp = 1;
   // Indicates whether the request is a connect action or a disconnect action.
   bool is_connect = 2;
+  bool phone_microphone = 3;
 }
 
 message VoiceCallResponse {
   bool accepted = 1;
   int64 req_timestamp = 2; // Should copy from [VoiceCallRequest::req_timestamp].
   int64 ack_timestamp = 3;
+  enum MicrophoneError {
+    None = 0;
+    DeviceMissing = 1;
+    DeviceBusy = 2;
+  }
+  MicrophoneError microphone_error = 4;
 }
 
 message ScreenshotRequest {
@@ -1118,5 +1130,7 @@ message Message {
     PortForwardChannel port_forward_channel = 33;
     // Auto Login: the peer types the password only if it is at its logon or lock screen.
     OSLogin os_login = 34;
+    // One 20 ms Opus packet for the dedicated recording endpoint.
+    bytes phone_microphone_packet = 35;
   }
 }

@@ -88,6 +88,9 @@
             android:excludeFromRecents="true"
             android:theme="@style/Transparent" />
 
+        <service android:name=".PhoneMicrophoneService" android:exported="false" android:stopWithTask="true"
+            android:foregroundServiceType="microphone" />
+
         <service
             android:name=".MainService"
             android:enabled="true"

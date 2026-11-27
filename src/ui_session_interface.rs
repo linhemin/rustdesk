@@ -223,11 +223,8 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn is_default(&self) -> bool {
-        self.lc
-            .read()
-            .unwrap()
-            .conn_type
-            .eq(&ConnType::DEFAULT_CONN)
+        let login = self.lc.read().unwrap();
+        !login.phone_microphone_only && login.conn_type == ConnType::DEFAULT_CONN
     }
 
     pub fn is_view_camera(&self) -> bool {
@@ -657,8 +654,14 @@ impl<T: InvokeUiSession> Session<T> {
         #[cfg(any(target_os = "ios", target_os = "android"))]
         if k == "mobile-remote-suspended" {
             let mut login = self.lc.write().unwrap();
-            if login.conn_type == ConnType::DEFAULT_CONN {
+            if !login.phone_microphone_only && login.conn_type == ConnType::DEFAULT_CONN {
                 login.mobile_remote_suspended = v == "Y";
+            }
+            return;
+        }
+        if k == "phone-audio-playback" {
+            if self.lc.read().unwrap().phone_microphone_only {
+                self.send(Data::SetPhoneAudioPlayback(v == "Y"));
             }
             return;
         }
@@ -1650,6 +1653,10 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     #[inline]
+    pub fn request_phone_microphone(&self) {
+        self.send(Data::NewPhoneMicrophone);
+    }
+
     pub fn request_voice_call(&self) {
         #[cfg(target_os = "linux")]
         std::thread::spawn(crate::ipc::start_pa);

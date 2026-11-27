@@ -43,6 +43,10 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Use this phone as the microphone for a connected computer.</string>
+	<key>UIBackgroundModes</key>
+	<array><string>audio</string></array>
 	<key>NSCameraUsageDescription</key>
 	<string>This app needs camera access to scan QR codes</string>
 	<key>NSLocalNetworkUsageDescription</key>
