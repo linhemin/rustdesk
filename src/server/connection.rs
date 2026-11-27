@@ -273,6 +273,7 @@ pub struct SessionKey {
     peer_id: String,
     name: String,
     session_id: u64,
+    shared_scope: Option<AuthConnType>,
 }
 
 #[derive(Clone, Debug)]
@@ -288,7 +289,7 @@ struct StartCmIpcPara {
     tx_from_cm: mpsc::UnboundedSender<ipc::Data>,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum AuthConnType {
     Remote,
     FileTransfer,
@@ -431,6 +432,8 @@ pub struct Connection {
     from_switch: bool,
     voice_call_request_timestamp: Option<NonZeroI64>,
     voice_calling: bool,
+    share_transport: bool,
+    shared_channel: bool,
     options_in_login: Option<OptionMessage>,
     #[cfg(not(any(target_os = "ios")))]
     pressed_modifiers: HashSet<rdev::Key>,
@@ -541,6 +544,40 @@ impl Connection {
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
     ) {
+        let accept = if stream.is_secured() && meta.control_permissions.is_none() && meta.controlled_context.is_none() {
+            let weak = server.clone();
+            let policy = meta.clone();
+            Some(std::sync::Arc::new(move |stream| {
+                let Some(server) = weak.upgrade() else { return };
+                if !ip_allowed(addr.ip()) { return }
+                let id = server.write().unwrap().get_new_id();
+                let Some(admission) = admit_unauthorized(id, addr.ip()) else { return };
+                let weak = std::sync::Arc::downgrade(&server);
+                let policy = policy.clone();
+                tokio::spawn(async move {
+                    Self::run_session(addr, stream, id, weak, policy, admission, crate::shared_tunnel::ServerRole::Channel, &mut None).await;
+                });
+            }) as crate::shared_tunnel::Accept)
+        } else { None };
+        let mut carrier = None;
+        Self::run_session(addr, stream, id, server, meta, unauthorized, crate::shared_tunnel::ServerRole::Physical(accept), &mut carrier).await;
+        if let Some(closed) = carrier { let _ = closed.await; }
+    }
+
+    async fn run_session(
+        addr: SocketAddr,
+        stream: super::Stream,
+        id: i32,
+        server: super::ServerPtrWeak,
+        meta: super::ConnectionMeta,
+        unauthorized: UnauthorizedID,
+        role: crate::shared_tunnel::ServerRole,
+        carrier: &mut Option<crate::shared_tunnel::Closed>,
+    ) {
+        let (mut shared_accept, shared_channel) = match role {
+            crate::shared_tunnel::ServerRole::Physical(accept) => (accept, false),
+            crate::shared_tunnel::ServerRole::Channel => (None, true),
+        };
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,
@@ -648,6 +685,8 @@ impl Connection {
             audio_sender: None,
             voice_call_request_timestamp: None,
             voice_calling: false,
+            share_transport: shared_accept.is_some(),
+            shared_channel,
             options_in_login: None,
             #[cfg(not(any(target_os = "ios")))]
             pressed_modifiers: Default::default(),
@@ -1103,6 +1142,16 @@ impl Connection {
                                         }
                                         live_direct_started = true;
                                     }
+                                    continue;
+                                }
+                                if let Some(seed) = bytes.strip_prefix(crate::shared_tunnel::START) {
+                                    if !(conn.authorized && conn.share_transport && conn.shared_session_scope()) { break }
+                                    let Some(accept) = shared_accept.take() else { break };
+                                    match crate::shared_tunnel::listen(&mut conn.stream, seed, accept).await {
+                                        Ok(closed) => *carrier = Some(closed),
+                                        Err(err) => { conn.on_close(&err.to_string(), true).await; break; }
+                                    }
+                                    live_direct_started = true;
                                     continue;
                                 }
                                 if let Ok(msg_in) = Message::parse_from_bytes(&bytes) {
@@ -2090,6 +2139,9 @@ impl Connection {
             pi.platform = "Android".into();
         }
         let mut platform_additions = serde_json::Map::new();
+        if self.share_transport && self.shared_session_scope() {
+            platform_additions.insert(crate::shared_tunnel::CAPABILITY.into(), json!(true));
+        }
         #[cfg(target_os = "linux")]
         {
             if crate::platform::current_is_wayland() {
@@ -2398,6 +2450,18 @@ impl Connection {
     #[inline]
     fn can_try_live_direct(&self) -> bool {
         self.can_try_live_transport() && crate::live_direct::responder_enabled()
+    }
+
+    fn shared_login_scope(lr: &LoginRequest) -> Option<AuthConnType> {
+        match lr.union.as_ref() {
+            None => Some(AuthConnType::Remote),
+            Some(login_request::Union::FileTransfer(_)) => Some(AuthConnType::FileTransfer),
+            _ => None,
+        }
+    }
+
+    fn shared_session_scope(&self) -> bool {
+        !self.is_port_forward() && !self.view_camera && !self.terminal
     }
 
     fn can_try_live_transport(&self) -> bool {
@@ -3060,6 +3124,10 @@ impl Connection {
         }
         // After handling CloseReason messages, proceed to process other message types
         if let Some(message::Union::LoginRequest(lr)) = msg.union {
+            if self.shared_channel && Self::shared_login_scope(&lr).is_none() {
+                self.send_login_error("Unsupported session type on shared connection").await;
+                return false;
+            }
             if !self.check_login_scope(&lr).await {
                 return false;
             }
@@ -6042,6 +6110,9 @@ impl Connection {
             peer_id: self.lr.my_id.clone(),
             name: self.lr.my_name.clone(),
             session_id: self.lr.session_id,
+            shared_scope: if self.shared_channel {
+                Self::shared_login_scope(&self.lr)
+            } else { None },
         }
     }
 
@@ -8130,6 +8201,7 @@ pub(super) mod test {
             peer_id: peer.to_owned(),
             name: "".to_owned(),
             session_id,
+            shared_scope: None,
         };
         let conn = |conn_id, conn_type, session_key| AuthedConn {
             conn_id,

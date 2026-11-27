@@ -22,6 +22,7 @@ mod ios_p2p_diagnostics;
 mod p2p_remote_diagnostics;
 mod lan;
 mod live_direct;
+mod shared_tunnel;
 mod p2p;
 #[cfg(not(any(target_os = "ios")))]
 mod rendezvous_mediator;

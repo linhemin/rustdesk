@@ -79,6 +79,7 @@ pub struct Remote<T: InvokeUiSession> {
     // Stop sending local audio to remote client.
     stop_voice_call_sender: Option<std::sync::mpsc::Sender<()>>,
     voice_call_request_timestamp: Option<NonZeroI64>,
+    peer_shares_transport: bool,
     read_jobs: Vec<fs::TransferJob>,
     write_jobs: Vec<fs::TransferJob>,
     remove_jobs: HashMap<i32, RemoveJob>,
@@ -173,6 +174,7 @@ impl<T: InvokeUiSession> Remote<T> {
             video_format: CodecFormat::Unknown,
             stop_voice_call_sender: None,
             voice_call_request_timestamp: None,
+            peer_shares_transport: false,
             elevation_requested: false,
             peer_info: Default::default(),
             video_threads: Default::default(),
@@ -231,7 +233,19 @@ impl<T: InvokeUiSession> Remote<T> {
         let mut initial_frames = client::path_rtt::InitialFrames::new();
         #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
         self.handler.p2p_test_access.begin_round();
-        match Client::start_with_direct_permission(
+        self.peer_shares_transport = false;
+        let route_key = self.shared_route_key(key, token, conn_type);
+        let reuse = match route_key.as_ref() {
+            Some(key) => crate::shared_tunnel::reuse(key).await,
+            None => None,
+        };
+        let reused = reuse.is_some();
+        let mut carrier = None;
+        let mut carrier_guards = None;
+        let connection = if let Some((stream, direct, pk, label)) = reuse {
+            Ok((((stream, direct, Some(pk), None, label), (0, String::new())), Some(false)))
+        } else {
+            Client::start_with_direct_permission(
             &self.handler.get_id(),
             key,
             token,
@@ -240,7 +254,8 @@ impl<T: InvokeUiSession> Remote<T> {
             Some(&mut initial_frames),
         )
         .await
-        {
+        };
+        match connection {
             Ok((connection, direct_retry_permitted)) => {
                 let ((mut peer, mut direct, pk, kcp, stream_type), (feedback, rendezvous_server)) =
                     connection;
@@ -367,7 +382,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let rtc_enabled = crate::live_direct::enabled();
                 let native_enabled = crate::live_direct::native::enabled()
                     && !hbb_common::websocket::is_ws_endpoint(&native_server);
-                let eligible_live_direct = !direct
+                let eligible_live_direct = !reused && !direct
                     && crate::live_direct::supported_transport(&peer)
                     && peer_verified
                     && matches!(conn_type, ConnType::DEFAULT_CONN | ConnType::FILE_TRANSFER)
@@ -401,6 +416,19 @@ impl<T: InvokeUiSession> Remote<T> {
                             waiting_for_parallel = parallel.then_some(measured);
                             waiting_for_live_direct = rtc_upgrade && !parallel;
                             waiting_for_native = !rtc_upgrade && !parallel;
+                        }
+                    }
+                    if !reused && is_secured && peer_verified && self.peer_shares_transport && self.is_connected && carrier.is_none()
+                        && !waiting_for_live_direct && !waiting_for_native && waiting_for_parallel.is_none()
+                        && (!(rtc_upgrade || native_upgrade) || !check_live_permission) {
+                        if let (Some(key), Some(pk)) = (route_key, session_pk.as_ref()) {
+                            let route = crate::shared_tunnel::Route {
+                                direct: direct && live_path.is_none(), label: stream_type, peer_key: pk.clone(), live_path: live_path.clone()
+                            };
+                            match crate::shared_tunnel::connect(&mut peer, &mut initial_frames, key, route).await {
+                                Ok(closed) => carrier = Some(closed),
+                                Err(err) => { self.handler.on_establish_connection_error(err.to_string()); break }
+                            }
                         }
                     }
                     tokio::select! {
@@ -650,6 +678,7 @@ impl<T: InvokeUiSession> Remote<T> {
                     // 1ms works in my test, but 30ms is more reliable.
                     tokio::time::sleep(KCP_CLOSE_REASON_FLUSH_DELAY).await;
                 }
+                if carrier.is_some() { carrier_guards = Some((kcp, _keep_it)); }
             }
             Err(err) => {
                 self.handler.on_establish_connection_error(err.to_string());
@@ -669,6 +698,26 @@ impl<T: InvokeUiSession> Remote<T> {
                 );
             }
         }
+        if let Some(closed) = carrier {
+            let _ = closed.await;
+        }
+        drop(carrier_guards);
+    }
+
+    fn shared_route_key(&self, key: &str, token: &str, kind: ConnType) -> Option<crate::shared_tunnel::RouteKey> {
+        use hbb_common::config::Config;
+        if !matches!(kind, ConnType::DEFAULT_CONN | ConnType::FILE_TRANSFER) || Config::is_proxy() {
+            return None;
+        }
+        let login = self.handler.lc.read().unwrap();
+        if login.switch_uuid.is_some() { return None }
+        let context = serde_json::to_vec(&(
+            &login.id, &login.other_server, Config::get_rendezvous_servers(), key, token,
+            login.policy_relay, login.force_relay, crate::direct_only_enabled(),
+            Config::get_option("force-always-relay"), Config::get_option("key"),
+            crate::p2p::relay_list::configured_for(key),
+        )).ok()?;
+        Some(hbb_common::sodiumoxide::crypto::hash::sha256::hash(&context).0)
     }
 
     fn handle_disconnected(&self, round: u32) {
@@ -2908,6 +2957,7 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Ok(platform_additions) =
             serde_json::from_str::<HashMap<String, serde_json::Value>>(&pi.platform_additions)
         {
+            self.peer_shares_transport = platform_additions.get(crate::shared_tunnel::CAPABILITY).and_then(serde_json::Value::as_bool) == Some(true);
             self.peer_info.is_installed = platform_additions
                 .get("is_installed")
                 .map(|v| v.as_bool())
