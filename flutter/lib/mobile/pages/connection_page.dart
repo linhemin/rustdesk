@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 
 import '../../common.dart';
+import '../../common/brand_links.dart';
 import '../../common/widgets/peer_tab_page.dart';
 import '../../common/widgets/autocomplete.dart';
 import '../../consts.dart';
@@ -155,7 +156,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         ? const SizedBox(height: 0)
         : InkWell(
             onTap: () async {
-              final url = 'https://rustdesk.com/download';
+              final url = BrandLinks.downloadUrl;
               // https://pub.dev/packages/url_launcher#configuration
               // https://developer.android.com/training/package-visibility/use-cases#open-urls-custom-tabs
               //
@@ -495,16 +496,23 @@ class _ActiveMobileSessions extends StatelessWidget {
                               true,
                           () => PhoneMicrophonePage.showSession(
                               context, PhoneMicrophone.peerId, audio),
+                          onClose: () =>
+                              unawaited(PhoneMicrophone.disconnect(audio)),
                         ),
                       ),
                     for (final remote in remotes)
-                      Obx(() => _sessionChip(
-                            Icons.desktop_windows_outlined,
-                            remote.id,
-                            remote.ffi.ffiModel.pi.isSet.value &&
-                                !remote.ffi.ffiModel.waitForFirstImage.value,
-                            () => remote.show(context),
-                          )),
+                      Obx(() {
+                        final host = remote.ffi.ffiModel.pi.hostname.trim();
+                        final label = host.isNotEmpty ? host : remote.id;
+                        return _sessionChip(
+                          Icons.desktop_windows_outlined,
+                          label,
+                          remote.ffi.ffiModel.pi.isSet.value &&
+                              !remote.ffi.ffiModel.waitForFirstImage.value,
+                          () => remote.show(context),
+                          onClose: () => unawaited(remote.close()),
+                        );
+                      }),
                   ],
                 ),
               ),
@@ -514,15 +522,39 @@ class _ActiveMobileSessions extends StatelessWidget {
       });
 
   Widget _sessionChip(
-      IconData icon, String id, bool connected, VoidCallback onPressed) {
+    IconData icon,
+    String title,
+    bool connected,
+    VoidCallback onPressed, {
+    VoidCallback? onClose,
+  }) {
     final status = translate(connected ? 'Connected' : 'Waiting');
     return Padding(
       padding: const EdgeInsetsDirectional.only(end: 8),
       child: ActionChip(
         avatar: Icon(icon, size: 18),
         label: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 220),
-          child: Text('$id  ·  $status', overflow: TextOverflow.ellipsis),
+          constraints: const BoxConstraints(maxWidth: 240),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Flexible(
+                child:
+                    Text('$title  ·  $status', overflow: TextOverflow.ellipsis),
+              ),
+              if (onClose != null) ...[
+                const SizedBox(width: 6),
+                Tooltip(
+                  message: translate('Disconnect'),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onClose,
+                    child: const Icon(Icons.close_rounded, size: 15),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
         onPressed: onPressed,
       ),

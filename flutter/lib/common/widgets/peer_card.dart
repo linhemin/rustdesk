@@ -11,6 +11,7 @@ import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 
 import '../../common.dart';
+import '../../common/device_profile.dart';
 import '../../common/formatter/id_formatter.dart';
 import '../../models/peer_model.dart';
 import '../../models/platform_model.dart';
@@ -79,9 +80,17 @@ class _PeerCardState extends State<_PeerCard>
     super.build(context);
     final onConnect = ConnectionPeerList.of(context)?.onConnect;
     if (!isWeb &&
-        const {TargetPlatform.iOS, TargetPlatform.macOS, TargetPlatform.windows}
-            .contains(Theme.of(context).platform)) {
-      return Theme.of(context).platform == TargetPlatform.iOS
+        const {
+          TargetPlatform.iOS,
+          TargetPlatform.android,
+          TargetPlatform.macOS,
+          TargetPlatform.windows,
+          TargetPlatform.linux,
+        }.contains(Theme.of(context).platform)) {
+      final isPhonePlatform =
+          Theme.of(context).platform == TargetPlatform.iOS ||
+              Theme.of(context).platform == TargetPlatform.android;
+      return isPhonePlatform
           ? _workspaceCard(onConnect)
           : Obx(() => _workspaceCard(onConnect));
     }
@@ -99,7 +108,10 @@ class _PeerCardState extends State<_PeerCard>
       if (hideUsernameOnCard != true && peer.username.isNotEmpty) peer.username,
       if (peer.hostname.isNotEmpty) peer.hostname,
     ].join('@');
-    final grid = Theme.of(context).platform != TargetPlatform.iOS &&
+    final isPhonePlatform =
+        Theme.of(context).platform == TargetPlatform.iOS ||
+            Theme.of(context).platform == TargetPlatform.android;
+    final grid = !isPhonePlatform &&
         !stateGlobal.isPortrait.value &&
         peerCardUiType.value == PeerUiType.grid;
     Widget desktopAction(String label, IconData icon, VoidCallback onPressed,
@@ -151,8 +163,7 @@ class _PeerCardState extends State<_PeerCard>
       selected: model.isPeerSelected(peer.id),
       passwordSaved: _shouldBuildPasswordIcon(peer),
       actions: [
-        if (!model.multiSelectionMode &&
-            Theme.of(context).platform != TargetPlatform.iOS) ...[
+        if (!model.multiSelectionMode && !isPhonePlatform) ...[
           desktopAction(
               'Transfer file',
               Icons.folder_outlined,
@@ -971,6 +982,18 @@ abstract class BasePeerCard extends StatelessWidget {
       _transferFileAction(context),
       _viewCameraAction(context),
       _terminalAction(context),
+      MenuEntryButton<String>(
+        childBuilder: (style) => Text(translate('Settings'), style: style),
+        proc: () => showDeviceProfileDialog(
+          context,
+          peerId: peer.id,
+          peerTitle: peer.alias.isNotEmpty
+              ? peer.alias
+              : (peer.hostname.isNotEmpty ? peer.hostname : formatID(peer.id)),
+        ),
+        padding: menuPadding,
+        dismissOnClicked: true,
+      ),
     ];
 
     if (peer.platform == kPeerPlatformWindows) {

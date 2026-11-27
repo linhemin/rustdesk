@@ -14,8 +14,12 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common.dart';
+import '../../common/brand_links.dart';
+import '../../common/local_peer_backup.dart';
+import '../../common/widgets/account_sync_card.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
+import '../../common/widgets/network_tools_dialogs.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
@@ -502,6 +506,12 @@ class _SettingsState extends State<_SettingsContent>
               }
               if (mounted) setState(() {});
             },
+          ),
+        if (!isWeb)
+          SettingsTile(
+            title: Text(translate('Diagnostics')),
+            leading: const Icon(Icons.monitor_heart_outlined),
+            onPressed: (context) => showNetworkDiagnosticsDialog(context),
           ),
       ];
 
@@ -1333,12 +1343,86 @@ class _SettingsState extends State<_SettingsContent>
             title: Text(translate("Enhancements")),
             tiles: enhancementsTiles,
           ),
+        if (!incomingOnly && !disabledSettings)
+          SettingsSection(
+            title: Text(translate('Local')),
+            tiles: [
+              SettingsTile(
+                title: Text(translate('Export')),
+                leading: const Icon(Icons.upload_rounded),
+                onPressed: (context) async {
+                  try {
+                    final count = await exportLocalPeersToClipboard();
+                    showToast('${translate('Copied')} ($count)');
+                  } catch (_) {
+                    showToast(translate('Failed'));
+                  }
+                },
+              ),
+              SettingsTile(
+                title: Text(translate('Import')),
+                leading: const Icon(Icons.download_rounded),
+                onPressed: (context) async {
+                  try {
+                    final count = await importLocalPeersFromClipboard();
+                    showToast('${translate('Successful')} ($count)');
+                  } catch (_) {
+                    showToast(translate('Failed'));
+                  }
+                },
+              ),
+              if (!isWeb)
+                SettingsTile(
+                  title: Text('${translate('Export')} JSON'),
+                  leading: const Icon(Icons.save_alt_rounded),
+                  onPressed: (context) async {
+                    try {
+                      final count = await exportLocalPeersToFile();
+                      if (count != null) {
+                        showToast('${translate('Successful')} ($count)');
+                      }
+                    } catch (_) {
+                      showToast(translate('Failed'));
+                    }
+                  },
+                ),
+              if (!isWeb)
+                SettingsTile(
+                  title: Text('${translate('Import')} JSON'),
+                  leading: const Icon(Icons.file_open_outlined),
+                  onPressed: (context) async {
+                    try {
+                      final count = await importLocalPeersFromFile();
+                      if (count != null) {
+                        showToast('${translate('Successful')} ($count)');
+                      }
+                    } catch (_) {
+                      showToast(translate('Failed'));
+                    }
+                  },
+                ),
+              SettingsTile(
+                title: const Text('WebDAV'),
+                leading: const Icon(Icons.cloud_sync_outlined),
+                onPressed: (context) async {
+                  try {
+                    final count = await showWebDavSyncDialog(context);
+                    if (count != null) {
+                      showToast('${translate('Successful')} ($count)');
+                    }
+                  } catch (_) {
+                    showToast(translate('Failed'));
+                  }
+                },
+              ),
+            ],
+          ),
         SettingsSection(
           title: Text(translate("About")),
           tiles: [
             SettingsTile(
                 onPressed: (context) async {
-                  await launchUrl(Uri.parse(url));
+                  await launchUrl(Uri.parse(BrandLinks.homepageUrl));
                 },
                 title: Text(apple
                     ? translate('Version')
@@ -1349,7 +1433,7 @@ class _SettingsState extends State<_SettingsContent>
                 trailing: apple ? const Icon(Icons.open_in_new_rounded) : null,
                 value: Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
-                  child: Text(apple ? version : 'rustdesk.com',
+                  child: Text(apple ? version : BrandLinks.displayDomain,
                       style: TextStyle(
                         decoration: TextDecoration.underline,
                       )),
@@ -1385,8 +1469,7 @@ class _SettingsState extends State<_SettingsContent>
             SettingsTile(
               title: Text(translate("Privacy Statement")),
               trailing: apple ? const Icon(Icons.open_in_new_rounded) : null,
-              onPressed: (context) =>
-                  launchUrlString('https://rustdesk.com/privacy.html'),
+              onPressed: (context) => launchUrlString(BrandLinks.privacyUrl),
               leading: Icon(Icons.privacy_tip),
             )
           ],
@@ -1397,22 +1480,47 @@ class _SettingsState extends State<_SettingsContent>
 
   Widget _buildSettingsList(BuildContext context,
       {required List<AbstractSettingsSection> sections}) {
-    if (Theme.of(context).platform != TargetPlatform.iOS) {
+    if (isWeb) {
       return _mobileSettingsList(context, sections: sections);
     }
+    final isApple = Theme.of(context).platform == TargetPlatform.iOS;
     return SafeArea(
+        top: isApple,
         bottom: false,
         child: AppleSettingsList(
           searchQuery: _searchQuery,
-          header: AppleSettingsHeader(
-            title: translate('Settings'),
-            searchHint: translate('Search'),
-            controller: _searchController,
-            onSearch: (value) => setState(() => _searchQuery = value),
-            scan: bind.isDisableSettings()
-                ? null
-                : ScanButton(onServerConfig: _showServerPage),
-          ),
+          header: isApple
+              ? AppleSettingsHeader(
+                  title: translate('Settings'),
+                  searchHint: translate('Search'),
+                  controller: _searchController,
+                  onSearch: (value) => setState(() => _searchQuery = value),
+                  scan: bind.isDisableSettings()
+                      ? null
+                      : ScanButton(onServerConfig: _showServerPage),
+                )
+              : Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: TextField(
+                    controller: _searchController,
+                    onChanged: (value) => setState(() => _searchQuery = value),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      filled: true,
+                      hintText: translate('Search'),
+                      prefixIcon: const Icon(Icons.search_rounded, size: 18),
+                      suffixIcon: _searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                              icon: const Icon(Icons.close_rounded, size: 16),
+                            ),
+                    ),
+                  ),
+                ),
           leading: [
             if (!bind.isDisableAccount() && _searchQuery.trim().isEmpty)
               Obx(() {
@@ -1423,8 +1531,9 @@ class _SettingsState extends State<_SettingsContent>
                   title: user.isLogin
                       ? user.accountLabelWithHandle
                       : translate('Login'),
-                  subtitle:
-                      '${bind.mainGetAppNameSync()} · ${translate('Account')}',
+                  subtitle: user.isLogin
+                      ? '${bind.mainGetAppNameSync()} · ${translate('Account')}'
+                      : '${bind.mainGetAppNameSync()} · ${translate('Local')}',
                   avatar: buildAvatarWidget(
                           avatar: avatar,
                           size: 54,

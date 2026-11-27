@@ -1,15 +1,21 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/mobile/pages/server_page.dart';
 import 'package:flutter_hbb/mobile/pages/settings_page.dart';
 import 'package:flutter_hbb/web/settings_page.dart';
 import 'package:get/get.dart';
 import '../../common.dart';
+import '../../common/widgets/workspace.dart';
 import '../../native/apple_workspace_navigation.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/platform_model.dart';
 import '../../models/state_model.dart';
+import '../mobile_remote_sessions.dart';
+import '../phone_microphone.dart';
 import 'ios_files_page.dart';
 import 'connection_page.dart';
+import 'phone_microphone_page.dart';
 import 'scan_page.dart';
 import '../android_sliding_navigation_bar.dart';
 
@@ -127,7 +133,8 @@ class HomePageState extends State<HomePage> {
                       : appTitle(),
                   actions: [
                     ..._pages.elementAt(_selectedIndex).appBarActions,
-                    if (isIOS && _pages[_selectedIndex] is ConnectionPage)
+                    if ((isIOS || isAndroid) &&
+                        _pages[_selectedIndex] is ConnectionPage)
                       Padding(
                         padding: const EdgeInsetsDirectional.only(end: 8),
                         child: IconButton(
@@ -200,9 +207,17 @@ class HomePageState extends State<HomePage> {
                         }),
                       )),
                     ),
-          body: isIOS
-              ? IndexedStack(index: _selectedIndex, children: _pages)
-              : _pages.elementAt(_selectedIndex),
+          body: Column(
+            children: [
+              if (_pages[_selectedIndex] is! ConnectionPage)
+                const _GlobalActiveSessionsBanner(),
+              Expanded(
+                child: isIOS
+                    ? IndexedStack(index: _selectedIndex, children: _pages)
+                    : _pages.elementAt(_selectedIndex),
+              ),
+            ],
+          ),
         ));
   }
 
@@ -356,5 +371,82 @@ class WebHomePage extends StatelessWidget {
           loginMethod: loginMethod,
           password: password);
     }
+  }
+}
+
+class _GlobalActiveSessionsBanner extends StatelessWidget {
+  const _GlobalActiveSessionsBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final remotes = MobileRemoteSessions.sessions.toList();
+      final audio = PhoneMicrophone.standalone;
+      if (remotes.isEmpty && audio == null) return const SizedBox.shrink();
+      final theme = Theme.of(context);
+      final total = remotes.length + (audio != null ? 1 : 0);
+      final firstRemote = remotes.isNotEmpty ? remotes.first : null;
+      final label = firstRemote != null
+          ? (firstRemote.ffi.ffiModel.pi.hostname.trim().isNotEmpty
+              ? firstRemote.ffi.ffiModel.pi.hostname.trim()
+              : firstRemote.id)
+          : PhoneMicrophone.peerId;
+      return Material(
+        color: WorkspaceStyle.accentSoft(context),
+        child: InkWell(
+          onTap: () {
+            if (firstRemote != null) {
+              firstRemote.show(context);
+            } else if (audio != null) {
+              PhoneMicrophonePage.showSession(
+                  context, PhoneMicrophone.peerId, audio);
+            }
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  firstRemote != null
+                      ? Icons.desktop_windows_outlined
+                      : Icons.headset_mic_outlined,
+                  size: 16,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${translate('Active sessions')} ($total) · $label',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: translate('Disconnect'),
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints.tightFor(width: 28, height: 28),
+                  icon: Icon(Icons.close_rounded,
+                      size: 16, color: theme.colorScheme.primary),
+                  onPressed: () {
+                    for (final session in remotes) {
+                      unawaited(session.close());
+                    }
+                    if (audio != null) {
+                      unawaited(PhoneMicrophone.disconnect(audio));
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
   }
 }

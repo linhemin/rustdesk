@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../common.dart';
+import '../../common/widgets/workspace.dart';
 import '../../consts.dart';
 import '../../models/chat_model.dart';
 import '../../models/model.dart';
@@ -48,6 +51,40 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
   FFI get session => widget.session;
   bool _changingMicrophone = false;
   bool _disconnecting = false;
+  Timer? _elapsedTimer;
+  Duration _elapsed = Duration.zero;
+  int _meterTick = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateElapsed();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _meterTick = (_meterTick + 1) % 6;
+        _updateElapsed();
+      });
+    });
+  }
+
+  void _updateElapsed() {
+    final opened = PhoneMicrophone.openedAt;
+    _elapsed = opened == null ? Duration.zero : DateTime.now().difference(opened);
+  }
+
+  @override
+  void dispose() {
+    _elapsedTimer?.cancel();
+    super.dispose();
+  }
+
+  String _formatDuration(Duration d) {
+    final total = d.inSeconds < 0 ? 0 : d.inSeconds;
+    final m = (total ~/ 60).toString().padLeft(2, '0');
+    final s = (total % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
 
   Future<void> _setMicrophone(bool enabled) async {
     setState(() => _changingMicrophone = true);
@@ -177,48 +214,158 @@ class _PhoneMicrophonePageState extends State<PhoneMicrophonePage> {
                   : active
                       ? 'Waiting'
                       : 'Disconnected');
+          final micActive = voice != VoiceCallStatus.notStarted && active;
+          final theme = Theme.of(context);
+          final accent = micActive
+              ? WorkspaceStyle.success(context)
+              : theme.colorScheme.primary;
           return ListView(
-            padding: const EdgeInsets.symmetric(vertical: 16),
+            padding: const EdgeInsets.all(16),
             children: [
-              ListTile(
-                title: Text(widget.id),
-                subtitle: Text(status),
-                leading: const Icon(Icons.headset_rounded),
-              ),
-              SwitchListTile(
-                title: Text(translate('Use local microphone')),
-                subtitle: voice == VoiceCallStatus.waitingForResponse
-                    ? Text(translate('Waiting'))
-                    : null,
-                value: voice != VoiceCallStatus.notStarted && active,
-                onChanged:
-                    allowed && !_changingMicrophone ? _setMicrophone : null,
-              ),
-              SwitchListTile(
-                title: Text(translate('Use as remote speaker')),
-                subtitle: ready && !playbackSupported
-                    ? Text(translate('Unsupported'))
-                    : null,
-                value: ready && permissions['phone-audio-playing'] == true,
-                onChanged: allowed && playbackSupported
-                    ? (enabled) => bind.sessionPeerOption(
-                        sessionId: session.sessionId,
-                        name: 'phone-audio-playback',
-                        value: enabled ? 'Y' : 'N')
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              Center(
-                child: TextButton(
-                  onPressed: active && !_disconnecting
-                      ? () async {
-                          setState(() => _disconnecting = true);
-                          await PhoneMicrophone.disconnect(session);
-                          if (context.mounted) Navigator.pop(context);
-                        }
-                      : null,
-                  child: Text(translate('Disconnect')),
+              WorkspacePanel(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: accent.withOpacity(0.14),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(Icons.headset_rounded, color: accent),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.id,
+                                style: theme.textTheme.titleMedium,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                status,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.hintColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (ready)
+                          Text(
+                            _formatDuration(_elapsed),
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: theme.hintColor,
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    // Live microphone indicator & large one-tap toggle button.
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        for (var i = 0; i < 5; i++)
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 220),
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            width: 4,
+                            height: micActive
+                                ? 10.0 + ((i + _meterTick) % 4) * 6.0
+                                : 6.0,
+                            decoration: BoxDecoration(
+                              color: micActive
+                                  ? WorkspaceStyle.success(context)
+                                  : theme.dividerColor,
+                              borderRadius: BorderRadius.circular(99),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: 68,
+                      height: 68,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          shape: const CircleBorder(),
+                          padding: EdgeInsets.zero,
+                          backgroundColor: micActive
+                              ? WorkspaceStyle.success(context)
+                              : theme.colorScheme.surfaceContainerHighest,
+                          foregroundColor: micActive
+                              ? Colors.white
+                              : theme.colorScheme.onSurface,
+                        ),
+                        onPressed: allowed && !_changingMicrophone
+                            ? () => _setMicrophone(!micActive)
+                            : null,
+                        child: Icon(
+                          micActive ? Icons.mic_rounded : Icons.mic_off_rounded,
+                          size: 30,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+              ),
+              const SizedBox(height: 14),
+              WorkspacePanel(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      title: Text(translate('Use local microphone')),
+                      subtitle: voice == VoiceCallStatus.waitingForResponse
+                          ? Text(translate('Waiting'))
+                          : null,
+                      value: micActive,
+                      onChanged: allowed && !_changingMicrophone
+                          ? _setMicrophone
+                          : null,
+                    ),
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                    SwitchListTile(
+                      title: Text(translate('Use as remote speaker')),
+                      subtitle: ready && !playbackSupported
+                          ? Text(translate('Unsupported'))
+                          : null,
+                      value:
+                          ready && permissions['phone-audio-playing'] == true,
+                      onChanged: allowed && playbackSupported
+                          ? (enabled) => bind.sessionPeerOption(
+                              sessionId: session.sessionId,
+                              name: 'phone-audio-playback',
+                              value: enabled ? 'Y' : 'N')
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: WorkspaceStyle.danger(context),
+                  side: BorderSide(
+                      color: WorkspaceStyle.danger(context).withOpacity(0.4)),
+                ),
+                icon: const Icon(Icons.call_end_rounded, size: 18),
+                onPressed: active && !_disconnecting
+                    ? () async {
+                        setState(() => _disconnecting = true);
+                        await PhoneMicrophone.disconnect(session);
+                        if (context.mounted) Navigator.pop(context);
+                      }
+                    : null,
+                label: Text(translate('Disconnect')),
               ),
             ],
           );
