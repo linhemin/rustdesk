@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/device_profile.dart';
 import 'package:flutter_hbb/common/incoming_history.dart';
-import 'package:flutter_hbb/common/local_peer_backup.dart';
 import 'package:flutter_hbb/common/relay_probe.dart';
 import 'package:flutter_hbb/common/widgets/relay_servers.dart';
 import 'package:flutter_hbb/desktop/widgets/command_palette.dart';
@@ -15,8 +14,6 @@ import 'package:flutter_hbb/mobile/widgets/macro_shortcut_bar.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 
 class _FakeBind extends Fake implements RustdeskImpl {
   @override
@@ -112,66 +109,6 @@ void main() {
       await tester.tap(find.text('Test'));
       await tester.pumpAndSettle();
       expect(find.text('18 ms'), findsOneWidget);
-    });
-  });
-
-  group('WebDAV config & HTTP sync client', () {
-    test('WebDavSyncConfig resolves directory URL to backup JSON file', () {
-      const dirCfg = WebDavSyncConfig(
-        endpoint: 'https://dav.example.com/rustdesk/',
-        username: 'alice',
-        password: 'pw',
-      );
-      expect(dirCfg.targetUri.toString(),
-          'https://dav.example.com/rustdesk/rustdesk-peers-backup.json');
-
-      const fileCfg = WebDavSyncConfig(
-        endpoint: 'https://dav.example.com/custom.json',
-        username: '',
-        password: '',
-      );
-      expect(fileCfg.targetUri.toString(),
-          'https://dav.example.com/custom.json');
-    });
-
-    test('WebDAV PUT sends Basic Auth and valid JSON payload', () async {
-      String? capturedMethod;
-      String? capturedAuth;
-      String? capturedBody;
-      final mockClient = MockClient((req) async {
-        capturedMethod = req.method;
-        capturedAuth = req.headers['Authorization'];
-        capturedBody = req.body;
-        return http.Response('', 201);
-      });
-
-      final bundle = buildLocalPeerBackup(
-        recentPeersJson: jsonEncode([
-          {'id': '123456789', 'alias': 'Work PC', 'password': 'secret'},
-        ]),
-        favorites: ['123456789'],
-      );
-      final encoded = bundle.encode();
-      final cfg = const WebDavSyncConfig(
-        endpoint: 'https://dav.example.com/sync',
-        username: 'u',
-        password: 'p',
-      );
-
-      final resp = await mockClient.put(
-        cfg.targetUri,
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Authorization': 'Basic ${base64Encode(utf8.encode('u:p'))}',
-        },
-        body: encoded,
-      );
-      expect(resp.statusCode, 201);
-      expect(capturedMethod, 'PUT');
-      expect(capturedAuth, startsWith('Basic '));
-      expect(capturedBody, isNot(contains('secret')));
-      expect(LocalPeerBackupBundle.decode(capturedBody!).peers.single.id,
-          '123456789');
     });
   });
 

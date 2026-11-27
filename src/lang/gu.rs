@@ -917,5 +917,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Use local microphone", ""),
         ("Use as remote speaker", ""),
         ("Active sessions", ""),
+        ("My devices", ""),
     ].iter().cloned().collect();
 }

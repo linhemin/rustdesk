@@ -30,7 +30,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common/brand_links.dart';
-import '../../common/widgets/account_sync_card.dart';
 import '../../common/widgets/network_tools_dialogs.dart';
 import '../../common/widgets/dialog.dart';
 import '../widgets/settings_search_index.dart';
@@ -2958,7 +2957,6 @@ class _AccountState extends State<_Account> {
       controller: scrollController,
       children: [
         _Card(title: 'Account', children: [accountAction(), useInfo()]),
-        _Card(title: 'Local', children: [const AccountSyncCard()]),
       ],
     ).marginOnly(bottom: _kListViewBottomMargin);
   }

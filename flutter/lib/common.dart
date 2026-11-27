@@ -3734,24 +3734,36 @@ Future<bool> setServerConfig(
       return false;
     }
   }
-  final oldApiServer = await bind.mainGetApiServer();
-
-  // should set one by one
-  await bind.mainSetOption(
-      key: 'custom-rendezvous-server', value: config.idServer);
-  if (!isWeb &&
-      config.hasRelayServers &&
-      !isOptionFixed(relayServersOption) &&
-      bind.mainGetOptionSync(key: relayServersOption) != jsonEncode(relays)) {
-    await storeRelayServers(relays);
+  Future<void> save() async {
+    await bind.mainSetOption(
+        key: 'custom-rendezvous-server', value: config.idServer);
+    if (!isWeb &&
+        config.hasRelayServers &&
+        !isOptionFixed(relayServersOption) &&
+        bind.mainGetOptionSync(key: relayServersOption) != jsonEncode(relays)) {
+      await storeRelayServers(relays);
+    }
+    await bind.mainSetOption(key: 'api-server', value: config.apiServer);
+    await bind.mainSetOption(key: 'key', value: config.key);
   }
-  await bind.mainSetOption(key: 'api-server', value: config.apiServer);
-  await bind.mainSetOption(key: 'key', value: config.key);
-  final newApiServer = await bind.mainGetApiServer();
-  if (oldApiServer.isNotEmpty &&
-      oldApiServer != newApiServer &&
-      gFFI.userModel.isLogin) {
-    gFFI.userModel.logOut(apiServer: oldApiServer);
+
+  if (isWeb) {
+    final oldApiServer = await bind.mainGetApiServer();
+    await save();
+    if (oldApiServer.isNotEmpty &&
+        oldApiServer != await bind.mainGetApiServer() &&
+        gFFI.userModel.isLogin) {
+      await gFFI.userModel.logOut(apiServer: oldApiServer);
+    }
+  } else if (!bind.isDisableAccount() &&
+      (bind.mainGetOptionSync(key: 'custom-rendezvous-server').trim() !=
+              config.idServer.trim() ||
+          bind.mainGetOptionSync(key: 'api-server').trim() !=
+              config.apiServer.trim() ||
+          bind.mainGetOptionSync(key: 'key').trim() != config.key.trim())) {
+    await gFFI.userModel.changeAccountServer(save);
+  } else {
+    await save();
   }
   return true;
 }

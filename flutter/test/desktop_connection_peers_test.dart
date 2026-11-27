@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -15,6 +16,8 @@ import 'package:provider/provider.dart';
 import 'package:rustdesk_ui/device_card.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
+  String savedPeerTab = '';
+
   @override
   dynamic noSuchMethod(Invocation call) => switch (call.memberName) {
         #translate => call.namedArguments[#name],
@@ -27,11 +30,15 @@ class _Binding extends Fake implements RustdeskImpl {
         #isOutgoingOnly ||
         #mainIsOptionFixed =>
           false,
-        #getLocalFlutterOption ||
+        #getLocalFlutterOption => switch (call.namedArguments[#k]) {
+            kOptionPeerTabIndex => savedPeerTab,
+            _ => '',
+          },
         #mainGetBuildinOption ||
         #mainGetLocalOption =>
           '',
         #mainLoadRecentPeers ||
+        #mainLoadLanPeers ||
         #queryOnlines ||
         #setLocalFlutterOption =>
           Future<void>.value(),
@@ -61,8 +68,11 @@ void main() {
   testWidgets('recent device opens with the selected desktop connection mode',
       (tester) async {
     isTest = true;
-    platformFFI.setBindingForTesting(_Binding());
+    final binding = _Binding()..savedPeerTab = '${PeerTabIndex.owned.index}';
+    platformFFI.setBindingForTesting(binding);
     await initGlobalFFI();
+    await gFFI.userModel.validateStoredAccount();
+    expect(gFFI.peerTabModel.currentTab, PeerTabIndex.recent.index);
     stateGlobal.isPortrait.value = false;
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -155,6 +165,11 @@ void main() {
     }
     await mount();
     expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, '987654321');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Connect'));
+    await settle();
+    expect(requests.last['id'], '987654321');
+    expect(gFFI.userModel.isLogin, isFalse);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
     debugDefaultTargetPlatformOverride = null;

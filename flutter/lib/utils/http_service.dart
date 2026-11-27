@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:http/http.dart' as http;
+import '../common/hbbs/account_server.dart';
+import '../common/hbbs/hbbs.dart' show RequestException;
 import '../models/platform_model.dart';
 import 'package:flutter_hbb/common.dart';
 export 'package:http/http.dart' show Response;
@@ -9,6 +12,8 @@ export 'package:http/http.dart' show Response;
 enum HttpMethod { get, post, put, delete }
 
 class HttpService {
+  static final _pendingRustRequests = <String, Future<void>>{};
+
   Future<http.Response> sendRequest(
     Uri url,
     HttpMethod method, {
@@ -28,20 +33,62 @@ class HttpService {
           !(enableFlutterHttpOnRust || await bind.mainGetProxyStatus());
     }
 
-    if (useFlutterHttp) {
-      return await _pollFlutterHttp(url, method, headers: headers, body: body);
+    final authorization = headers['Authorization'];
+    final accountServer = await _checkAccountRequest(url, authorization);
+    Future<void> checkAccountServer() async {
+      if (accountServer != null &&
+          accountServer != await _checkAccountRequest(url, authorization)) {
+        throw RequestException(0, 'Invalid server configuration');
+      }
     }
 
-    String headersJson = jsonEncode(headers);
-    String methodName = method.toString().split('.').last;
-    await bind.mainHttpRequest(
-        url: url.toString(),
-        method: methodName.toLowerCase(),
-        body: body,
-        header: headersJson);
+    final http.Response response;
+    if (useFlutterHttp) {
+      response = await _pollFlutterHttp(url, method, headers: headers, body: body);
+    } else {
+      final key = url.toString();
+      // The native response slot is keyed by URL, even across account changes.
+      final previous = _pendingRustRequests[key];
+      final finished = Completer<void>();
+      _pendingRustRequests[key] = finished.future;
+      try {
+        if (previous != null) {
+          await previous;
+          await checkAccountServer();
+        }
+        await bind.mainHttpRequest(
+            url: key, method: method.name, body: body, header: jsonEncode(headers));
+        response = _parseHttpResponse(await _pollForResponse(key));
+      } finally {
+        finished.complete();
+        if (_pendingRustRequests[key] == finished.future) {
+          _pendingRustRequests.remove(key);
+        }
+      }
+    }
+    await checkAccountServer();
+    return response;
+  }
 
-    var resJson = await _pollForResponse(url.toString());
-    return _parseHttpResponse(resJson);
+  Future<AccountServer?> _checkAccountRequest(
+      Uri target, String? authorization) async {
+    if (isWeb || authorization == null || !authorization.startsWith('Bearer ')) {
+      return null;
+    }
+    final server = await readAccountServer();
+    final token = bind.mainGetLocalOption(key: 'access_token');
+    final base = Uri.tryParse(server.apiServer);
+    if (!isStoredAccountServer(server) ||
+        token.isEmpty ||
+        authorization != 'Bearer $token' ||
+        base == null ||
+        base.scheme != target.scheme ||
+        base.host != target.host ||
+        base.port != target.port ||
+        !target.path.startsWith('${base.path}/api/')) {
+      throw RequestException(0, 'Invalid server configuration');
+    }
+    return server;
   }
 
   // Bounds only the pure-Dart branch below, which the OS would otherwise

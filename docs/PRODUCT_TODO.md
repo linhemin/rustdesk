@@ -50,12 +50,10 @@
   - [x] 在 `mobile/pages/home_page.dart` 非连接 Tab 顶部提供轻量常驻活动会话横幅（支持一键返回或关闭），避免遗忘后台连接。
 - [x] **iOS 文件页支持从设备列表选目标**：在 `ios_files_page.dart` 的连接表单中列出最近/收藏设备一键选择，不必每次手输 ID。
 
-### 6. 账号与设备清单同步 / 备份能力（重点需求）
-- [x] **无自建 API 账号场景的本地设备清单导出与恢复（不含密码）**：
-  - 已在桌面端“账号”设置与移动端设置中上线**本地设备清单剪贴板 / JSON 文件导出导入**（`flutter/lib/common/local_peer_backup.dart`），默认自动过滤密码/Hash 保障安全；
-  - [x] 支持 WebDAV 跨设备推送/拉取同步（`WebDavSyncConfig` + `pushLocalPeersToWebDav`/`pullLocalPeersFromWebDav` + 上次同步时间记录）。
-- [x] **统一账号中心体验（桌面 + 移动）**：
-  - 通过 `AccountSyncCard`（桌面）与 `AppleSettingsAccountCard`（双移动）明确区分“本机模式（Local）”与“云账号模式（Account）”的状态徽标、最近同步时间与一键导出/导入/WebDAV 同步入口。
+### 6. 账号登录与设备同步
+
+- [x] 复用现有账号登录与设备接口。账号登录态绑定当前 ID 服务器、API 服务器和公钥，登录后默认展示当前账号名下的设备。
+- [x] 未登录时可以通过远程 ID 发起连接，也可以使用最近会话、收藏和局域网发现。从账号设备页退出登录后返回本地设备列表。
 
 ---
 

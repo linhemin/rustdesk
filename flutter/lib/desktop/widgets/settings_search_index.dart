@@ -125,7 +125,7 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.account,
     labelKey: 'Account',
-    aliases: ['login', 'backup', 'export', 'import', '账号', '登录', '备份', '导出', '导入'],
+    aliases: ['login', '账号', '登录'],
   ),
   // Printer
   DesktopSettingSearchEntry(

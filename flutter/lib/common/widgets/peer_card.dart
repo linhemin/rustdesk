@@ -1344,6 +1344,7 @@ abstract class BasePeerCard extends StatelessWidget {
               await gFFI.abModel.deletePeers([id]);
               break;
             case PeerTabIndex.group:
+            case PeerTabIndex.owned:
               break;
           }
           if (tab != PeerTabIndex.ab) {
@@ -1740,10 +1741,11 @@ class AddressBookPeerCard extends BasePeerCard {
 }
 
 class MyGroupPeerCard extends BasePeerCard {
-  MyGroupPeerCard({required Peer peer, EdgeInsets? menuPadding, Key? key})
+  MyGroupPeerCard({required Peer peer, EdgeInsets? menuPadding, Key? key,
+      PeerTabIndex tab = PeerTabIndex.group})
       : super(
             peer: peer,
-            tab: PeerTabIndex.group,
+            tab: tab,
             menuPadding: menuPadding,
             key: key);
 
@@ -1770,7 +1772,13 @@ class MyGroupPeerCard extends BasePeerCard {
 
   @protected
   @override
-  void _update() => gFFI.groupModel.pull();
+  void _update() {
+    if (tab == PeerTabIndex.owned) {
+      gFFI.userModel.refreshOwnedDevices(force: true);
+    } else {
+      gFFI.groupModel.pull();
+    }
+  }
 }
 
 void _rdpDialog(String id) async {

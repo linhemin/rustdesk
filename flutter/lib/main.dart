@@ -120,6 +120,16 @@ Future<void> main(List<String> args) async {
 Future<void> initEnv(String appType) async {
   // global shared preference
   await platformFFI.init(appType);
+  if (appType == kAppTypeMain && !isWeb) {
+    for (final key in const [
+      'local-peer-webdav-sync',
+      'local-peer-last-sync',
+    ]) {
+      if (bind.getLocalFlutterOption(k: key).isNotEmpty) {
+        await bind.setLocalFlutterOption(k: key, v: '');
+      }
+    }
+  }
   // global FFI, use this **ONLY** for global configuration
   // for convenience, use global FFI on mobile platform
   // focus on multi-ffi on desktop first
@@ -139,6 +149,7 @@ void runMainApp(bool startService) async {
   if (startService) {
     gFFI.serverModel.startService();
   }
+  await gFFI.userModel.validateStoredAccount();
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
@@ -179,6 +190,7 @@ void runMobileApp() async {
   if (isAndroid) androidChannelInit();
   if (isAndroid) platformFFI.syncAndroidServiceAppDirConfigPath();
   draggablePositions.load();
+  await gFFI.userModel.validateStoredAccount();
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());

@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../common.dart';
 import '../../consts.dart';
+import '../hbbs/account_server.dart';
 import './dialog.dart';
 import './oidc_auth_status.dart';
 
@@ -152,6 +153,9 @@ class ConfigOP {
 }
 
 class _OidcAuthController {
+  _OidcAuthController(this.attempt);
+
+  final AccountLoginAttempt attempt;
   final RxString curOP = ''.obs;
   Future<void> _pendingOperation = Future<void>.value();
   int _authAttempt = 0;
@@ -184,7 +188,12 @@ class _OidcAuthController {
           completer.complete(false);
           return;
         }
-        await bind.mainAccountAuth(op: op, rememberMe: true);
+        await gFFI.userModel.requireCurrentServer(attempt);
+        if (!_isCurrent(authAttempt, op)) {
+          completer.complete(false);
+          return;
+        }
+        await bind.mainAccountAuth(op: op, rememberMe: false);
         completer.complete(_isCurrent(authAttempt, op));
       } catch (error, stackTrace) {
         completer.completeError(error, stackTrace);
@@ -721,6 +730,7 @@ Future<bool?> _openLoginDialogOnce() async {
 }
 
 Future<bool?> _openLoginDialog() async {
+  final attempt = await gFFI.userModel.beginLogin();
   final hideAccountPasswordLogin =
       bind.mainGetBuildinOption(key: kOptionHideAccountPasswordLogin) == 'Y';
   var username =
@@ -735,7 +745,8 @@ Future<bool?> _openLoginDialog() async {
   String? usernameMsg;
   String? passwordMsg;
   var isInProgress = false;
-  final oidcAuth = _OidcAuthController();
+  var canceled = false;
+  final oidcAuth = _OidcAuthController(attempt);
   final curOP = oidcAuth.curOP;
   // Track hover state for the close icon
 
@@ -745,7 +756,8 @@ Future<bool?> _openLoginDialog() async {
   fetchLoginOptions() async {
     loginOptionsInProgress.value = true;
     try {
-      loginOptions.value = await UserModel.queryOidcLoginOptions();
+      loginOptions.value = await UserModel.queryOidcLoginOptions(
+          apiServer: attempt.server.apiServer);
       loginOptionsError.value = null;
     } catch (e) {
       debugPrint("queryOidcLoginOptions failed: $e");
@@ -771,24 +783,18 @@ Future<bool?> _openLoginDialog() async {
     });
 
     onDialogCancel() {
+      canceled = true;
       isInProgress = false;
       close(false);
     }
 
-    handleLoginResponse(LoginResponse resp, bool storeIfAccessToken,
-        void Function([dynamic])? close) async {
+    handleLoginResponse(LoginResponse resp) async {
+      if (canceled || !context.mounted) return;
       switch (resp.type) {
         case HttpType.kAuthResTypeToken:
           if (resp.access_token != null) {
-            if (storeIfAccessToken) {
-              await bind.mainSetLocalOption(
-                  key: 'access_token', value: resp.access_token!);
-              await bind.mainSetLocalOption(
-                  key: 'user_info', value: jsonEncode(resp.user ?? {}));
-            }
-            if (close != null) {
-              close(true);
-            }
+            await gFFI.userModel.completeLogin(resp, attempt);
+            close(true);
             return;
           }
           break;
@@ -804,19 +810,19 @@ Future<bool?> _openLoginDialog() async {
           }
           if (isEmailVerification != null) {
             if (isMobile) {
-              if (close != null) close(null);
+              close(null);
               verificationCodeDialog(
-                  resp.user, resp.secret, isEmailVerification);
+                  resp.user, resp.secret, isEmailVerification, attempt);
             } else {
               setState(() => isInProgress = false);
               // Workaround for web, close the dialog first, then show the verification code dialog.
               // Otherwise, the text field will keep selecting the text and we can't input the code.
               // Not sure why this happens.
-              if (isWeb && close != null) close(null);
+              if (isWeb) close(null);
               final res = await verificationCodeDialog(
-                  resp.user, resp.secret, isEmailVerification);
+                  resp.user, resp.secret, isEmailVerification, attempt);
               if (res == true) {
-                if (!isWeb && close != null) close(false);
+                if (!isWeb) close(true);
                 return;
               }
             }
@@ -850,15 +856,15 @@ Future<bool?> _openLoginDialog() async {
             id: await bind.mainGetMyId(),
             uuid: await bind.mainGetUuid(),
             autoLogin: true,
-            type: HttpType.kAuthReqTypeAccount));
-        await handleLoginResponse(resp, true, close);
+            type: HttpType.kAuthReqTypeAccount), attempt);
+        await handleLoginResponse(resp);
       } on RequestException catch (err) {
         passwordMsg = translate(err.cause);
       } catch (err) {
         passwordMsg = "Unknown Error: $err";
       }
       curOP.value = '';
-      setState(() => isInProgress = false);
+      if (context.mounted && !canceled) setState(() => isInProgress = false);
     }
 
     thirdAuthWidget() => Obx(() {
@@ -925,19 +931,11 @@ Future<bool?> _openLoginDialog() async {
                   cancelAuth: oidcAuth.cancelCurrent,
                   canStartAuth: oidcAuth.canStart,
                   cbLogin: (Map<String, dynamic> authBody) async {
-                    LoginResponse? resp;
                     try {
-                      // access_token is already stored in the rust side.
-                      resp =
-                          gFFI.userModel.getLoginResponseFromAuthBody(authBody);
-                    } catch (e) {
-                      debugPrint(
-                          'Failed to parse oidc login body: "$authBody"');
-                    }
-                    close(true);
-
-                    if (resp != null) {
-                      handleLoginResponse(resp, false, null);
+                      await handleLoginResponse(LoginResponse.fromJson(authBody));
+                    } catch (error) {
+                      if (!context.mounted) return;
+                      loginOptionsError.value = error;
                     }
                   },
                 ),
@@ -949,7 +947,21 @@ Future<bool?> _openLoginDialog() async {
     final title = Row(children: [
       Icon(Icons.account_circle_outlined, color: Theme.of(context).colorScheme.primary),
       const SizedBox(width: 10),
-      Expanded(child: Text(translate('Login'))),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(translate('Login')),
+            if (!isWeb)
+              Text(
+                '${translate('ID Server')} · ${attempt.server.idServer.isEmpty ? translate('Default') : attempt.server.idServer}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+          ],
+        ),
+      ),
       IconButton(tooltip: translate('Close'), onPressed: onDialogCancel,
         icon: const Icon(Icons.close_rounded, size: 20)),
     ]);
@@ -984,7 +996,7 @@ Future<bool?> _openLoginDialog() async {
     );
   }).whenComplete(oidcAuth.close);
 
-  if (res != null) {
+  if (res == true) {
     await UserModel.updateOtherModels();
   }
 
@@ -992,7 +1004,8 @@ Future<bool?> _openLoginDialog() async {
 }
 
 Future<bool?> verificationCodeDialog(
-    UserPayload? user, String? secret, bool isEmailVerification) async {
+    UserPayload? user, String? secret, bool isEmailVerification,
+    AccountLoginAttempt attempt) async {
   var autoLogin = true;
   var isInProgress = false;
   String? errorText;
@@ -1012,13 +1025,13 @@ Future<bool?> verificationCodeDialog(
             id: await bind.mainGetMyId(),
             uuid: await bind.mainGetUuid(),
             autoLogin: autoLogin,
-            type: HttpType.kAuthReqTypeEmailCode));
+            type: HttpType.kAuthReqTypeEmailCode), attempt);
+        if (!context.mounted) return;
 
         switch (resp.type) {
           case HttpType.kAuthResTypeToken:
             if (resp.access_token != null) {
-              await bind.mainSetLocalOption(
-                  key: 'access_token', value: resp.access_token!);
+              await gFFI.userModel.completeLogin(resp, attempt);
               close(true);
               return;
             }
@@ -1033,7 +1046,7 @@ Future<bool?> verificationCodeDialog(
         errorText = "Unknown Error: $err";
       }
 
-      setState(() => isInProgress = false);
+      if (context.mounted) setState(() => isInProgress = false);
     }
 
     final codeField = isEmailVerification
@@ -1095,7 +1108,7 @@ Future<bool?> verificationCodeDialog(
   });
   // For verification code, desktop update other models in login dialog, mobile need to close login dialog first,
   // otherwise the soft keyboard will jump out on each key press, so mobile update in verification code dialog.
-  if (isMobile && res == true) {
+  if ((isMobile || isWeb) && res == true) {
     await UserModel.updateOtherModels();
   }
 

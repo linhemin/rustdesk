@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/widgets/address_book.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/my_group.dart';
+import 'package:flutter_hbb/common/widgets/owned_devices.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
@@ -70,6 +71,10 @@ class _PeerTabPageState extends State<PeerTabPage>
         menuPadding: _menuPadding(),
       ),
       ({dynamic hint}) => gFFI.groupModel.pull(force: hint == null),
+    ),
+    _TabEntry(
+      OwnedDevices(menuPadding: _menuPadding()),
+      ({dynamic hint}) => gFFI.userModel.refreshOwnedDevices(force: hint == null),
     ),
   ];
   RelativeRect? mobileTabContextMenuPos;
@@ -164,12 +169,13 @@ class _PeerTabPageState extends State<PeerTabPage>
   Widget _createSwitchBar(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
     final labeled = !isWeb && (isWindows || isMacOS);
+    final canScroll = labeled || model.isVisibleEnabled[PeerTabIndex.owned.index];
     var counter = -1;
     return ReorderableListView(
         buildDefaultDragHandles: false,
         onReorder: model.reorder,
         scrollDirection: Axis.horizontal,
-        physics: labeled ? null : NeverScrollableScrollPhysics(),
+        physics: canScroll ? null : const NeverScrollableScrollPhysics(),
         children: model.visibleEnabledOrderedIndexs.map((t) {
           final selected = model.currentTab == t;
           final color = selected
@@ -614,7 +620,8 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget deleteSelection() {
     final model = Provider.of<PeerTabModel>(context);
-    if (model.currentTab == PeerTabIndex.group.index) {
+    if (model.currentTab == PeerTabIndex.group.index ||
+        model.currentTab == PeerTabIndex.owned.index) {
       return Offstage();
     }
     return _hoverAction(
@@ -809,6 +816,8 @@ class _PeerTabPageState extends State<PeerTabPage>
           index: PeerTabIndex.ab, loading: gFFI.abModel.currentAbLoading),
       _createRefresh(
           index: PeerTabIndex.group, loading: gFFI.groupModel.groupLoading),
+      _createRefresh(
+          index: PeerTabIndex.owned, loading: gFFI.userModel.ownedDevices.loading),
       Offstage(
         offstage: model.currentTabCachedPeers.isEmpty,
         child: _createMultiSelection(),
@@ -888,6 +897,9 @@ class _PeerTabPageState extends State<PeerTabPage>
       if (model.currentTab == PeerTabIndex.group.index)
         _createRefresh(
             index: PeerTabIndex.group, loading: gFFI.groupModel.groupLoading),
+      if (model.currentTab == PeerTabIndex.owned.index)
+        _createRefresh(
+            index: PeerTabIndex.owned, loading: gFFI.userModel.ownedDevices.loading),
     ];
     final List<Widget> dynamicActions = [
       if (model.currentTabCachedPeers.isNotEmpty) _createMultiSelection(),

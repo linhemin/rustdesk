@@ -16,19 +16,21 @@ enum PeerTabIndex {
   lan,
   ab,
   group,
+  owned,
 }
 
 class PeerTabModel with ChangeNotifier {
   WeakReference<FFI> parent;
   int get currentTab => _currentTab;
   int _currentTab = 0; // index in tabNames
-  static const int maxTabCount = 5;
+  static const int maxTabCount = 6;
   static const List<String> tabNames = [
     'Recent sessions',
     'Favorites',
     'Discovered',
     'Address book',
     'Accessible devices',
+    'My devices',
   ];
   static const List<IconData> icons = [
     Icons.access_time_filled,
@@ -36,6 +38,7 @@ class PeerTabModel with ChangeNotifier {
     Icons.explore,
     IconFont.addressBook,
     IconFont.deviceGroupFill,
+    Icons.devices_outlined,
   ];
   List<bool> isEnabled = List.from([
     true,
@@ -43,6 +46,7 @@ class PeerTabModel with ChangeNotifier {
     !isWeb && bind.mainGetLocalOption(key: "disable-discovery-panel") != "Y",
     !(bind.isDisableAb() || bind.isDisableAccount()),
     !(bind.isDisableGroupPanel() || bind.isDisableAccount()),
+    !isWeb && !bind.isDisableAccount(),
   ]);
   final List<bool> _isVisible = List.filled(maxTabCount, true, growable: false);
   List<bool> get isVisibleEnabled => () {
@@ -53,7 +57,9 @@ class PeerTabModel with ChangeNotifier {
         return list;
       }();
   final List<int> orders =
-      List.generate(maxTabCount, (index) => index, growable: false);
+      List.generate(maxTabCount,
+          (index) => (index + maxTabCount - 1) % maxTabCount,
+          growable: false);
   List<int> get visibleEnabledOrderedIndexs =>
       orders.where((e) => isVisibleEnabled[e]).toList();
   List<Peer> _selectedPeers = List.empty(growable: true);
@@ -73,8 +79,9 @@ class PeerTabModel with ChangeNotifier {
       final option = bind.getLocalFlutterOption(k: kOptionPeerTabVisible);
       if (option.isNotEmpty) {
         List<dynamic> decodeList = jsonDecode(option);
-        if (decodeList.length == _isVisible.length) {
-          for (int i = 0; i < _isVisible.length; i++) {
+        if (decodeList.length == maxTabCount ||
+            decodeList.length == PeerTabIndex.owned.index) {
+          for (int i = 0; i < decodeList.length; i++) {
             if (decodeList[i] is bool) {
               _isVisible[i] = decodeList[i];
             }
@@ -89,6 +96,9 @@ class PeerTabModel with ChangeNotifier {
       final option = bind.getLocalFlutterOption(k: kOptionPeerTabOrder);
       if (option.isNotEmpty) {
         List<dynamic> decodeList = jsonDecode(option);
+        if (decodeList.length == PeerTabIndex.owned.index) {
+          decodeList.insert(0, PeerTabIndex.owned.index);
+        }
         if (decodeList.length == maxTabCount) {
           var sortedList = decodeList.toList();
           sortedList.sort();
@@ -121,6 +131,37 @@ class PeerTabModel with ChangeNotifier {
     if (_currentTab != index) {
       _currentTab = index;
       notifyListeners();
+    }
+  }
+
+  void showOwnedDevices() {
+    final owned = PeerTabIndex.owned.index;
+    if (!isVisibleEnabled[owned] || isOptionFixed(kOptionPeerTabIndex)) return;
+    _switchDeviceTab(owned);
+  }
+
+  void showGuestDevices() {
+    final recent = PeerTabIndex.recent.index;
+    final firstAccountTab = PeerTabIndex.ab.index;
+    if (isWeb ||
+        currentTab < firstAccountTab ||
+        isOptionFixed(kOptionPeerTabIndex)) {
+      return;
+    }
+    final localTab = isVisibleEnabled[recent]
+        ? recent
+        : visibleEnabledOrderedIndexs
+            .firstWhereOrNull((tab) => tab < firstAccountTab);
+    if (localTab != null) _switchDeviceTab(localTab);
+  }
+
+  void _switchDeviceTab(int tab) {
+    if (currentTab != tab) {
+      _currentTabCachedPeers = [];
+      _selectedPeers.clear();
+      _multiSelectionMode = false;
+      _lastId = '';
+      setCurrentTab(tab);
     }
   }
 

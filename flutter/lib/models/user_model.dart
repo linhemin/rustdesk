@@ -8,13 +8,19 @@ import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:get/get.dart';
 
 import '../common.dart';
+import '../common/hbbs/account_server.dart';
 import '../utils/http_service.dart' as http;
 import 'model.dart';
+import 'owned_devices_model.dart';
 import 'platform_model.dart';
 
 bool refreshingUser = false;
 
 class UserModel {
+  final ownedDevices = OwnedDevicesModel();
+  int _accountGeneration = 0;
+  bool _changingServer = false;
+  Future<void> _accountWrites = Future.value();
   final RxString userName = ''.obs;
   final RxString displayName = ''.obs;
   final RxString avatar = ''.obs;
@@ -50,8 +56,81 @@ class UserModel {
     });
   }
 
+  Future<AccountLoginAttempt> beginLogin() async => (
+        generation: _accountGeneration,
+        server: await readAccountServer(),
+      );
+
+  Future<void> requireCurrentServer(AccountLoginAttempt attempt) async {
+    final current = await readAccountServer();
+    if (_changingServer ||
+        attempt.generation != _accountGeneration ||
+        attempt.server != current ||
+        current.apiServer.isEmpty) {
+      throw RequestException(0, 'Invalid server configuration');
+    }
+  }
+
+  Future<void> validateStoredAccount() async {
+    if (isWeb) return;
+    if (bind.mainGetLocalOption(key: 'access_token').isEmpty) {
+      parent.target?.peerTabModel.showGuestDevices();
+      return;
+    }
+    if (!isStoredAccountServer(await readAccountServer())) {
+      await reset(resetOther: true);
+    } else if (!bind.isDisableAccount()) {
+      parent.target?.peerTabModel.showOwnedDevices();
+    }
+  }
+
+  Future<void> changeAccountServer(Future<void> Function() save) async {
+    if (_changingServer) throw RequestException(0, 'Waiting');
+    _changingServer = true;
+    try {
+      await bind.mainAccountAuthCancel();
+      await reset(resetOther: true);
+      await save();
+    } finally {
+      _changingServer = false;
+    }
+  }
+
+  Future<void> _writeAccount(Future<void> Function() write) {
+    final operation = _accountWrites.then((_) => write());
+    _accountWrites = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return operation;
+  }
+
+  Future<void> refreshOwnedDevices({bool force = false}) async {
+    if (!isLogin || isWeb) return;
+    final token = bind.mainGetLocalOption(key: 'access_token');
+    final generation = _accountGeneration;
+    final server = await readAccountServer();
+    if (_changingServer || generation != _accountGeneration) return;
+    if (token.isEmpty) return;
+    if (!isStoredAccountServer(server)) {
+      await reset(resetOther: true);
+      return;
+    }
+    try {
+      await ownedDevices.pull(
+        apiServer: server.apiServer,
+        token: token,
+        username: userName.value,
+        force: force,
+      );
+    } on RequestException {
+      if (generation == _accountGeneration) await reset(resetOther: true);
+    }
+  }
+
   void refreshCurrentUser() async {
-    if (bind.isDisableAccount()) return;
+    if (bind.isDisableAccount() || _changingServer || refreshingUser) return;
+    final generation = _accountGeneration;
     networkError.value = '';
     networkErrorFromServer.value = false;
     final token = bind.mainGetLocalOption(key: 'access_token');
@@ -59,13 +138,21 @@ class UserModel {
       await updateOtherModels();
       return;
     }
+    final server = await readAccountServer();
+    if (generation != _accountGeneration || refreshingUser) return;
+    if (!isStoredAccountServer(server)) {
+      await reset(resetOther: true);
+      return;
+    }
+    final wasLoggedIn = isLogin;
     _updateLocalUserInfo();
-    final url = await bind.mainGetApiServer();
+    if (!wasLoggedIn && isLogin) parent.target?.peerTabModel.showOwnedDevices();
+    final url = server.apiServer;
     final body = {
       'id': await bind.mainGetMyId(),
       'uuid': await bind.mainGetUuid()
     };
-    if (refreshingUser) return;
+    if (generation != _accountGeneration || refreshingUser) return;
     try {
       refreshingUser = true;
       final http.Response response;
@@ -77,13 +164,13 @@ class UserModel {
             },
             body: json.encode(body));
       } catch (e) {
-        networkError.value = e.toString();
+        if (generation == _accountGeneration) networkError.value = e.toString();
         rethrow;
       }
-      refreshingUser = false;
+      if (generation != _accountGeneration) return;
       final status = response.statusCode;
       if (status == 401 || status == 400) {
-        reset(resetOther: status == 401);
+        await reset(resetOther: status == 401);
         return;
       }
       final data = json.decode(decode_http_response(response));
@@ -97,8 +184,13 @@ class UserModel {
       }
 
       final user = UserPayload.fromJson(data);
-      _parseAndUpdateUser(user);
+      await _writeAccount(() async {
+        if (generation != _accountGeneration) return;
+        await _parseAndUpdateUser(user, generation);
+        if (!wasLoggedIn && isLogin) parent.target?.peerTabModel.showOwnedDevices();
+      });
     } catch (e) {
+      if (generation != _accountGeneration) return;
       debugPrint('Failed to refreshCurrentUser: $e');
       // Surface failures in the address book / group tabs, which offer a
       // retry. Anything not flagged above -- transport errors, non-JSON or
@@ -109,7 +201,7 @@ class UserModel {
       }
     } finally {
       refreshingUser = false;
-      await updateOtherModels();
+      if (generation == _accountGeneration) await updateOtherModels();
     }
   }
 
@@ -136,23 +228,35 @@ class UserModel {
   }
 
   Future<void> reset({bool resetOther = false}) async {
-    await bind.mainSetLocalOption(key: 'access_token', value: '');
-    await bind.mainSetLocalOption(key: 'user_info', value: '');
-    if (resetOther) {
-      await gFFI.abModel.reset();
-      await gFFI.groupModel.reset();
-    }
+    _accountGeneration++;
     userName.value = '';
     displayName.value = '';
     avatar.value = '';
+    isAdmin.value = false;
+    ownedDevices.reset();
+    parent.target?.peerTabModel.showGuestDevices();
+    await _writeAccount(() async {
+      await bind.mainSetLocalOption(key: 'access_token', value: '');
+      if (!isWeb) await bind.mainSetLocalOption(key: accountServerOption, value: '');
+      await bind.mainSetLocalOption(key: 'user_info', value: '');
+      if (resetOther) {
+        await parent.target?.abModel.reset();
+        await parent.target?.groupModel.reset();
+      }
+    });
   }
 
-  _parseAndUpdateUser(UserPayload user) {
+  Future<void> _parseAndUpdateUser(UserPayload user, int generation) async {
+    await bind.mainSetLocalOption(key: 'user_info', value: jsonEncode(user));
+    if (generation != _accountGeneration) return;
+    _publishUser(user);
+  }
+
+  void _publishUser(UserPayload user) {
     userName.value = user.name;
     displayName.value = user.displayName;
     avatar.value = user.avatar;
     isAdmin.value = user.isAdmin;
-    bind.mainSetLocalOption(key: 'user_info', value: jsonEncode(user));
     if (isWeb) {
       // ugly here, tmp solution
       bind.mainSetLocalOption(key: 'verifier', value: user.verifier ?? '');
@@ -163,11 +267,13 @@ class UserModel {
   static Future<void> updateOtherModels() async {
     await Future.wait([
       gFFI.abModel.pullAb(force: ForcePullAb.listAndCurrent, quiet: false),
-      gFFI.groupModel.pull()
+      gFFI.groupModel.pull(),
+      gFFI.userModel.refreshOwnedDevices(force: true),
     ]);
   }
 
   Future<void> logOut({String? apiServer}) async {
+    final generation = _accountGeneration;
     final tag = gFFI.dialogManager.showLoading(translate('Waiting'));
     try {
       final url = apiServer ?? await bind.mainGetApiServer();
@@ -184,14 +290,16 @@ class UserModel {
     } catch (e) {
       debugPrint("request /api/logout failed: err=$e");
     } finally {
-      await reset(resetOther: true);
+      if (generation == _accountGeneration) await reset(resetOther: true);
       gFFI.dialogManager.dismissByTag(tag);
     }
   }
 
   /// throw [RequestException]
-  Future<LoginResponse> login(LoginRequest loginRequest) async {
-    final url = await bind.mainGetApiServer();
+  Future<LoginResponse> login(
+      LoginRequest loginRequest, AccountLoginAttempt attempt) async {
+    await requireCurrentServer(attempt);
+    final url = attempt.server.apiServer;
     final resp = await http.post(Uri.parse('$url/api/login'),
         body: jsonEncode(loginRequest.toJson()));
 
@@ -213,32 +321,50 @@ class UserModel {
       throw RequestException(0, body['error']);
     }
 
-    return getLoginResponseFromAuthBody(body);
+    await requireCurrentServer(attempt);
+    return LoginResponse.fromJson(body);
   }
 
-  LoginResponse getLoginResponseFromAuthBody(Map<String, dynamic> body) {
-    final LoginResponse loginResponse;
-    try {
-      loginResponse = LoginResponse.fromJson(body);
-    } catch (e) {
-      debugPrint("login: jsonDecode LoginResponse failed: ${e.toString()}");
-      rethrow;
-    }
-
-    final isLogInDone = loginResponse.type == HttpType.kAuthResTypeToken &&
-        loginResponse.access_token != null;
-    if (isLogInDone && loginResponse.user != null) {
-      _parseAndUpdateUser(loginResponse.user!);
-    }
-
-    return loginResponse;
+  Future<void> completeLogin(
+      LoginResponse response, AccountLoginAttempt attempt) {
+    return _writeAccount(() async {
+      await requireCurrentServer(attempt);
+      final token = response.access_token;
+      final user = response.user;
+      if (response.type != HttpType.kAuthResTypeToken ||
+          token == null ||
+          token.isEmpty) {
+        throw RequestException(0, 'Invalid response');
+      }
+      ownedDevices.reset();
+      if (bind.mainGetLocalOption(key: 'access_token').isNotEmpty) {
+        await bind.mainSetLocalOption(key: 'access_token', value: '');
+      }
+      if (!isWeb) {
+        await bind.mainSetLocalOption(
+            key: accountServerOption,
+            value: encodeAccountServer(attempt.server));
+      }
+      await bind.mainSetLocalOption(
+          key: 'user_info', value: user == null ? '' : jsonEncode(user));
+      await bind.mainSetLocalOption(key: 'access_token', value: token);
+      if (attempt.generation != _accountGeneration) {
+        throw RequestException(0, 'Invalid server configuration');
+      }
+      parent.target?.peerTabModel.showOwnedDevices();
+      if (user != null) {
+        _publishUser(user);
+      } else {
+        refreshCurrentUser();
+      }
+    });
   }
 
   /// Throws on network failures, non-success responses, and invalid response
   /// data. Returns an empty list when no API server is configured or a
   /// successful response contains no third-party login options.
-  static Future<List<dynamic>> queryOidcLoginOptions() async {
-    final url = await bind.mainGetApiServer();
+  static Future<List<dynamic>> queryOidcLoginOptions({String? apiServer}) async {
+    final url = apiServer ?? await bind.mainGetApiServer();
     if (url.trim().isEmpty) return [];
     final resp = await http.get(Uri.parse('$url/api/login-options'));
     const successStatusCodeStart = 200;

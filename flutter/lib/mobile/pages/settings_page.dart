@@ -15,8 +15,6 @@ import 'package:url_launcher/url_launcher_string.dart';
 
 import '../../common.dart';
 import '../../common/brand_links.dart';
-import '../../common/local_peer_backup.dart';
-import '../../common/widgets/account_sync_card.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/login.dart';
 import '../../common/widgets/network_tools_dialogs.dart';
@@ -1342,80 +1340,6 @@ class _SettingsState extends State<_SettingsContent>
           SettingsSection(
             title: Text(translate("Enhancements")),
             tiles: enhancementsTiles,
-          ),
-        if (!incomingOnly && !disabledSettings)
-          SettingsSection(
-            title: Text(translate('Local')),
-            tiles: [
-              SettingsTile(
-                title: Text(translate('Export')),
-                leading: const Icon(Icons.upload_rounded),
-                onPressed: (context) async {
-                  try {
-                    final count = await exportLocalPeersToClipboard();
-                    showToast('${translate('Copied')} ($count)');
-                  } catch (_) {
-                    showToast(translate('Failed'));
-                  }
-                },
-              ),
-              SettingsTile(
-                title: Text(translate('Import')),
-                leading: const Icon(Icons.download_rounded),
-                onPressed: (context) async {
-                  try {
-                    final count = await importLocalPeersFromClipboard();
-                    showToast('${translate('Successful')} ($count)');
-                  } catch (_) {
-                    showToast(translate('Failed'));
-                  }
-                },
-              ),
-              if (!isWeb)
-                SettingsTile(
-                  title: Text('${translate('Export')} JSON'),
-                  leading: const Icon(Icons.save_alt_rounded),
-                  onPressed: (context) async {
-                    try {
-                      final count = await exportLocalPeersToFile();
-                      if (count != null) {
-                        showToast('${translate('Successful')} ($count)');
-                      }
-                    } catch (_) {
-                      showToast(translate('Failed'));
-                    }
-                  },
-                ),
-              if (!isWeb)
-                SettingsTile(
-                  title: Text('${translate('Import')} JSON'),
-                  leading: const Icon(Icons.file_open_outlined),
-                  onPressed: (context) async {
-                    try {
-                      final count = await importLocalPeersFromFile();
-                      if (count != null) {
-                        showToast('${translate('Successful')} ($count)');
-                      }
-                    } catch (_) {
-                      showToast(translate('Failed'));
-                    }
-                  },
-                ),
-              SettingsTile(
-                title: const Text('WebDAV'),
-                leading: const Icon(Icons.cloud_sync_outlined),
-                onPressed: (context) async {
-                  try {
-                    final count = await showWebDavSyncDialog(context);
-                    if (count != null) {
-                      showToast('${translate('Successful')} ($count)');
-                    }
-                  } catch (_) {
-                    showToast(translate('Failed'));
-                  }
-                },
-              ),
-            ],
           ),
         SettingsSection(
           title: Text(translate("About")),
