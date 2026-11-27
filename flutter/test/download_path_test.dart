@@ -11,6 +11,7 @@ final _sessionId = UuidValue('00000000-0000-4000-8000-000000000001');
 
 class _Binding extends Fake implements RustdeskImpl {
   final sent = <String>[];
+  final sentIds = <int>[];
   final created = <String>[];
   int nextId = 0;
 
@@ -36,6 +37,7 @@ class _Binding extends Fake implements RustdeskImpl {
   }) async {
     expect(isRemote, isTrue);
     sent.add(to);
+    sentIds.add(actId);
   }
 
   @override
@@ -137,11 +139,41 @@ void main() {
         expect(controller.jobController.jobTable.last.state, JobState.error);
       }
     }
+    expect(controller.jobController.jobTable.last.canRetryTransfer, isFalse);
     await controller.jobController.jobDone({
       'id': '${controller.jobController.jobTable.last.id}',
       'file_num': '0',
     });
     expect(controller.jobController.jobTable.last.state, JobState.error);
+  });
+
+  test('retry starts a fresh download in its original directory', () async {
+    final isWindows = Platform.isWindows;
+    final originalDir = isWindows ? r'C:\downloads' : '/downloads';
+    destination.directory.path = originalDir;
+    destination.options.isWindows = isWindows;
+    await download('report.txt');
+    final failed = controller.jobController.jobTable.single;
+    controller.jobController.jobError({
+      'id': failed.id,
+      'err': 'Write failed',
+      'file_num': '0',
+    });
+    destination.directory.path = isWindows ? r'C:\other' : '/other';
+
+    expect(failed.canRetryTransfer, isTrue);
+    expect(await controller.retryTransfer(failed), isTrue);
+    final retry = controller.jobController.jobTable.single;
+    expect(binding.sentIds, [failed.id, retry.id]);
+    expect(retry.id, isNot(failed.id));
+    expect(binding.sent,
+        List.filled(2, PathUtil.join(originalDir, 'report.txt', isWindows)));
+
+    await controller.jobController.jobDone({
+      'id': retry.id.toString(),
+      'file_num': '0',
+    });
+    expect(retry.downloadDirectory, originalDir);
   });
 
   test('empty-directory downloads reject paths outside the selected folder',
@@ -163,7 +195,28 @@ void main() {
     addTearDown(() => temporary.delete(recursive: true));
     final outside = await Directory('${temporary.path}/outside').create();
     final downloads = await Directory('${temporary.path}/downloads').create();
-    await Link('${downloads.path}/docs').create(outside.path);
+    final link = Link(PathUtil.join(downloads.path, 'docs', Platform.isWindows));
+    if (Platform.isWindows) {
+      final result = await Process.run(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          r'New-Item -ItemType Junction -Path $env:RUSTDESK_TEST_LINK '
+              r'-Target $env:RUSTDESK_TEST_LINK_TARGET -ErrorAction Stop | Out-Null',
+        ],
+        environment: {
+          'RUSTDESK_TEST_LINK': link.path,
+          'RUSTDESK_TEST_LINK_TARGET': outside.path,
+        },
+      );
+      expect(result.exitCode, 0, reason: result.stderr.toString());
+    } else {
+      await link.create(outside.path);
+    }
+    expect(
+        await link.resolveSymbolicLinks(), await outside.resolveSymbolicLinks());
     destination.directory.path = downloads.path;
     destination.options.isWindows = Platform.isWindows;
     fetcher.emptyDirectories = ['/remote/docs/empty'];

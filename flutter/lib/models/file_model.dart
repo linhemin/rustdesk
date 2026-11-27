@@ -634,6 +634,29 @@ class FileController {
     }
   }
 
+  Future<bool> retryTransfer(JobProgress failed) async {
+    final transfer = failed._transfer;
+    if (failed.state != JobState.error ||
+        transfer == null ||
+        failed.isRemoteToLocal == isLocal ||
+        !jobController.jobTable.contains(failed)) {
+      return false;
+    }
+    failed._transfer = null;
+    jobController.jobTable.refresh();
+    try {
+      final items = SelectedItems(isLocal: isLocal)..add(transfer.source);
+      await sendFiles(items, transfer.destination);
+      jobController.jobTable.remove(failed);
+      return true;
+    } catch (error) {
+      debugPrint('Failed to schedule transfer retry: $error');
+      failed._transfer = transfer;
+      jobController.jobTable.refresh();
+      return false;
+    }
+  }
+
   /// sendFiles from current side (FileController.isLocal) to other side (SelectedItems).
   Future<void> sendFiles(
       SelectedItems items, DirectoryData otherSideData) async {
@@ -648,14 +671,20 @@ class FileController {
     final toPath = otherSideData.directory.path;
     final isWindows = otherSideData.options.isWindows;
     final showHidden = otherSideData.options.showHidden;
+    final destination = DirectoryData(
+      FileDirectory()..path = toPath,
+      DirectoryOptions(isWindows: isWindows, showHidden: showHidden),
+    );
     final transferJobs = <(Entry, int)>[];
     final transferJobIds = <int>[];
-    for (var from in items.items) {
-      final jobID = jobController.addTransferJob(from, isRemoteToLocal);
+    for (final from in items.items) {
       // Keep this check before PathUtil.join: Rust does not receive the selected
       // root separately, and Web transfers bypass Rust validation.
-      if (isRemoteToLocal &&
-          !DownloadPaths.validName(from.name, windows: isWindows)) {
+      final valid = !isRemoteToLocal ||
+          DownloadPaths.validName(from.name, windows: isWindows);
+      final jobID = jobController.addTransferJob(from, isRemoteToLocal,
+          destination: valid ? destination : null);
+      if (!valid) {
         jobController.jobError({
           'id': '$jobID',
           'file_num': '0',
@@ -668,15 +697,23 @@ class FileController {
     }
     jobController.registerTransferConflictBatch(transferJobIds);
     for (final (from, jobID) in transferJobs) {
-      bind.sessionSendFiles(
-          sessionId: sessionId,
-          actId: jobID,
-          path: from.path,
-          to: PathUtil.join(toPath, from.name, isWindows),
-          fileNum: 0,
-          includeHidden: showHidden,
-          isRemote: isRemoteToLocal,
-          isDir: from.isDirectory);
+      unawaited(bind
+          .sessionSendFiles(
+              sessionId: sessionId,
+              actId: jobID,
+              path: from.path,
+              to: PathUtil.join(toPath, from.name, isWindows),
+              fileNum: 0,
+              includeHidden: showHidden,
+              isRemote: isRemoteToLocal,
+              isDir: from.isDirectory)
+          .catchError((Object error) {
+        jobController.jobError({
+          'id': jobID,
+          'err': error.toString(),
+          'file_num': '-1',
+        });
+      }));
       debugPrint(
           "path: ${from.path}, toPath: $toPath, to: ${PathUtil.join(toPath, from.name, isWindows)}");
     }
@@ -1119,7 +1156,8 @@ class JobController {
   }
 
   // return jobID
-  int addTransferJob(Entry from, bool isRemoteToLocal) {
+  int addTransferJob(Entry from, bool isRemoteToLocal,
+      {DirectoryData? destination}) {
     final jobID = JobController.jobID.next();
     jobTable.add(JobProgress()
       ..type = JobType.transfer
@@ -1128,7 +1166,14 @@ class JobController {
       ..totalSize = from.size
       ..state = JobState.inProgress
       ..id = jobID
-      ..isRemoteToLocal = isRemoteToLocal);
+      ..isRemoteToLocal = isRemoteToLocal
+      ..to = destination == null
+          ? ''
+          : PathUtil.join(destination.directory.path, from.name,
+              destination.options.isWindows)
+      .._transfer = destination == null
+          ? null
+          : (source: from, destination: destination));
     return jobID;
   }
 
@@ -1855,6 +1900,20 @@ class JobProgress {
   var showHidden = false;
   var err = "";
   int lastTransferredSize = 0;
+  ({Entry source, DirectoryData destination})? _transfer;
+
+  bool get canRetryTransfer => state == JobState.error && _transfer != null;
+
+  String get downloadDirectory {
+    if (type != JobType.transfer ||
+        !isRemoteToLocal ||
+        state != JobState.done ||
+        err.isNotEmpty ||
+        to.isEmpty) {
+      return '';
+    }
+    return PathUtil.dirname(to, isWindows);
+  }
 
   double get percent =>
       totalSize > 0 ? (finishedSize.toDouble() / totalSize) : 0.0;
@@ -1874,6 +1933,7 @@ class JobProgress {
     remote = "";
     to = "";
     err = "";
+    _transfer = null;
   }
 
   String display() {

@@ -323,6 +323,7 @@ class _FileManagerPageState extends State<FileManagerPage>
             final status = item.getStatus();
             if (isWindows || isMacOS || isLinux) {
               final theme = Theme.of(context);
+              final downloadDirectory = item.downloadDirectory;
               final remaining = item.totalSize - item.finishedSize;
               final etaSec = item.state == JobState.inProgress &&
                       item.speed > 0 &&
@@ -396,36 +397,41 @@ class _FileManagerPageState extends State<FileManagerPage>
                                   backgroundColor: theme.dividerColor)),
                         ],
                       ])),
-                  if (item.state == JobState.paused ||
-                      item.state == JobState.error)
+                  if (item.state == JobState.paused || item.canRetryTransfer)
                     IconButton(
                         tooltip: translate(
-                            item.state == JobState.error ? 'Refresh' : 'Resume'),
+                            item.state == JobState.error ? 'Retry' : 'Resume'),
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints.tightFor(
                             width: 32, height: 32),
-                        onPressed: () => jobController.resumeJob(item.id),
+                        onPressed: item.canRetryTransfer
+                            ? () async {
+                                final controller = item.isRemoteToLocal
+                                    ? model.remoteController
+                                    : model.localController;
+                                if (!await controller.retryTransfer(item)) {
+                                  showToast(translate('Failed'));
+                                }
+                              }
+                            : () => jobController.resumeJob(item.id),
                         icon: Icon(
                           item.state == JobState.error
                               ? Icons.refresh_rounded
                               : Icons.play_arrow_rounded,
                           size: 18,
                         )),
-                  if (item.state == JobState.done &&
-                      item.isRemoteToLocal &&
-                      model.localController.directory.value.path.isNotEmpty)
+                  if (downloadDirectory.isNotEmpty)
                     IconButton(
                         tooltip: translate('Open folder'),
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints.tightFor(
                             width: 32, height: 32),
-                        onPressed: () {
-                          final dirPath =
-                              model.localController.directory.value.path;
-                          if (dirPath.isNotEmpty) {
-                            launchUrl(Uri.file(dirPath));
+                        onPressed: () async {
+                          if (!await launchUrl(
+                              Uri.directory(downloadDirectory))) {
+                            showToast(translate('Failed'));
                           }
                         },
                         icon: const Icon(Icons.folder_open_outlined, size: 17)),
