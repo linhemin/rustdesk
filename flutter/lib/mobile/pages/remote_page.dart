@@ -19,6 +19,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
 import '../../common.dart';
+import '../../common.dart' as app show gFFI;
 import '../../common/widgets/overlay.dart';
 import '../../common/widgets/dialog.dart';
 import '../../common/widgets/remote_input.dart';
@@ -32,6 +33,7 @@ import '../awesun/awesun_flutter_overlay.dart';
 import '../awesun/awesun_native_bridge.dart';
 import '../ios_p2p_diagnostics.dart';
 import '../session_canvas_drag.dart';
+import '../mobile_remote_sessions.dart';
 import '../session_ime.dart';
 import '../session_viewport.dart';
 import '../widgets/dialog.dart';
@@ -98,7 +100,8 @@ class RemotePage extends StatefulWidget {
       this.loginMethod = '',
       this.password,
       this.isSharedPassword,
-      this.forceRelay})
+      this.forceRelay,
+      this.workspaceSession})
       : super(key: key);
 
   final String id;
@@ -106,9 +109,10 @@ class RemotePage extends StatefulWidget {
   final String? password;
   final bool? isSharedPassword;
   final bool? forceRelay;
+  final MobileRemoteSession? workspaceSession;
 
   @override
-  State<RemotePage> createState() => _RemotePageState(id);
+  State<RemotePage> createState() => _RemotePageState();
 }
 
 class _NativePointerBatch {
@@ -119,7 +123,8 @@ class _NativePointerBatch {
 
 class _RemotePageState extends State<RemotePage>
     with WidgetsBindingObserver, TickerProviderStateMixin {
-  final _sessionOpened = DateTime.now();
+  late final FFI gFFI = widget.workspaceSession?.ffi ?? app.gFFI;
+  late final _sessionOpened = widget.workspaceSession?.openedAt ?? DateTime.now();
   Timer? _timer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
@@ -231,12 +236,6 @@ class _RemotePageState extends State<RemotePage>
   final TextEditingController _textController =
       TextEditingController(text: initText);
 
-  _RemotePageState(String id) {
-    initSharedStates(id);
-    gFFI.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
-    gFFI.dialogManager.loadMobileActionsOverlayVisible();
-  }
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -246,19 +245,36 @@ class _RemotePageState extends State<RemotePage>
   @override
   void initState() {
     super.initState();
+    initSharedStates(widget.id);
+    gFFI.dialogManager.loadMobileActionsOverlayVisible();
+    final workspace = widget.workspaceSession;
+    final resuming = workspace?.started == true;
     if (isMobile) _textController.addListener(_sendSessionImeEdit);
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
-    gFFI.start(
-      widget.id,
-      loginMethod: widget.loginMethod,
-      password: widget.password,
-      isSharedPassword: widget.isSharedPassword,
-      forceRelay: widget.forceRelay,
-    );
+    if (resuming) {
+      unawaited(workspace!.setSuspended(false).then((_) {
+        if (mounted) {
+          sessionRefreshVideo(sessionId, gFFI.ffiModel.pi);
+        }
+      }));
+    } else {
+      gFFI.chatModel.voiceCallStatus.value = VoiceCallStatus.notStarted;
+      gFFI.start(
+        widget.id,
+        loginMethod: widget.loginMethod,
+        password: widget.password,
+        isSharedPassword: widget.isSharedPassword,
+        forceRelay: widget.forceRelay,
+      );
+      workspace?.started = true;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
-      gFFI.dialogManager
-          .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      if (!resuming) {
+        gFFI.dialogManager
+            .showLoading(translate('Connecting...'), onCancel: closeConnection);
+      }
     });
     if (isIOS) {
       updateIosSessionWakelock(
@@ -275,10 +291,11 @@ class _RemotePageState extends State<RemotePage>
     gFFI.chatModel
         .changeCurrentKey(MessageKey(widget.id, ChatModel.clientModeID));
     _blockableOverlayState.applyFfi(gFFI);
-    gFFI.imageModel.addCallbackOnFirstImage((String peerId) {
+    void onImageReady(String peerId) {
+      if (!mounted) return;
       gFFI.recordingModel
           .updateStatus(bind.sessionGetIsRecording(sessionId: gFFI.sessionId));
-      if (gFFI.recordingModel.start) {
+      if (!resuming && gFFI.recordingModel.start) {
         showToast(translate('Automatically record outgoing sessions'));
       }
       _disableAndroidSoftKeyboard(
@@ -288,15 +305,18 @@ class _RemotePageState extends State<RemotePage>
       // toolbar menu. The returned list is intentionally discarded — the
       // side effect of registering callbacks (inside toolbarControls) is
       // what we want here.
-      if (mounted) {
-        toolbarControls(context, widget.id, gFFI);
-        // Mobile has no DesktopTabController, so tab-switch shortcuts will
-        // log a no-handler debug line if a user binds one.
-        registerSessionShortcutActions(gFFI);
-        _registerMobileChatShortcut();
-        registerToolbarShortcuts(context, widget.id, gFFI);
-      }
-    });
+      toolbarControls(context, widget.id, gFFI);
+      // Mobile has no DesktopTabController, so tab-switch shortcuts will
+      // log a no-handler debug line if a user binds one.
+      registerSessionShortcutActions(gFFI);
+      _registerMobileChatShortcut();
+      registerToolbarShortcuts(context, widget.id, gFFI);
+    }
+    if (resuming && _sessionReady) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => onImageReady(''));
+    } else {
+      gFFI.imageModel.addCallbackOnFirstImage(onImageReady);
+    }
     WidgetsBinding.instance.addObserver(this);
 
     inputModel.keyboardInputAllowed = true;
@@ -327,6 +347,9 @@ class _RemotePageState extends State<RemotePage>
 
   @override
   Future<void> dispose() async {
+    final peerId = widget.id;
+    final workspace = widget.workspaceSession;
+    final keepConnection = workspace?.suspended == true && !gFFI.closed;
     if (isIOS) {
       WakelockManager.disable(_uniqueKey);
       _canvasDrag.detach();
@@ -350,13 +373,19 @@ class _RemotePageState extends State<RemotePage>
     // down. The reconnect then re-attaches to the leaked session and is stuck on
     // "Connecting...". Dispatching it here makes teardown happen synchronously on
     // pop; the `sessionClose` in `gFFI.close()` becomes a no-op once removed.
-    unawaited(bind.sessionClose(sessionId: sessionId));
+    if (!keepConnection) unawaited(bind.sessionClose(sessionId: sessionId));
     // https://github.com/flutter/flutter/issues/64935
     super.dispose();
     gFFI.dialogManager.hideMobileActionsOverlay(store: false);
     gFFI.inputModel.listenToMouse(false);
-    gFFI.imageModel.disposeImage();
-    gFFI.cursorModel.disposeImages();
+    if (!keepConnection) {
+      gFFI.imageModel.disposeImage();
+      gFFI.cursorModel.disposeImages();
+    } else {
+      gFFI.imageModel.callbacksOnFirstImage.clear();
+      gFFI.shortcutModel.clear();
+      gFFI.chatModel.hideChatOverlay();
+    }
     await gFFI.invokeMethod("enable_soft_keyboard", true);
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
@@ -364,7 +393,7 @@ class _RemotePageState extends State<RemotePage>
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
     inputModel.keyboardInputAllowed = true;
-    await gFFI.close();
+    if (workspace == null) await gFFI.close();
     _timer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
@@ -372,11 +401,37 @@ class _RemotePageState extends State<RemotePage>
         overlays: SystemUiOverlay.values);
     if (!isIOS) WakelockManager.disable(_uniqueKey);
     await keyboardSubscription.cancel();
-    removeSharedStates(widget.id);
+    removeSharedStates(peerId);
     // `on_voice_call_closed` should be called when the connection is ended.
     // The inner logic of `on_voice_call_closed` will check if the voice call is active.
     // Only one client is considered here for now.
-    gFFI.chatModel.onVoiceCallClosed("End connection");
+    if (!keepConnection) gFFI.chatModel.onVoiceCallClosed("End connection");
+  }
+
+  bool _minimizing = false;
+
+  Future<void> _minimizeRemoteSession() async {
+    final workspace = widget.workspaceSession;
+    if (workspace == null || !_sessionReady || _minimizing) return;
+    _minimizing = true;
+    try {
+      gFFI.dialogManager.dismissAll();
+      _releaseVirtualMouse();
+      _clearSessionModifiers();
+      await workspace.setSuspended(true);
+      if (_nativeSessionActive) {
+        try {
+          await _nativeSession.configureVideoTexture(false);
+        } on PlatformException catch (error) {
+          debugPrint('Could not release the native video texture: ${error.code}');
+        }
+      }
+      if (mounted && ModalRoute.isCurrentOf(context) == true) {
+        Navigator.of(context).pop();
+      }
+    } finally {
+      _minimizing = false;
+    }
   }
 
   @override
@@ -748,7 +803,9 @@ class _RemotePageState extends State<RemotePage>
           : Offstage());
 
   bool get _canSendSessionInput =>
-      gFFI.ffiModel.keyboard && !gFFI.ffiModel.viewOnly;
+      !gFFI.mobileRemoteSuspended &&
+      gFFI.ffiModel.keyboard &&
+      !gFFI.ffiModel.viewOnly;
 
   Future<void> _setSessionInputMode(SessionInputMode mode) async {
     if (!_canSendSessionInput || gFFI.ffiModel.isPeerAndroid) return;
@@ -972,7 +1029,7 @@ class _RemotePageState extends State<RemotePage>
   void _sessionAction(SessionAction action) {
     switch (action) {
       case SessionAction.display:
-        showOptions(context, widget.id, gFFI.dialogManager);
+        showOptions(context, widget.id, gFFI);
       case SessionAction.chat:
         if (isAndroid) {
           _openSessionChat();
@@ -1250,6 +1307,9 @@ class _RemotePageState extends State<RemotePage>
     }
     if (recordIosP2pDiagnostics) {
       add(translate('Copy P2P diagnostics'), _copyP2pDiagnostics);
+    }
+    if (widget.workspaceSession != null && _sessionReady) {
+      add(translate('Minimize'), () => unawaited(_minimizeRemoteSession()));
     }
     if (_showRemoteP2pTest) {
       add(translate('Remote P2P test'), _showP2pTestConsent);
@@ -1801,7 +1861,11 @@ class _RemotePageState extends State<RemotePage>
           setState(() => _showGestureHelp = false);
           return false;
         }
-        clientClose(sessionId, gFFI);
+        if (widget.workspaceSession != null && _sessionReady) {
+          await _minimizeRemoteSession();
+        } else {
+          clientClose(sessionId, gFFI);
+        }
         return false;
       },
       child: Scaffold(
@@ -1924,8 +1988,9 @@ class _RemotePageState extends State<RemotePage>
   }
 
   bool _handleLocalKeyEvent(KeyEvent event) => handleMobileLocalKeyEvent(event,
-      remoteFocused: _physicalFocusNode.hasPrimaryFocus ||
-          (isMobile && _mobileFocusNode.hasPrimaryFocus),
+      remoteFocused: !gFFI.mobileRemoteSuspended &&
+          (_physicalFocusNode.hasPrimaryFocus ||
+              (isMobile && _mobileFocusNode.hasPrimaryFocus)),
       inputModel: inputModel);
 
   Widget _sessionImeEditor() => Positioned(
@@ -1984,7 +2049,7 @@ class _RemotePageState extends State<RemotePage>
                       icon: Icon(Icons.tv),
                       onPressed: () {
                         setState(() => _showEdit = false);
-                        showOptions(context, widget.id, gFFI.dialogManager);
+                        showOptions(context, widget.id, gFFI);
                       },
                     )
                   ] +
@@ -2162,6 +2227,7 @@ class _RemotePageState extends State<RemotePage>
                 final chatKeyboardRequested =
                     gFFI.chatModel.softKeyboardRequested.value;
                 return KeyHelpTools(
+                    ffi: gFFI,
                     keyboardIsVisible: keyboardVisibilityController.isVisible &&
                         (_showEdit || chatKeyboardRequested),
                     showGestureHelp: _showGestureHelp);
@@ -2344,6 +2410,11 @@ class _RemotePageState extends State<RemotePage>
     final x = 120.0;
     final y = size.height;
     final mobileActionMenus = [
+      if (widget.workspaceSession != null && _sessionReady)
+        TTextMenu(
+          child: Text(translate('Minimize')),
+          onPressed: () => unawaited(_minimizeRemoteSession()),
+        ),
       if (isIOS && recordIosP2pDiagnostics)
         TTextMenu(
           child: Text(translate('Copy P2P diagnostics')),
@@ -2519,6 +2590,7 @@ class _RemotePageState extends State<RemotePage>
 }
 
 class KeyHelpTools extends StatefulWidget {
+  final FFI ffi;
   final bool keyboardIsVisible;
   final bool showGestureHelp;
 
@@ -2526,13 +2598,16 @@ class KeyHelpTools extends StatefulWidget {
   bool get requestShow => keyboardIsVisible || showGestureHelp;
 
   KeyHelpTools(
-      {required this.keyboardIsVisible, required this.showGestureHelp});
+      {required this.ffi,
+      required this.keyboardIsVisible,
+      required this.showGestureHelp});
 
   @override
   State<KeyHelpTools> createState() => _KeyHelpToolsState();
 }
 
 class _KeyHelpToolsState extends State<KeyHelpTools> {
+  FFI get gFFI => widget.ffi;
   var _more = true;
   var _fn = false;
   var _pin = false;
@@ -2711,13 +2786,13 @@ class _KeyHelpToolsState extends State<KeyHelpTools> {
         inputModel.inputKey('VK_RIGHT');
       }, icon: Icons.keyboard_arrow_right),
       wrap(isMac ? 'Cmd+C' : 'Ctrl+C', () {
-        sendPrompt(isMac, 'VK_C');
+        sendPrompt(gFFI, isMac, 'VK_C');
       }),
       wrap(isMac ? 'Cmd+V' : 'Ctrl+V', () {
-        sendPrompt(isMac, 'VK_V');
+        sendPrompt(gFFI, isMac, 'VK_V');
       }),
       wrap(isMac ? 'Cmd+S' : 'Ctrl+S', () {
-        sendPrompt(isMac, 'VK_S');
+        sendPrompt(gFFI, isMac, 'VK_S');
       }),
     ];
     final space = size.width > 320 ? 4.0 : 2.0;
@@ -2816,8 +2891,8 @@ class CursorPaint extends StatelessWidget {
   }
 }
 
-void showOptions(
-    BuildContext context, String id, OverlayDialogManager dialogManager) async {
+void showOptions(BuildContext context, String id, FFI gFFI) async {
+  final dialogManager = gFFI.dialogManager;
   var displays = <Widget>[];
   final pi = gFFI.ffiModel.pi;
   final image = gFFI.ffiModel.getConnectionImageText(peerId: id);
@@ -3139,7 +3214,7 @@ TTextMenu? getResolutionMenu(FFI ffi, String id) {
   );
 }
 
-void sendPrompt(bool isMac, String key) {
+void sendPrompt(FFI gFFI, bool isMac, String key) {
   final old = isMac ? gFFI.inputModel.command : gFFI.inputModel.ctrl;
   if (isMac) {
     gFFI.inputModel.command = true;

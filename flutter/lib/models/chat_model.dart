@@ -600,18 +600,24 @@ class ChatModel with ChangeNotifier {
 
   void onVoiceCallStarted() {
     _voiceCallStatus.value = VoiceCallStatus.connected;
-    if (isAndroid) {
+    if (isAndroid && _androidVoiceCallSession) {
       parent.target?.invokeMethod("on_voice_call_started");
     }
   }
 
   void onVoiceCallClosed(String reason) {
     _voiceCallStatus.value = VoiceCallStatus.notStarted;
-    if (isAndroid) {
+    if (isAndroid && _androidVoiceCallSession) {
       // We can always invoke "on_voice_call_closed"
       // no matter if the `_voiceCallStatus` was `VoiceCallStatus.notStarted` or not.
       parent.target?.invokeMethod("on_voice_call_closed");
     }
+  }
+
+  bool get _androidVoiceCallSession {
+    final ffi = parent.target;
+    return identical(ffi, gFFI) ||
+        (ffi?.onSessionClosed != null && ffi?.mobileRemoteSuspended == false);
   }
 
   void onVoiceCallIncoming() {

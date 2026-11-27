@@ -17,6 +17,7 @@ import '../../common/widgets/autocomplete.dart';
 import '../../consts.dart';
 import '../../models/model.dart';
 import '../../models/platform_model.dart';
+import '../mobile_remote_sessions.dart';
 import 'home_page.dart';
 
 /// Connection page for connecting to a remote peer.
@@ -95,6 +96,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       slivers: [
         SliverList(
             delegate: SliverChildListDelegate([
+          if (isAndroid) const _ActiveMobileSessions(),
           if (!bind.isCustomClient() && !isIOS)
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
           _buildRemoteIDTextField(),
@@ -447,6 +449,58 @@ class _ConnectionPageState extends State<ConnectionPage> {
 }
 
 /// The command opens the keyboard only when someone wants to enter a new ID.
+class _ActiveMobileSessions extends StatelessWidget {
+  const _ActiveMobileSessions();
+
+  @override
+  Widget build(BuildContext context) => Obx(() {
+        final remotes = MobileRemoteSessions.sessions.toList();
+        if (remotes.isEmpty) return const SizedBox.shrink();
+
+        return Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(16, 6, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(translate('Active sessions'),
+                  style: Theme.of(context).textTheme.titleSmall),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final remote in remotes)
+                      Obx(() => _sessionChip(
+                            Icons.desktop_windows_outlined,
+                            remote.id,
+                            remote.ffi.ffiModel.pi.isSet.value &&
+                                !remote.ffi.ffiModel.waitForFirstImage.value,
+                            () => remote.show(context),
+                          )),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      });
+
+  Widget _sessionChip(
+      IconData icon, String id, bool connected, VoidCallback onPressed) {
+    final status = translate(connected ? 'Connected' : 'Waiting');
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(end: 8),
+      child: ActionChip(
+        avatar: Icon(icon, size: 18),
+        label: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 220),
+          child: Text('$id  ·  $status', overflow: TextOverflow.ellipsis),
+        ),
+        onPressed: onPressed,
+      ),
+    );
+  }
+}
+
 class IPhoneDeviceWorkspace extends StatelessWidget {
   const IPhoneDeviceWorkspace(
       {super.key,
@@ -469,6 +523,7 @@ class IPhoneDeviceWorkspace extends StatelessWidget {
         bottom: false,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const _ActiveMobileSessions(),
           if (connection != null)
             Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 14),

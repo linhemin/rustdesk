@@ -910,5 +910,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Public key source", "公钥来源"),
         ("Both devices must use the same relay address and public key.", "双方配置相同的中继地址和公钥后即可使用中继。"),
         ("Choose Custom to set a bitrate limit.", "选择“自定义”可设置码率上限。"),
+        ("Active sessions", "活动会话"),
     ].iter().cloned().collect();
 }

@@ -654,6 +654,14 @@ impl<T: InvokeUiSession> Session<T> {
     }
 
     pub fn set_option(&self, k: String, mut v: String) {
+        #[cfg(any(target_os = "ios", target_os = "android"))]
+        if k == "mobile-remote-suspended" {
+            let mut login = self.lc.write().unwrap();
+            if login.conn_type == ConnType::DEFAULT_CONN {
+                login.mobile_remote_suspended = v == "Y";
+            }
+            return;
+        }
         #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
         if k == crate::p2p_remote_diagnostics::ios::OPTION {
             self.p2p_test_access.allow(v == "Y");

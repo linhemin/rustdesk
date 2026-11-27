@@ -735,15 +735,20 @@ impl<T: InvokeUiSession> Remote<T> {
 
     fn handle_disconnected(&self, round: u32) {
         // set_disconnected_ok is used to check if new connection round is started.
-        let _set_disconnected_ok = self
+        let set_disconnected_ok = self
             .handler
             .connection_round_state
             .lock()
             .unwrap()
             .set_disconnected(round);
 
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        if set_disconnected_ok && self.handler.lc.read().unwrap().mobile_remote_suspended {
+            self.handler.set_permission("mobile-remote-ended", true);
+        }
+
         #[cfg(not(target_os = "ios"))]
-        if self.handler.is_default() && _set_disconnected_ok {
+        if self.handler.is_default() && set_disconnected_ok {
             // Other sessions may keep the listener running after this one disconnects.
             #[cfg(feature = "flutter")]
             crate::flutter::update_text_clipboard_required();
@@ -753,7 +758,7 @@ impl<T: InvokeUiSession> Remote<T> {
         }
 
         #[cfg(any(target_os = "windows", feature = "unix-file-copy-paste"))]
-        if self.handler.is_default() && _set_disconnected_ok {
+        if self.handler.is_default() && set_disconnected_ok {
             // Linux client cleanup runs synchronously in try_stop_clipboard() before FUSE is
             // unmounted. Keep this async path for other file-clipboard platforms.
             crate::clipboard::try_empty_clipboard_files(ClipboardSide::Client, self.client_conn_id);
@@ -1983,6 +1988,10 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
+                    #[cfg(any(target_os = "ios", target_os = "android"))]
+                    if self.handler.lc.read().unwrap().mobile_remote_suspended {
+                        return true;
+                    }
                     if !self.first_frame {
                         self.first_frame = true;
                         #[cfg(all(target_os = "ios", feature = "p2p-remote-diagnostics"))]
@@ -2848,7 +2857,14 @@ impl<T: InvokeUiSession> Remote<T> {
                     self.handler.handle_test_delay(t, peer).await;
                 }
                 Some(message::Union::AudioFrame(frame)) => {
-                    let muted = self.handler.lc.read().unwrap().disable_audio.v;
+                    let muted = {
+                        let login = self.handler.lc.read().unwrap();
+                        #[cfg(any(target_os = "ios", target_os = "android"))]
+                        let suspended = login.mobile_remote_suspended;
+                        #[cfg(not(any(target_os = "ios", target_os = "android")))]
+                        let suspended = false;
+                        login.disable_audio.v || suspended
+                    };
                     #[cfg(target_os = "ios")]
                     {
                         self.ios_audio.packets.fetch_add(1, Ordering::Relaxed);

@@ -3469,6 +3469,8 @@ pub struct LoginConfigHandler {
     /// one the probe latched to the raw pipe logs in without asking, so an
     /// upgraded peer keeps giving it the raw pipe.
     pub(crate) port_forward_multiplex: bool,
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    pub(crate) mobile_remote_suspended: bool,
     #[cfg(target_os = "ios")]
     pub(crate) ios_audio: Arc<ios_remote_audio::Progress>,
     /// Set once per window, before its mappings start: every accept's claim
@@ -4862,6 +4864,10 @@ pub fn start_video_thread<F, T>(
                             }
                         };
                         let display = vf.display as usize;
+                        #[cfg(any(target_os = "ios", target_os = "android"))]
+                        if session.lc.read().unwrap().mobile_remote_suspended {
+                            continue;
+                        }
                         let start = std::time::Instant::now();
                         let format = CodecFormat::from(&vf);
                         if software_decoding != requested_software_decoding
@@ -4882,7 +4888,14 @@ pub fn start_video_thread<F, T>(
                         if !software_decoding
                             && matches!(format, CodecFormat::H264 | CodecFormat::H265)
                         {
-                            match ios_texture::decode(&vf) {
+                            let decoded = {
+                                let login = session.lc.read().unwrap();
+                                if login.mobile_remote_suspended {
+                                    continue;
+                                }
+                                ios_texture::decode(&vf)
+                            };
+                            match decoded {
                                 ios_texture::DecodeStatus::Frame => {
                                     native_video_active = true;
                                     decoded_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4955,7 +4968,10 @@ pub fn start_video_thread<F, T>(
                                     decoded_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                     #[cfg(all(target_os = "ios", feature = "flutter"))]
                                     if native_video_active {
-                                        ios_texture::clear_frame(display);
+                                        let login = session.lc.read().unwrap();
+                                        if !login.mobile_remote_suspended {
+                                            ios_texture::clear_frame(display);
+                                        }
                                         native_video_active = false;
                                     }
                                     #[cfg(all(windows, feature = "windows-video-diagnostics"))]

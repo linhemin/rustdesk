@@ -34,6 +34,7 @@ import 'common/relay_servers.dart';
 import 'common/widgets/workspace.dart';
 import 'mobile/pages/file_manager_page.dart';
 import 'mobile/pages/remote_page.dart';
+import 'mobile/mobile_remote_sessions.dart';
 import 'mobile/pages/view_camera_page.dart';
 import 'mobile/pages/terminal_page.dart';
 import 'desktop/pages/remote_page.dart' as desktop_remote;
@@ -2757,6 +2758,10 @@ connect(BuildContext context, String id,
             ),
           ),
         );
+      } else if (isMobile) {
+        unawaited(MobileRemoteSessions.open(context, id,
+            loginMethod: loginMethod, password: password,
+            isSharedPassword: isSharedPassword, forceRelay: forceRelay));
       } else {
         Navigator.push(
           context,

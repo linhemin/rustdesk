@@ -907,5 +907,6 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Public key source", ""),
         ("Both devices must use the same relay address and public key.", ""),
         ("Choose Custom to set a bitrate limit.", ""),
+        ("Active sessions", ""),
     ].iter().cloned().collect();
 }

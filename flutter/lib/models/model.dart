@@ -221,6 +221,12 @@ class FfiModel with ChangeNotifier {
   }
 
   updatePermission(Map<String, dynamic> evt, String id) {
+    final ffi = parent.target;
+    if (ffi?.mobileRemoteSuspended == true &&
+        evt['mobile-remote-ended'] == 'true') {
+      ffi?.onSessionClosed?.call();
+      return;
+    }
     // Track previous keyboard permission to detect revocation.
     final hadKeyboardPerm = _permissions['keyboard'] != false;
 
@@ -382,7 +388,9 @@ class FfiModel with ChangeNotifier {
       } else if (name == 'cursor_position') {
         await parent.target?.cursorModel.updateCursorPosition(evt, peerId);
       } else if (name == 'clipboard') {
-        Clipboard.setData(ClipboardData(text: evt['content']));
+        if (parent.target?.mobileRemoteSuspended != true) {
+          Clipboard.setData(ClipboardData(text: evt['content']));
+        }
       } else if (name == 'permission') {
         updatePermission(evt, peerId);
       } else if (name == 'chat_client_mode') {
@@ -915,8 +923,9 @@ class FfiModel with ChangeNotifier {
 
   /// Handle the message box event based on [evt] and [id].
   handleMsgBox(Map<String, dynamic> evt, SessionID sessionId, String peerId) {
-    if (parent.target == null) return;
-    final dialogManager = parent.target!.dialogManager;
+    final ffi = parent.target;
+    if (ffi == null || ffi.mobileRemoteSuspended) return;
+    final dialogManager = ffi.dialogManager;
     final type = evt['type'];
     final title = evt['title'];
     final text = evt['text'];
@@ -4245,6 +4254,8 @@ class FFI {
   var version = '';
   var connType = ConnType.defaultConn;
   var closed = false;
+  bool mobileRemoteSuspended = false;
+  VoidCallback? onSessionClosed;
 
   /// dialogManager use late to ensure init after main page binding [globalKey]
   late final dialogManager = OverlayDialogManager();
@@ -4503,6 +4514,7 @@ class FFI {
         if (message is EventToUI_Event) {
           if (message.field0 == "close") {
             closed = true;
+            onSessionClosed?.call();
             debugPrint('Exit session event loop');
             return;
           }
