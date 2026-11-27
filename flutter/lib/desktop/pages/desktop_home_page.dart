@@ -64,59 +64,17 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   final GlobalKey _childKey = GlobalKey();
   int _destination = 0;
-  List<String> _activeRemoteSessionIds = const [];
-  DateTime? _dndUntil;
-  Timer? _dndTimer;
+  List<({int windowId, String peerId})> _activeRemoteSessions = const [];
+  List<IncomingVisitorRecord> _incomingVisitors = const [];
 
-  void _syncDndState() {
-    _dndUntil = loadIncomingDndUntil();
-    _dndTimer?.cancel();
-    if (_dndUntil != null) {
-      final remaining = _dndUntil!.difference(DateTime.now());
-      if (remaining.isNegative) {
-        unawaited(saveIncomingDndUntil(null));
-        _dndUntil = null;
-      } else {
-        _dndTimer = Timer(remaining, () async {
-          await saveIncomingDndUntil(null);
-          await start_service(true);
-          if (mounted) setState(() => _dndUntil = null);
-        });
-      }
-    }
-  }
-
-  Future<void> _toggleIncomingDnd({bool oneHour = false}) async {
-    if (svcStopped.value) {
-      await saveIncomingDndUntil(null);
-      _dndTimer?.cancel();
-      _dndUntil = null;
-      await start_service(true);
-    } else {
-      final until =
-          oneHour ? DateTime.now().add(const Duration(hours: 1)) : null;
-      await saveIncomingDndUntil(until);
-      _syncDndState();
-      await bind.mainSetOption(key: 'stop-service', value: 'Y');
-      svcStopped.value = true;
-    }
-    if (mounted) setState(() {});
+  Future<void> _refreshIncomingVisitors() async {
+    final visitors = await loadIncomingHistory();
+    if (mounted) setState(() => _incomingVisitors = visitors);
   }
 
   Future<void> _refreshActiveRemoteSessions() async {
-    try {
-      final sessions = await rustDeskWinManager.call(
-          WindowType.RemoteDesktop, kWindowEventGetRemoteList, null);
-      final ids = sessions.result is String
-          ? (sessions.result as String)
-              .split(',')
-              .where((id) => id.isNotEmpty)
-              .toList()
-          : const <String>[];
-      if (mounted) {
-        setState(() => _activeRemoteSessionIds = ids);
-      }
-    } catch (_) {}
+    final sessions = await rustDeskWinManager.getRemoteSessions();
+    if (mounted) setState(() => _activeRemoteSessions = sessions);
   }
 
   Future<void> _openCommandPalette(BuildContext context) async {
@@ -216,7 +174,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         setState(() => _destination = index);
         if (index == sessionsIndex) {
           _refreshActiveRemoteSessions();
-          _showExistingRemoteSession(index);
+        } else if (index == incomingIndex) {
+          _refreshIncomingVisitors();
         }
       }
 
@@ -226,7 +185,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [loadLogo(), loadPowered(context)]),
         if (incoming) buildPresetPasswordWarning(),
-        if (current == sessionsIndex && _activeRemoteSessionIds.isNotEmpty)
+        if (current == sessionsIndex)
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 14, 24, 0),
             child: WorkspacePanel(
@@ -244,18 +203,24 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Text(
-                          '${translate('Active sessions')} (${_activeRemoteSessionIds.length})',
+                          '${translate('Active sessions')} (${_activeRemoteSessions.length})',
                           style: const TextStyle(
                               fontSize: 13, fontWeight: FontWeight.w600),
                         ),
-                        for (final sid in _activeRemoteSessionIds)
+                        for (final session in _activeRemoteSessions)
                           ActionChip(
-                            label: Text(sid),
+                            label: Text(session.peerId),
                             avatar: Icon(Icons.circle,
                                 size: 8,
                                 color: WorkspaceStyle.success(context)),
-                            onPressed: () =>
-                                _showExistingRemoteSession(sessionsIndex),
+                            onPressed: () async {
+                              final selected =
+                                  await rustDeskWinManager.activateRemoteSession(
+                                      session.windowId, session.peerId);
+                              if (!selected && mounted) {
+                                await _refreshActiveRemoteSessions();
+                              }
+                            },
                           ),
                       ],
                     ),
@@ -357,21 +322,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         if (!isIncomingOnly) Expanded(child: buildRightPane(context)),
       ],
     ));
-  }
-
-  Future<void> _showExistingRemoteSession(int destination) async {
-    try {
-      final sessions = await rustDeskWinManager.call(
-          WindowType.RemoteDesktop, kWindowEventGetRemoteList, null);
-      final ids = sessions.result is String
-          ? (sessions.result as String).split(',').where((id) => id.isNotEmpty)
-          : const <String>[];
-      if (mounted && _destination == destination && ids.isNotEmpty) {
-        await windowOnTop(sessions.windowId);
-      }
-    } on PlatformException catch (error) {
-      debugPrint('Unable to focus remote session: $error');
-    }
   }
 
   Widget _buildBlock({required Widget child}) {
@@ -664,7 +614,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   Widget _incomingHostReadinessAndVisitors(BuildContext context) {
     final theme = Theme.of(context);
-    final visitors = loadIncomingHistory();
+    final visitors = _incomingVisitors;
     final readySvc =
         !svcStopped.value && stateGlobal.svcStatus.value == SvcStatus.ready;
     final hasPassword = gFFI.serverModel.serverPasswd.text.trim().isNotEmpty;
@@ -703,48 +653,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          translate('Status'),
-                          style: theme.textTheme.labelLarge,
-                        ),
-                      ),
-                      Obx(() => Wrap(
-                            spacing: 8,
-                            children: [
-                              OutlinedButton.icon(
-                                icon: Icon(
-                                  svcStopped.value
-                                      ? Icons.play_arrow_rounded
-                                      : Icons.do_not_disturb_on_outlined,
-                                  size: 16,
-                                ),
-                                label: Text(translate(svcStopped.value
-                                    ? 'Start service'
-                                    : 'Stop service')),
-                                onPressed: () => _toggleIncomingDnd(),
-                              ),
-                              if (!svcStopped.value)
-                                TextButton(
-                                  onPressed: () =>
-                                      _toggleIncomingDnd(oneHour: true),
-                                  child: const Text('1h'),
-                                ),
-                            ],
-                          )),
-                    ],
-                  ),
-                  if (_dndUntil != null && svcStopped.value)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        '${translate('Stop service')} → ${_dndUntil!.hour.toString().padLeft(2, '0')}:${_dndUntil!.minute.toString().padLeft(2, '0')}',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                            color: WorkspaceStyle.warning(context)),
-                      ),
-                    ),
+                  Text(translate('Status'),
+                      style: theme.textTheme.labelLarge),
                   const SizedBox(height: 8),
                   checkRow(translate('Service is running'), readySvc),
                   checkRow(translate('Password'), hasPassword),
@@ -767,11 +677,19 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                           style: theme.textTheme.labelLarge,
                         ),
                       ),
+                      IconButton(
+                        tooltip: translate('Refresh'),
+                        icon: const Icon(Icons.refresh_rounded, size: 18),
+                        onPressed: _refreshIncomingVisitors,
+                      ),
                       if (visitors.isNotEmpty)
                         TextButton(
                           onPressed: () async {
-                            await clearIncomingHistory();
-                            if (mounted) setState(() {});
+                            if (await clearIncomingHistory()) {
+                              await _refreshIncomingVisitors();
+                            } else if (mounted) {
+                              showToast(translate('Failed'));
+                            }
                           },
                           child: Text(translate('Clear')),
                         ),
@@ -1580,7 +1498,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   void initState() {
     super.initState();
-    _syncDndState();
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
@@ -1754,7 +1671,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   @override
   void dispose() {
-    _dndTimer?.cancel();
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();

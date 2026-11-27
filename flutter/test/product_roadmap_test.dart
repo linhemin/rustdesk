@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/device_profile.dart';
 import 'package:flutter_hbb/common/incoming_history.dart';
 import 'package:flutter_hbb/common/relay_probe.dart';
@@ -242,6 +244,28 @@ void main() {
       expect(list.length, 1);
       expect(list.single.peerId, '888999000');
       expect(list.single.peerName, 'Alice');
+    });
+
+    test('incoming history persists and clears records from a shared file',
+        () async {
+      final binding = TestWidgetsFlutterBinding.ensureInitialized();
+      final folder = await Directory.systemTemp.createTemp('incoming-history-');
+      const channel = MethodChannel('plugins.flutter.io/path_provider');
+      final messenger = binding.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (_) async => folder.path);
+      addTearDown(() async {
+        messenger.setMockMethodCallHandler(channel, null);
+        await folder.delete(recursive: true);
+      });
+
+      await Future.wait([
+        recordIncomingVisitor(peerId: '123', peerName: 'A', sessionType: 'file'),
+        recordIncomingVisitor(peerId: '456', peerName: 'B', sessionType: 'audio'),
+      ]);
+      final records = await loadIncomingHistory();
+      expect(records.map((record) => record.peerId), ['456', '123']);
+      expect(await clearIncomingHistory(), isTrue);
+      expect(await loadIncomingHistory(), isEmpty);
     });
 
     testWidgets('MobileMacroBar renders pinned macros and triggers callback',

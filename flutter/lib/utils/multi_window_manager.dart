@@ -417,6 +417,39 @@ class RustDeskMultiWindowManager {
     return MultiWindowCallResult(wnds[0], res);
   }
 
+  Future<List<({int windowId, String peerId})>> getRemoteSessions() async {
+    final sessions = await Future.wait(_remoteDesktopWindows.toList().map(
+      (windowId) async {
+        try {
+          final result = await DesktopMultiWindow.invokeMethod(
+              windowId, kWindowEventGetRemoteList, null);
+          if (result is String) {
+            return [
+              for (final peerId in result.split(','))
+                if (peerId.isNotEmpty) (windowId: windowId, peerId: peerId),
+            ];
+          }
+        } on PlatformException catch (error) {
+          debugPrint('Unable to list sessions for window $windowId: $error');
+        }
+        return const <({int windowId, String peerId})>[];
+      },
+    ));
+    return sessions.expand((window) => window).toList();
+  }
+
+  Future<bool> activateRemoteSession(int windowId, String peerId) async {
+    if (!_remoteDesktopWindows.contains(windowId)) return false;
+    try {
+      return await DesktopMultiWindow.invokeMethod(
+              windowId, kWindowEventActiveSession, peerId) ==
+          true;
+    } on PlatformException catch (error) {
+      debugPrint('Unable to activate session in window $windowId: $error');
+      return false;
+    }
+  }
+
   List<int> _findWindowsByType(WindowType type) {
     switch (type) {
       case WindowType.Main:

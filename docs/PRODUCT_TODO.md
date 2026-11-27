@@ -85,7 +85,7 @@
 
 - [x] **设备级连接预设（Per-device Profile）**：新增 `common/device_profile.dart` 并接入设备卡片“更多”菜单，支持为每台设备独立配置默认连接模式、画质、隐私屏、音频与强制中继策略。
 - [x] **首次上手轻引导与权限体检清单**：在 `AwesunFlutterOverlay` 中新增可跳过的 3 步环形鼠标首次引导条（持久化记忆）；在桌面 `desktop_home_page.dart`“本机被控”页新增主机就绪度体检卡片（服务/密码/权限）。
-- [x] **本机来访历史记录 & 一键勿扰暂停被控**：新增 `common/incoming_history.dart`，在 `server_page.dart` 自动记录来访会话，在 `desktop_home_page.dart`“本机被控”页展示最近来访记录（支持清空）及一键暂停被控（支持 1 小时自动恢复）。
+- [x] **本机来访历史记录**：在桌面“本机被控”页展示已授权的最近来访记录，支持刷新与清空。
 - [x] **白板标注 / 激光笔**：新增 `desktop/widgets/session_whiteboard.dart`（支持多色画笔、自动淡出激光笔、清空/关闭），并接入桌面 `RemoteToolbar` 与 `RemotePage`。
 - [x] **移动端自定义常用快捷键宏栏**：新增 `mobile/widgets/macro_shortcut_bar.dart` 并集成至 `SessionKeyboard` 快捷键页，支持自定义置顶常用组合键（`Ctrl+C/V/Z`、`Alt+Tab`、`Win+D`、`Cmd+Space`、`TaskMgr`、`Win+L`）。
 - [x] **品牌收口**：新增 `common/brand_links.dart` 集中管理官网/定价/下载/隐私外链（支持自定义客户端 buildin 覆盖），替换桌面与移动端分散的硬编码 `rustdesk.com/*` 链接。

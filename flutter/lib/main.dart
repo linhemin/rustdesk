@@ -124,6 +124,7 @@ Future<void> initEnv(String appType) async {
     for (final key in const [
       'local-peer-webdav-sync',
       'local-peer-last-sync',
+      'local-incoming-dnd-until-v1',
     ]) {
       if (bind.getLocalFlutterOption(k: key).isNotEmpty) {
         await bind.setLocalFlutterOption(k: key, v: '');

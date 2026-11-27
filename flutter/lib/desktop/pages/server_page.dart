@@ -18,7 +18,6 @@ import 'package:window_manager/window_manager.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../common.dart';
-import '../../common/incoming_history.dart';
 import '../../common/widgets/chat_page.dart';
 import '../../models/file_model.dart';
 import '../../models/platform_model.dart';
@@ -437,15 +436,6 @@ class _CmHeaderState extends State<_CmHeader>
   @override
   void initState() {
     super.initState();
-    if (client.peerId.isNotEmpty) {
-      unawaited(recordIncomingVisitor(
-        peerId: client.peerId,
-        peerName: client.name,
-        sessionType: client.isPhoneMicrophone
-            ? 'audio'
-            : client.type_().name,
-      ));
-    }
     _timer = Timer.periodic(Duration(seconds: 1), (_) {
       if (client.authorized && !client.disconnected) {
         _time.value = _time.value + 1;

@@ -12,6 +12,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../common.dart';
 import '../common/formatter/id_formatter.dart';
+import '../common/incoming_history.dart';
 import '../desktop/pages/server_page.dart' as desktop;
 import '../desktop/widgets/tabbar_widget.dart';
 import '../mobile/pages/server_page.dart';
@@ -507,6 +508,10 @@ class ServerModel with ChangeNotifier {
     }
 
     final oldClientLenght = _clients.length;
+    final authorized = {
+      for (final client in _clients)
+        if (client.authorized) client.id,
+    };
     _clients.clear();
     tabController.state.value.tabs.clear();
 
@@ -514,6 +519,7 @@ class ServerModel with ChangeNotifier {
       try {
         final client = Client.fromJson(clientJson);
         _clients.add(client);
+        if (!authorized.contains(client.id)) _recordAuthorizedVisitor(client);
         _addTab(client);
       } catch (e) {
         debugPrint("Failed to decode clientJson '$clientJson', error $e");
@@ -558,6 +564,7 @@ class ServerModel with ChangeNotifier {
         }
         _clients.add(client);
       }
+      _recordAuthorizedVisitor(client);
       _addTab(client);
       // remove disconnected
       final index_disconnected = _clients
@@ -576,6 +583,20 @@ class ServerModel with ChangeNotifier {
     } catch (e) {
       debugPrint("Failed to call loginRequest,error:$e");
     }
+  }
+
+  void _recordAuthorizedVisitor(Client client) {
+    if (!isDesktop ||
+        desktopType != DesktopType.cm ||
+        !client.authorized ||
+        client.disconnected) {
+      return;
+    }
+    unawaited(recordIncomingVisitor(
+      peerId: client.peerId,
+      peerName: client.name,
+      sessionType: client.isPhoneMicrophone ? 'audio' : client.type_().name,
+    ));
   }
 
   void _addTab(Client client) {
@@ -691,7 +712,10 @@ class ServerModel with ChangeNotifier {
         parent.target?.invokeMethod("start_capture");
       }
       parent.target?.invokeMethod("cancel_notification", client.id);
-      client.authorized = true;
+      if (!client.authorized) {
+        client.authorized = true;
+        _recordAuthorizedVisitor(client);
+      }
       notifyListeners();
     } else {
       bind.cmLoginRes(connId: client.id, res: res);
