@@ -22,6 +22,7 @@ import '../../common/shared_state.dart';
 import '../../utils/image.dart';
 import '../widgets/remote_toolbar.dart';
 import '../widgets/session_quality_monitor.dart';
+import '../widgets/session_whiteboard.dart';
 import '../widgets/kb_layout_type_chooser.dart';
 import '../widgets/tabbar_widget.dart';
 import 'macos_full_screen_focus_recovery.dart';
@@ -116,6 +117,7 @@ class _RemotePageState extends State<RemotePage>
   late RxBool _remoteCursorMoved;
   late RxBool _keyboardEnabled;
   final _uniqueKey = UniqueKey();
+  final _whiteboard = WhiteboardController();
 
   var _blockableOverlayState = BlockableOverlayState();
 
@@ -694,6 +696,7 @@ class _RemotePageState extends State<RemotePage>
     _ffi.imageModel.disposeImage();
     _ffi.cursorModel.disposeImages();
     _rawKeyFocusNode.dispose();
+    _whiteboard.dispose();
     if (closeSession) {
       clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     }
@@ -736,6 +739,7 @@ class _RemotePageState extends State<RemotePage>
             }
           },
           setRemoteState: setState,
+          whiteboard: _whiteboard,
         );
 
     bodyWidget() {
@@ -767,6 +771,7 @@ class _RemotePageState extends State<RemotePage>
                   },
                   inputModel: _ffi.inputModel,
                   child: getBodyForDesktop(context))),
+          SessionWhiteboardOverlay(controller: _whiteboard),
           Stack(
             children: [
               _ffi.ffiModel.pi.isSet.isTrue &&

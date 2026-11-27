@@ -25,6 +25,7 @@ import '../../models/platform_model.dart';
 import '../../common/shared_state.dart';
 import './popup_menu.dart';
 import './kb_layout_type_chooser.dart';
+import './session_whiteboard.dart';
 import 'package:flutter_hbb/utils/scale.dart';
 import 'package:flutter_hbb/common/widgets/custom_scale_base.dart';
 
@@ -499,6 +500,7 @@ class RemoteToolbar extends StatefulWidget {
   final Function(int, Function(bool)) onEnterOrLeaveImageSetter;
   final Function(int) onEnterOrLeaveImageCleaner;
   final Function(VoidCallback) setRemoteState;
+  final WhiteboardController? whiteboard;
 
   RemoteToolbar({
     Key? key,
@@ -508,6 +510,7 @@ class RemoteToolbar extends StatefulWidget {
     required this.onEnterOrLeaveImageSetter,
     required this.onEnterOrLeaveImageCleaner,
     required this.setRemoteState,
+    this.whiteboard,
   }) : super(key: key);
 
   @override
@@ -914,9 +917,13 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
             : model.directConnection == true
                 ? WorkspaceStyle.success(context)
                 : Theme.of(context).colorScheme.primary;
+        final privacyActive = PrivacyModeState.find(widget.id).isNotEmpty;
+        final fpsStr = model.data.fps?.trim() ?? '';
         final statusText = [
           model.activeTransport ?? translate('Connection'),
           if (model.data.delay != null) '${model.data.delay} ms',
+          if (fpsStr.isNotEmpty && fpsStr != '0') '$fpsStr fps',
+          if (privacyActive) translate('Privacy mode'),
         ].join(' · ');
         return Padding(
           padding: EdgeInsets.symmetric(
@@ -1037,6 +1044,23 @@ class _RemoteToolbarState extends State<RemoteToolbar> {
         _VoiceCallMenu(
             id: widget.id, ffi: widget.ffi, edge: edge, compact: compact),
       if (!isWeb) _RecordMenu(compact: compact),
+      if (widget.whiteboard != null)
+        AnimatedBuilder(
+          animation: widget.whiteboard!,
+          builder: (context, _) {
+            final active = widget.whiteboard!.active;
+            return _IconMenuButton(
+              nativeIcon: active ? Icons.edit_rounded : Icons.draw_outlined,
+              icon: Icon(active ? Icons.edit_rounded : Icons.draw_outlined),
+              tooltip: 'Whiteboard',
+              active: active,
+              compact: compact,
+              color: _ToolbarTheme.commandColor,
+              hoverColor: _ToolbarTheme.hoverBlueColor,
+              onPressed: () => widget.whiteboard!.toggle(),
+            );
+          },
+        ),
       SessionToolbarDivider(horizontal: isHorizontal),
       _PinMenu(state: widget.state, compact: compact),
       Obx(() {
@@ -3507,26 +3531,60 @@ class _VoiceCallMenu extends StatelessWidget {
   }
 }
 
-class _RecordMenu extends StatelessWidget {
+class _RecordMenu extends StatefulWidget {
   final bool compact;
   const _RecordMenu({Key? key, this.compact = false}) : super(key: key);
+
+  @override
+  State<_RecordMenu> createState() => _RecordMenuState();
+}
+
+class _RecordMenuState extends State<_RecordMenu> {
+  Timer? _timer;
+  int _elapsedSec = 0;
+  bool _wasRecording = false;
+
+  void _syncTimer(bool recording) {
+    if (recording && !_wasRecording) {
+      _wasRecording = true;
+      _elapsedSec = 0;
+      _timer?.cancel();
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() => _elapsedSec++);
+      });
+    } else if (!recording && _wasRecording) {
+      _wasRecording = false;
+      _timer?.cancel();
+      _timer = null;
+      _elapsedSec = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     var ffi = Provider.of<FfiModel>(context);
     var recordingModel = Provider.of<RecordingModel>(context);
+    _syncTimer(recordingModel.start);
     final hideRecordingButton =
         bind.mainGetLocalOption(key: kOptionHideRecordingButton) == 'Y';
     final visible = !hideRecordingButton &&
         (recordingModel.start || ffi.permissions['recording'] != false);
     if (!visible) return Offstage();
+    final mins = (_elapsedSec ~/ 60).toString().padLeft(2, '0');
+    final secs = (_elapsedSec % 60).toString().padLeft(2, '0');
     return _IconMenuButton(
       assetName: 'assets/rec.svg',
       nativeIcon: recordingModel.start
           ? Icons.fiber_manual_record_rounded
           : Icons.radio_button_checked_rounded,
-      label: recordingModel.start ? 'REC' : null,
-      compact: compact,
+      label: recordingModel.start ? 'REC $mins:$secs' : null,
+      compact: widget.compact,
       destructive: recordingModel.start,
       tooltip: recordingModel.start
           ? 'Stop session recording'
@@ -4341,9 +4399,13 @@ class _DraggableShowHideState extends State<_DraggableShowHide> {
             : model.directConnection == true
                 ? WorkspaceStyle.success(context)
                 : Theme.of(context).colorScheme.primary;
+        final privacyActive = PrivacyModeState.find(widget.id).isNotEmpty;
+        final fpsStr = model.data.fps?.trim() ?? '';
         final statusText = [
           model.activeTransport ?? translate('Connection'),
           if (model.data.delay != null) '${model.data.delay} ms',
+          if (fpsStr.isNotEmpty && fpsStr != '0') '$fpsStr fps',
+          if (privacyActive) translate('Privacy mode'),
         ].join(' · ');
         return SessionStatusPill(
           dotColor: color,
