@@ -295,7 +295,8 @@ class _ConnectionPageState extends State<ConnectionPage>
       connectInPeerTab(context, peer, tab,
           isFileTransfer: _mode == 1,
           isTerminal: _mode == 2,
-          isViewCamera: _mode == 3);
+          isViewCamera: _mode == 3,
+          useDeviceDefault: widget.requestedMode == null);
 
   bool isWindowMinimized = false;
 

@@ -982,18 +982,19 @@ abstract class BasePeerCard extends StatelessWidget {
       _transferFileAction(context),
       _viewCameraAction(context),
       _terminalAction(context),
-      MenuEntryButton<String>(
-        childBuilder: (style) => Text(translate('Settings'), style: style),
-        proc: () => showDeviceProfileDialog(
-          context,
-          peerId: peer.id,
-          peerTitle: peer.alias.isNotEmpty
-              ? peer.alias
-              : (peer.hostname.isNotEmpty ? peer.hostname : formatID(peer.id)),
+      if (!isWeb)
+        MenuEntryButton<String>(
+          childBuilder: (style) => Text(translate('Settings'), style: style),
+          proc: () => showDeviceProfileDialog(
+            context,
+            peerId: peer.id,
+            peerTitle: peer.alias.isNotEmpty
+                ? peer.alias
+                : (peer.hostname.isNotEmpty ? peer.hostname : formatID(peer.id)),
+          ),
+          padding: menuPadding,
+          dismissOnClicked: true,
         ),
-        padding: menuPadding,
-        dismissOnClicked: true,
-      ),
     ];
 
     if (peer.platform == kPeerPlatformWindows) {
@@ -1041,6 +1042,7 @@ abstract class BasePeerCard extends StatelessWidget {
           isTcpTunneling: isTcpTunneling,
           isRDP: isRDP,
           isTerminal: isTerminal || isTerminalRunAsAdmin,
+          useDeviceDefault: false,
           loginMethod: loginMethod,
         );
       },
@@ -1992,7 +1994,17 @@ void connectInPeerTab(BuildContext context, Peer peer, PeerTabIndex tab,
     bool isTcpTunneling = false,
     bool isRDP = false,
     bool isTerminal = false,
+    bool useDeviceDefault = true,
     String loginMethod = ''}) async {
+  final defaultMode = !isWeb &&
+          useDeviceDefault &&
+          !isFileTransfer &&
+          !isTerminal &&
+          !isViewCamera &&
+          !isTcpTunneling &&
+          !isRDP
+      ? loadDeviceProfile(peer.id).defaultMode
+      : 'remote';
   var password = '';
   bool isSharedPassword = false;
   if (tab == PeerTabIndex.ab) {
@@ -2023,8 +2035,8 @@ void connectInPeerTab(BuildContext context, Peer peer, PeerTabIndex tab,
       loginMethod: loginMethod,
       password: password,
       isSharedPassword: isSharedPassword,
-      isFileTransfer: isFileTransfer,
-      isTerminal: isTerminal,
+      isFileTransfer: isFileTransfer || defaultMode == 'file',
+      isTerminal: isTerminal || defaultMode == 'terminal',
       isViewCamera: isViewCamera,
       isTcpTunneling: isTcpTunneling,
       isRDP: isRDP);

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common/device_profile.dart';
 import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -16,6 +17,7 @@ import 'package:provider/provider.dart';
 import 'package:rustdesk_ui/device_card.dart';
 
 class _Binding extends Fake implements RustdeskImpl {
+  String deviceProfiles = '';
   String savedPeerTab = '';
 
   @override
@@ -31,6 +33,7 @@ class _Binding extends Fake implements RustdeskImpl {
         #mainIsOptionFixed =>
           false,
         #getLocalFlutterOption => switch (call.namedArguments[#k]) {
+            kDeviceProfilesOptionKey => deviceProfiles,
             kOptionPeerTabIndex => savedPeerTab,
             _ => '',
           },
@@ -165,6 +168,16 @@ void main() {
     }
     await mount();
     expect(find.byIcon(Icons.grid_view_outlined), findsOneWidget);
+    binding.deviceProfiles = '{"123456789":{"mode":"terminal"}}';
+    await tester.tap(find.descendant(
+        of: find.byType(DeviceCard), matching: find.text('Connect')));
+    await settle();
+    expect(requests.last['isTerminal'], isTrue);
+    await tester.tap(find.descendant(
+        of: find.byType(DeviceCard), matching: find.text('Transfer file')));
+    await settle();
+    expect(requests.last['isFileTransfer'], isTrue);
+    expect(requests.last['isTerminal'], isFalse);
     await tester.enterText(find.byType(TextField).first, '987654321');
     await tester.tap(find.widgetWithText(ElevatedButton, 'Connect'));
     await settle();

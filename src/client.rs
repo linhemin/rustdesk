@@ -93,6 +93,8 @@ use crate::ui_session_interface::SessionPermissionConfig;
 
 pub use super::lang::*;
 
+#[cfg(any(feature = "flutter", test))]
+mod device_profile;
 mod direct_path;
 mod login_method;
 mod path_rtt;
@@ -3595,6 +3597,11 @@ impl LoginConfigHandler {
             log::warn!("Failed to initialize login method: {}", login_method);
         }
         let config = self.load_config();
+        #[cfg(feature = "flutter")]
+        let (config, profile_forces_relay) =
+            device_profile::configure(&self.id, conn_type, config);
+        #[cfg(not(feature = "flutter"))]
+        let profile_forces_relay = false;
         self.remember = !config.password.is_empty();
         self.config = config;
 
@@ -3623,7 +3630,7 @@ impl LoginConfigHandler {
         self.peer_relay =
             config::option2bool("force-always-relay", &self.get_option("force-always-relay"))
                 || force_relay;
-        self.policy_relay = self.peer_relay || Config::is_proxy();
+        self.policy_relay = self.peer_relay || profile_forces_relay || Config::is_proxy();
         self.force_relay = self.policy_relay || use_ws();
         if let Some((real_id, server, key)) = &self.other_server {
             let other_server_key = self.get_option("other-server-key");
@@ -4495,6 +4502,9 @@ impl LoginConfigHandler {
             hostname: pi.hostname.clone(),
             platform: pi.platform.clone(),
         };
+        #[cfg(feature = "flutter")]
+        let mut config = device_profile::configure(&self.id, self.conn_type, self.load_config()).0;
+        #[cfg(not(feature = "flutter"))]
         let mut config = self.load_config();
         config.info = serde;
         let password = self.password.clone();

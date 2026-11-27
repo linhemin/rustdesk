@@ -79,25 +79,14 @@ Future<void> saveDeviceProfile(
   final id = peerId.trim();
   if (id.isEmpty) return;
   final all = loadAllDeviceProfiles();
-  if (profile.isDefault) {
-    all.remove(id);
-  } else {
-    all[id] = profile;
-  }
+  if (profile.isDefault && !all.containsKey(id)) return;
+  all[id] = profile;
   await bind.setLocalFlutterOption(
     k: kDeviceProfilesOptionKey,
-    v: all.isEmpty
-        ? ''
-        : jsonEncode({for (final e in all.entries) e.key: e.value.toJson()}),
+    v: jsonEncode({
+      for (final entry in all.entries) entry.key: entry.value.toJson(),
+    }),
   );
-  if (profile.quality != 'default') {
-    await bind.mainSetPeerOption(
-        id: id, key: 'image_quality', value: profile.quality);
-  }
-  await bind.mainSetPeerOption(
-      id: id, key: 'disable-audio', value: profile.enableAudio ? '' : 'Y');
-  await bind.mainSetPeerOption(
-      id: id, key: 'privacy-mode', value: profile.privacyMode ? 'Y' : '');
 }
 
 Future<DeviceConnectionProfile?> showDeviceProfileDialog(
