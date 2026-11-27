@@ -370,7 +370,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let eligible_live_direct = !direct
                     && crate::live_direct::supported_transport(&peer)
                     && peer_verified
-                    && conn_type == ConnType::DEFAULT_CONN
+                    && matches!(conn_type, ConnType::DEFAULT_CONN | ConnType::FILE_TRANSFER)
                     && !self.handler.is_policy_relay()
                     && (rtc_enabled || native_enabled);
                 let mut allow_live_direct =

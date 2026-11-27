@@ -2403,7 +2403,6 @@ impl Connection {
     fn can_try_live_transport(&self) -> bool {
         self.authorized
             && self.direct_retry_permitted
-            && self.file_transfer.is_none()
             && !self.is_port_forward()
             && !self.view_camera
             && !self.terminal
