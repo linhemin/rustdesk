@@ -82,6 +82,19 @@ void main() {
       expect(checks[0].ok, isTrue);
       expect(checks[1].ok, isTrue);
       expect(checks[2].ok, isFalse);
+
+      final checkedHosts = <String>[];
+      final direct = await runNetworkDiagnostics(
+        idServer: 'id.example.com',
+        relayServers: ['relay1.example.com'],
+        directOnly: true,
+        connector: (host, port, timeout) {
+          checkedHosts.add(host);
+          return connector(host, port, timeout);
+        },
+      );
+      expect(checkedHosts, ['id.example.com']);
+      expect(direct.last.detail, 'Direct connections only');
     });
 
     testWidgets('RelayServersField probes relays and renders latency badge',

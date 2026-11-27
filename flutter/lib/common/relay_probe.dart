@@ -146,7 +146,7 @@ Future<List<NetworkDiagnosticCheck>> runNetworkDiagnostics({
     ));
   }
 
-  if (relayServers.isEmpty) {
+  if (directOnly || relayServers.isEmpty) {
     checks.add(NetworkDiagnosticCheck(
       title: 'Relay Server',
       detail: directOnly ? 'Direct connections only' : 'Auto / ID server relay',

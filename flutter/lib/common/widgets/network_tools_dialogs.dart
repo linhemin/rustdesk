@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../common.dart';
+import '../../consts.dart';
 import '../relay_probe.dart';
 import '../relay_servers.dart';
 import '../../models/platform_model.dart';
@@ -86,7 +87,7 @@ Future<void> showNetworkDiagnosticsDialog(
       .map((e) => e.address.trim())
       .where((a) => a.isNotEmpty)
       .toList();
-  final directOnly = mainGetLocalBoolOptionSync('direct-connections-only');
+  final directOnly = mainGetLocalBoolOptionSync(kOptionDirectOnly);
 
   await showDialog<void>(
     context: context,
