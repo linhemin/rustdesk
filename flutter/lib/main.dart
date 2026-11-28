@@ -437,16 +437,19 @@ class App extends StatefulWidget {
 }
 
 class _AppState extends State<App> with WidgetsBindingObserver {
+  VoidCallback? _prevPlatformBrightnessCallback;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.window.onPlatformBrightnessChanged = () {
+    final dispatcher = WidgetsBinding.instance.platformDispatcher;
+    _prevPlatformBrightnessCallback = dispatcher.onPlatformBrightnessChanged;
+    dispatcher.onPlatformBrightnessChanged = () {
+      _prevPlatformBrightnessCallback?.call();
       final userPreference = MyTheme.getThemeModePreference();
       if (userPreference != ThemeMode.system) return;
       WidgetsBinding.instance.handlePlatformBrightnessChanged();
-      final systemIsDark =
-          WidgetsBinding.instance.platformDispatcher.platformBrightness ==
-              Brightness.dark;
+      final systemIsDark = dispatcher.platformBrightness == Brightness.dark;
       final ThemeMode to;
       if (systemIsDark) {
         to = ThemeMode.dark;
@@ -466,6 +469,8 @@ class _AppState extends State<App> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
+        _prevPlatformBrightnessCallback;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -533,7 +538,10 @@ class _AppState extends State<App> with WidgetsBindingObserver {
               ? (context, child) => AccessibilityListener(
                     child: MediaQuery(
                       data: MediaQuery.of(context).copyWith(
-                        textScaler: TextScaler.linear(1.0),
+                        textScaler: MediaQuery.textScalerOf(context).clamp(
+                          minScaleFactor: 1.0,
+                          maxScaleFactor: 1.5,
+                        ),
                       ),
                       child: child ?? Container(),
                     ),
@@ -561,7 +569,10 @@ Widget _keepScaleBuilder(BuildContext context, Widget? child) {
   if (isIOS) return child ?? const SizedBox.shrink();
   return MediaQuery(
     data: MediaQuery.of(context).copyWith(
-      textScaler: TextScaler.linear(1.0),
+      textScaler: MediaQuery.textScalerOf(context).clamp(
+        minScaleFactor: 1.0,
+        maxScaleFactor: 1.5,
+      ),
     ),
     child: child ?? Container(),
   );
@@ -590,20 +601,45 @@ _registerEventHandler() {
 }
 
 Widget keyListenerBuilder(BuildContext context, Widget? child) {
-  return RawKeyboardListener(
-    // Keep this keyboard-only wrapper from taking focus away from web inputs.
-    includeSemantics: !isWeb,
-    // `skipTraversal: isWeb` is to fix "Bad state: RenderBox was not laid out: minified:aeL#c19e4"
-    focusNode: FocusNode(skipTraversal: isWeb),
-    child: child ?? Container(),
-    onKey: (RawKeyEvent event) {
-      if (event.logicalKey == LogicalKeyboardKey.shiftLeft) {
-        if (event is RawKeyDownEvent) {
-          gFFI.peerTabModel.setShiftDown(true);
-        } else if (event is RawKeyUpEvent) {
-          gFFI.peerTabModel.setShiftDown(false);
+  return _GlobalKeyListener(child: child);
+}
+
+class _GlobalKeyListener extends StatefulWidget {
+  const _GlobalKeyListener({this.child});
+
+  final Widget? child;
+
+  @override
+  State<_GlobalKeyListener> createState() => _GlobalKeyListenerState();
+}
+
+class _GlobalKeyListenerState extends State<_GlobalKeyListener> {
+  // `skipTraversal: isWeb` is to fix "Bad state: RenderBox was not laid out: minified:aeL#c19e4"
+  late final FocusNode _focusNode = FocusNode(skipTraversal: isWeb);
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return KeyboardListener(
+      // Keep this keyboard-only wrapper from taking focus away from web inputs.
+      includeSemantics: !isWeb,
+      focusNode: _focusNode,
+      child: widget.child ?? const SizedBox.shrink(),
+      onKeyEvent: (KeyEvent event) {
+        if (event.logicalKey == LogicalKeyboardKey.shiftLeft ||
+            event.logicalKey == LogicalKeyboardKey.shiftRight) {
+          if (event is KeyDownEvent) {
+            gFFI.peerTabModel.setShiftDown(true);
+          } else if (event is KeyUpEvent) {
+            gFFI.peerTabModel.setShiftDown(false);
+          }
         }
-      }
-    },
-  );
+      },
+    );
+  }
 }

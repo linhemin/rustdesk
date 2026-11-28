@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// Visuals for the unified desktop and mobile workspaces.
+/// Visuals for the unified desktop, web, and mobile workspaces.
 bool get usesWorkspaceStyle =>
-    !kIsWeb &&
+    kIsWeb ||
     const {
       TargetPlatform.iOS,
       TargetPlatform.android,
@@ -122,9 +122,11 @@ class WorkspaceStyle {
         background: background,
         surface: paper,
         onSurface: ink,
+        onSurfaceVariant: muted,
         onBackground: ink,
         outline: muted,
         outlineVariant: line,
+        surfaceContainerLow: dark ? wellDark : wellLight,
         surfaceContainerHighest: elevated,
       ),
       textTheme: text.copyWith(
@@ -184,6 +186,14 @@ class WorkspaceStyle {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
+        elevation: 0,
+        backgroundColor: accent,
+        foregroundColor: Colors.white,
+        shape: shape,
+        textStyle: text.labelLarge?.copyWith(fontWeight: FontWeight.w600),
+      )),
+      filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
         elevation: 0,
         backgroundColor: accent,
         foregroundColor: Colors.white,

@@ -100,71 +100,73 @@ class WorkspaceNavigation extends StatelessWidget {
         }
 
         return Row(children: [
-          Container(
-              width: railWidth,
-              decoration: BoxDecoration(
-                color: WorkspaceStyle.sidebarColor(context),
-                border: BorderDirectional(
-                    end: BorderSide(color: theme.dividerColor)),
-              ),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Padding(
-                        padding: EdgeInsets.fromLTRB(
-                            wide ? 16 : 16, 18, wide ? 12 : 16, 18),
-                        child: Row(children: [
-                          SizedBox.square(dimension: 28, child: mark),
-                          if (wide) ...[
-                            const SizedBox(width: 9),
-                            Expanded(
-                                child: Text(brand,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        color: inkDefault,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 14,
-                                        letterSpacing: -.4)))
-                          ]
-                        ])),
-                    if (wide && identity != null && bounds.maxWidth >= 740)
+          FocusTraversalGroup(
+            child: Container(
+                width: railWidth,
+                decoration: BoxDecoration(
+                  color: WorkspaceStyle.sidebarColor(context),
+                  border: BorderDirectional(
+                      end: BorderSide(color: theme.dividerColor)),
+                ),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
                       Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
-                          child: identity!),
-                    Expanded(
-                        child: nativeNavigation != null
-                            ? nativeNavigation!
-                            : ListView(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 10),
-                                children: [
-                                    for (var i = 0;
-                                        i < destinations.length;
-                                        i++)
-                                      Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 4),
-                                          child: item(
-                                              destinations[i].label,
-                                              destinations[i].icon,
-                                              i == current,
-                                              () => onSelect(i))),
-                                  ])),
-                    if (onSettings != null && settings != null) ...[
-                      Divider(
-                          color: theme.dividerColor,
-                          height: 1,
-                          indent: 12,
-                          endIndent: 12),
-                      Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
-                          child: item(settings!, Icons.settings_outlined,
-                              current == destinations.length, onSettings!)),
-                    ],
-                    if (footer != null) footer!,
-                  ])),
-          Expanded(child: child),
+                          padding: EdgeInsetsDirectional.fromSTEB(
+                              16, 18, wide ? 12 : 16, 18),
+                          child: Row(children: [
+                            SizedBox.square(dimension: 28, child: mark),
+                            if (wide) ...[
+                              const SizedBox(width: 9),
+                              Expanded(
+                                  child: Text(brand,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: inkDefault,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                          letterSpacing: -.4)))
+                            ]
+                          ])),
+                      if (wide && identity != null && bounds.maxWidth >= 740)
+                        Padding(
+                            padding: const EdgeInsets.fromLTRB(10, 0, 10, 16),
+                            child: identity!),
+                      Expanded(
+                          child: nativeNavigation != null
+                              ? nativeNavigation!
+                              : ListView(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 10),
+                                  children: [
+                                      for (var i = 0;
+                                          i < destinations.length;
+                                          i++)
+                                        Padding(
+                                            padding:
+                                                const EdgeInsets.only(bottom: 4),
+                                            child: item(
+                                                destinations[i].label,
+                                                destinations[i].icon,
+                                                i == current,
+                                                () => onSelect(i))),
+                                    ])),
+                      if (onSettings != null && settings != null) ...[
+                        Divider(
+                            color: theme.dividerColor,
+                            height: 1,
+                            indent: 12,
+                            endIndent: 12),
+                        Padding(
+                            padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+                            child: item(settings!, Icons.settings_outlined,
+                                current == destinations.length, onSettings!)),
+                      ],
+                      if (footer != null) footer!,
+                    ])),
+          ),
+          Expanded(child: FocusTraversalGroup(child: child)),
         ]);
       });
 }
