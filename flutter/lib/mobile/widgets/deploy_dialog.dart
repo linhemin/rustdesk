@@ -110,5 +110,9 @@ void showDeployDialog() {
       onSubmit: submit,
       onCancel: isInProgress ? null : close,
     );
-  }, tag: _deployDialogTag);
+  }, tag: _deployDialogTag).whenComplete(() => WidgetsBinding.instance
+          .addPostFrameCallback((_) {
+        tokenController.dispose();
+        idController.dispose();
+      }));
 }

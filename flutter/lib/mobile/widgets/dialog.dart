@@ -226,7 +226,11 @@ void showServerSettingsWithValue(
         ),
       ],
     );
-  });
+  }).whenComplete(() => WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final c in controllers) {
+          c.dispose();
+        }
+      }));
 }
 
 TextFormField serverSettingsTextFormField({

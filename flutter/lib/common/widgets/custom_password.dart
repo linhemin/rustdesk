@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:get/get.dart';
 import 'package:password_strength/password_strength.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 abstract class ValidationRule {
   String get name;
@@ -80,22 +81,26 @@ class PasswordStrengthIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     return Obx(() {
       var strength = estimatePasswordStrength(password.value);
-      return Row(
-        children: [
-          Expanded(
-              child: _indicator(
-                  password.isEmpty ? Colors.grey : _getColor(strength))),
-          Expanded(
-              child: _indicator(password.isEmpty || strength < weakMedium
-                  ? Colors.grey
-                  : _getColor(strength))),
-          Expanded(
-              child: _indicator(password.isEmpty || strength < mediumStrong
-                  ? Colors.grey
-                  : _getColor(strength))),
-          Text(password.isEmpty ? '' : translate(_getLabel(strength)))
-              .marginOnly(left: password.isEmpty ? 0 : 8),
-        ],
+      final label = password.isEmpty ? '' : translate(_getLabel(strength));
+      final color = _getColor(context, strength);
+      final inactiveColor = Theme.of(context).dividerColor;
+      return Semantics(
+        liveRegion: true,
+        label: label,
+        child: Row(
+          children: [
+            Expanded(
+                child: _indicator(password.isEmpty ? inactiveColor : color)),
+            Expanded(
+                child: _indicator(
+                    password.isEmpty || strength < weakMedium ? inactiveColor : color)),
+            Expanded(
+                child: _indicator(password.isEmpty || strength < mediumStrong
+                    ? inactiveColor
+                    : color)),
+            if (label.isNotEmpty) Text(label).marginOnly(left: 8),
+          ],
+        ),
       );
     });
   }
@@ -117,13 +122,13 @@ class PasswordStrengthIndicator extends StatelessWidget {
     }
   }
 
-  Color _getColor(double strength) {
+  Color _getColor(BuildContext context, double strength) {
     if (strength < weakMedium) {
-      return Colors.yellow;
+      return WorkspaceStyle.danger(context);
     } else if (strength < mediumStrong) {
-      return Colors.blue;
+      return WorkspaceStyle.warning(context);
     } else {
-      return Colors.green;
+      return WorkspaceStyle.success(context);
     }
   }
 }

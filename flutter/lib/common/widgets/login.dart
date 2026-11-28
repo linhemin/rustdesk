@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/user_model.dart';
@@ -114,13 +115,16 @@ class ButtonOP extends StatelessWidget {
     final branding = _oidcProviderBranding(op);
     final buttonLabel = translate("Continue with {${branding.label}}");
     return Row(children: [
-      Container(
-        height: height,
-        width: 200,
-        child: Obx(() => ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: primaryColor,
-            ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
+      Expanded(
+        child: SizedBox(
+          height: height,
+          child: Obx(() => ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryColor,
+                foregroundColor: primaryColor.computeLuminance() > 0.5
+                    ? Colors.black87
+                    : Colors.white,
+              ).copyWith(elevation: ButtonStyleButton.allOrNull(0.0)),
             onPressed:
                 curOP.value == 'rustdesk' || !canStartAuth() ? null : onTap,
             child: Row(
@@ -141,6 +145,7 @@ class ButtonOP extends StatelessWidget {
                 ),
               ],
             ))),
+        ),
       ),
     ]);
   }
@@ -480,7 +485,7 @@ class _WidgetOPState extends State<WidgetOP> {
           op: widget.config.op,
           curOP: widget.curOP,
           icon: widget.config.icon,
-          primaryColor: str2color(widget.config.op, 0x7f),
+          primaryColor: str2color(widget.config.op, 0xDF),
           height: 36,
           canStartAuth: widget.canStartAuth,
           onTap: () async {
@@ -628,8 +633,8 @@ class LoginWidgetOP extends StatelessWidget {
       children.removeLast();
     }
     return SingleChildScrollView(
-        child: Container(
-            width: 200,
+        child: SizedBox(
+            width: double.infinity,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.spaceAround,
@@ -682,25 +687,21 @@ class LoginWidgetUserPass extends StatelessWidget {
             // NOT use Offstage to wrap LinearProgressIndicator
             if (isInProgress) const LinearProgressIndicator(),
             const SizedBox(height: 12.0),
-            FittedBox(
-                child:
-                    Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(
-                height: 38,
-                width: 200,
-                child: Obx(() => ElevatedButton(
-                      child: Text(
-                        translate('Login'),
-                        style: TextStyle(fontSize: 16),
-                      ),
-                      onPressed: curOP.value.isEmpty && !isInProgress
-                          ? () {
-                              onLogin();
-                            }
-                          : null,
-                    )),
-              ),
-            ])),
+            SizedBox(
+              height: 38,
+              width: double.infinity,
+              child: Obx(() => ElevatedButton(
+                    child: Text(
+                      translate('Login'),
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                    onPressed: curOP.value.isEmpty && !isInProgress
+                        ? () {
+                            onLogin();
+                          }
+                        : null,
+                  )),
+            ),
           ],
         ));
   }
@@ -769,18 +770,24 @@ Future<bool?> _openLoginDialog() async {
 
   Future.delayed(Duration.zero, fetchLoginOptions);
 
-  final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
-    username.addListener(() {
-      if (usernameMsg != null) {
-        setState(() => usernameMsg = null);
-      }
-    });
+  void Function(void Function())? dialogSetState;
+  void onUsernameChanged() {
+    if (usernameMsg != null) {
+      dialogSetState?.call(() => usernameMsg = null);
+    }
+  }
 
-    password.addListener(() {
-      if (passwordMsg != null) {
-        setState(() => passwordMsg = null);
-      }
-    });
+  void onPasswordChanged() {
+    if (passwordMsg != null) {
+      dialogSetState?.call(() => passwordMsg = null);
+    }
+  }
+
+  username.addListener(onUsernameChanged);
+  password.addListener(onPasswordChanged);
+
+  final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
+    dialogSetState = setState;
 
     onDialogCancel() {
       canceled = true;
@@ -806,7 +813,7 @@ Future<bool?> _openLoginDialog() async {
           } else if (resp.tfa_type == HttpType.kAuthResTypeTfaCheck) {
             isEmailVerification = false;
           } else {
-            passwordMsg = "Failed, bad tfa type from server";
+            passwordMsg = translate("Failed, bad tfa type from server");
           }
           if (isEmailVerification != null) {
             if (isMobile) {
@@ -829,7 +836,7 @@ Future<bool?> _openLoginDialog() async {
           }
           break;
         default:
-          passwordMsg = "Failed, bad response from server";
+          passwordMsg = translate("Failed, bad response from server");
           break;
       }
     }
@@ -892,7 +899,8 @@ Future<bool?> _openLoginDialog() async {
                 if (!inProgress)
                   SelectableText(
                     error.toString(),
-                    style: const TextStyle(fontSize: 11, color: Colors.red),
+                    style: TextStyle(
+                        fontSize: 11, color: WorkspaceStyle.danger(context)),
                     textAlign: TextAlign.center,
                   ),
               ],
@@ -994,7 +1002,14 @@ Future<bool?> _openLoginDialog() async {
       onCancel: onDialogCancel,
       onSubmit: hideAccountPasswordLogin ? null : onLogin,
     );
-  }).whenComplete(oidcAuth.close);
+  }).whenComplete(() {
+    oidcAuth.close();
+    username.removeListener(onUsernameChanged);
+    password.removeListener(onPasswordChanged);
+    username.dispose();
+    password.dispose();
+    userFocusNode.dispose();
+  });
 
   if (res == true) {
     await UserModel.updateOtherModels();
@@ -1011,6 +1026,7 @@ Future<bool?> verificationCodeDialog(
   String? errorText;
 
   final code = TextEditingController();
+  final emailController = TextEditingController(text: user?.email);
 
   final res = await gFFI.dialogManager.show<bool>((setState, close, context) {
     void onVerify() async {
@@ -1037,7 +1053,7 @@ Future<bool?> verificationCodeDialog(
             }
             break;
           default:
-            errorText = "Failed, bad response from server";
+            errorText = translate("Failed, bad response from server");
             break;
         }
       } on RequestException catch (err) {
@@ -1054,13 +1070,13 @@ Future<bool?> verificationCodeDialog(
             controller: code,
             errorText: errorText,
             readyCallback: onVerify,
-            onChanged: () => errorText = null,
+            onChanged: () => setState(() => errorText = null),
           )
         : Dialog2FaField(
             controller: code,
             errorText: errorText,
             readyCallback: onVerify,
-            onChanged: () => errorText = null,
+            onChanged: () => setState(() => errorText = null),
           );
 
     getOnSubmit() => codeField.isReady ? onVerify : null;
@@ -1074,9 +1090,10 @@ Future<bool?> verificationCodeDialog(
                 offstage: !isEmailVerification || user?.email == null,
                 child: TextField(
                   decoration: InputDecoration(
-                      labelText: "Email", prefixIcon: Icon(Icons.email)),
+                      labelText: translate("Email"),
+                      prefixIcon: const Icon(Icons.email)),
                   readOnly: true,
-                  controller: TextEditingController(text: user?.email),
+                  controller: emailController,
                 ).workaroundFreezeLinuxMint()),
             isEmailVerification ? const SizedBox(height: 8) : const Offstage(),
             codeField,
@@ -1105,6 +1122,9 @@ Future<bool?> verificationCodeDialog(
           dialogButton("Cancel", onPressed: close, isOutline: true),
           dialogButton("Verify", onPressed: getOnSubmit()),
         ]);
+  }).whenComplete(() {
+    code.dispose();
+    emailController.dispose();
   });
   // For verification code, desktop update other models in login dialog, mobile need to close login dialog first,
   // otherwise the soft keyboard will jump out on each key press, so mobile update in verification code dialog.
@@ -1125,8 +1145,8 @@ void logOutConfirmDialog() {
     return CustomAlertDialog(
       content: Text(translate("logout_tip")),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
-        dialogButton(translate("OK"), onPressed: submit),
+        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("OK", onPressed: submit),
       ],
       onSubmit: submit,
       onCancel: close,

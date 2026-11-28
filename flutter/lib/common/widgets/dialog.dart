@@ -13,6 +13,7 @@ import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter_hbb/utils/http_service.dart' as http;
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 import '../../common.dart';
 import '../../models/model.dart';
@@ -158,18 +159,16 @@ void changeIdDialog() {
                     runSpacing: 8,
                     spacing: 4,
                     children: rules.map((e) {
-                      var checked = e.validate(rxId.value);
+                      final checked = e.validate(rxId.value);
+                      final chipColor = checked
+                          ? WorkspaceStyle.success(context)
+                          : WorkspaceStyle.danger(context);
                       return Chip(
                           label: Text(
                             e.name,
-                            style: TextStyle(
-                                color: checked
-                                    ? const Color(0xFF0A9471)
-                                    : Color.fromARGB(255, 198, 86, 157)),
+                            style: TextStyle(color: chipColor),
                           ),
-                          backgroundColor: checked
-                              ? const Color(0xFFD0F7ED)
-                              : Color.fromARGB(255, 247, 205, 232));
+                          backgroundColor: chipColor.withOpacity(0.14));
                     }).toList(),
                   )).marginOnly(bottom: 8)
               : SizedBox.shrink(),
@@ -184,7 +183,7 @@ void changeIdDialog() {
       onSubmit: submit,
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void changeWhiteList({Function()? callback}) async {
@@ -284,7 +283,7 @@ void changeWhiteList({Function()? callback}) async {
       ],
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void changeIdWhiteList({Function()? callback}) async {
@@ -389,13 +388,13 @@ void changeIdWhiteList({Function()? callback}) async {
       ],
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 Future<String> changeDirectAccessPort(
     String currentIP, String currentPort) async {
   final controller = TextEditingController(text: currentPort);
-  await gFFI.dialogManager.show((setState, close, context) {
+  final result = await gFFI.dialogManager.show<String>((setState, close, context) {
     return CustomAlertDialog(
       title: Text(translate("Change Local Port")),
       content: Column(
@@ -410,10 +409,10 @@ Future<String> changeDirectAccessPort(
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                             hintText: '21118',
-                            isCollapsed: true,
-                            prefix: Text('$currentIP : '),
-                            suffix: IconButton(
-                                padding: EdgeInsets.zero,
+                            isDense: true,
+                            prefixText: '$currentIP : ',
+                            suffixIcon: IconButton(
+                                tooltip: translate('Clear'),
                                 icon: const Icon(Icons.clear, size: 16),
                                 onPressed: () => controller.clear())),
                         inputFormatters: [
@@ -433,18 +432,18 @@ Future<String> changeDirectAccessPort(
         dialogButton("OK", onPressed: () async {
           await bind.mainSetOption(
               key: kOptionDirectAccessPort, value: controller.text);
-          close();
+          close(controller.text);
         }),
       ],
       onCancel: close,
     );
-  });
-  return controller.text;
+  }).whenComplete(controller.dispose);
+  return result ?? currentPort;
 }
 
 Future<String> changeAutoDisconnectTimeout(String old) async {
   final controller = TextEditingController(text: old);
-  await gFFI.dialogManager.show((setState, close, context) {
+  final result = await gFFI.dialogManager.show<String>((setState, close, context) {
     return CustomAlertDialog(
       title: Text(translate("Timeout in minutes")),
       content: Column(
@@ -459,9 +458,9 @@ Future<String> changeAutoDisconnectTimeout(String old) async {
                         keyboardType: TextInputType.number,
                         decoration: InputDecoration(
                             hintText: '10',
-                            isCollapsed: true,
-                            suffix: IconButton(
-                                padding: EdgeInsets.zero,
+                            isDense: true,
+                            suffixIcon: IconButton(
+                                tooltip: translate('Clear'),
                                 icon: const Icon(Icons.clear, size: 16),
                                 onPressed: () => controller.clear())),
                         inputFormatters: [
@@ -481,13 +480,13 @@ Future<String> changeAutoDisconnectTimeout(String old) async {
         dialogButton("OK", onPressed: () async {
           await bind.mainSetOption(
               key: kOptionAutoDisconnectTimeout, value: controller.text);
-          close();
+          close(controller.text);
         }),
       ],
       onCancel: close,
     );
-  });
-  return controller.text;
+  }).whenComplete(controller.dispose);
+  return result ?? old;
 }
 
 class DialogTextField extends StatelessWidget {
@@ -503,6 +502,7 @@ class DialogTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final List<TextInputFormatter>? inputFormatters;
   final int? maxLength;
+  final bool autofocus;
 
   static const kUsernameTitle = 'Username';
   static const kUsernameIcon = Icon(Icons.account_circle_outlined);
@@ -521,6 +521,7 @@ class DialogTextField extends StatelessWidget {
       this.keyboardType,
       this.inputFormatters,
       this.maxLength,
+      this.autofocus = false,
       required this.title,
       required this.controller})
       : super(key: key);
@@ -543,7 +544,7 @@ class DialogTextField extends StatelessWidget {
                 ),
                 controller: controller,
                 focusNode: focusNode,
-                autofocus: true,
+                autofocus: autofocus,
                 obscureText: obscureText,
                 keyboardType: keyboardType,
                 inputFormatters: inputFormatters,
@@ -757,21 +758,23 @@ class _DialogVerificationCodeField extends State<DialogVerificationCodeField> {
   SimpleWrapper<String?> errorText = SimpleWrapper(null);
   String _preText = '';
 
+  void _handleControllerChanged() {
+    if (widget.onChanged == null) return;
+    final text = widget.controller.text.trim();
+    if (text == _preText) return;
+    widget.onChanged!(setState, errorText);
+    _preText = text;
+  }
+
   @override
   void initState() {
     super.initState();
     if (widget.autoFocus) {
       _timer =
           Timer(Duration(milliseconds: 50), () => _focusNode.requestFocus());
-
-      if (widget.onChanged != null) {
-        widget.controller.addListener(() {
-          final text = widget.controller.text.trim();
-          if (text == _preText) return;
-          widget.onChanged!(setState, errorText);
-          _preText = text;
-        });
-      }
+    }
+    if (widget.onChanged != null) {
+      widget.controller.addListener(_handleControllerChanged);
     }
 
     // software secure keyboard will take the focus since flutter 3.13
@@ -791,6 +794,7 @@ class _DialogVerificationCodeField extends State<DialogVerificationCodeField> {
   void dispose() {
     _timer?.cancel();
     _timerReRequestFocus?.cancel();
+    widget.controller.removeListener(_handleControllerChanged);
     _focusNode.unfocus();
     _focusNode.dispose();
     super.dispose();
@@ -877,10 +881,11 @@ class _PasswordWidgetState extends State<PasswordWidget> {
       controller: widget.controller,
       prefixIcon: DialogTextField.kPasswordIcon,
       suffixIcon: IconButton(
+        tooltip: translate(_passwordVisible ? 'Hide' : 'Show'),
         icon: Icon(
             // Based on passwordVisible state choose the icon
             _passwordVisible ? Icons.visibility : Icons.visibility_off,
-            color: MyTheme.lightTheme.primaryColor),
+            color: Theme.of(context).colorScheme.primary),
         onPressed: () {
           // Update the state i.e. toggle the state of passwordVisible variable
           setState(() {
@@ -891,6 +896,7 @@ class _PasswordWidgetState extends State<PasswordWidget> {
       obscureText: !_passwordVisible,
       errorText: widget.errorText,
       focusNode: _focusNode,
+      autofocus: widget.autoFocus,
       maxLength: widget.maxLength,
     );
   }
@@ -1072,6 +1078,7 @@ _connectDialog(
             controller: osUsernameController,
             prefixIcon: DialogTextField.kUsernameIcon,
             errorText: null,
+            autofocus: true,
           ),
           if (errUsername.value.isNotEmpty)
             Align(
@@ -1242,26 +1249,27 @@ void showRequestElevationDialog(
     ),
   );
 
-  Widget UacNote = Container(
-    padding: EdgeInsets.fromLTRB(10, 8, 8, 8),
-    decoration: BoxDecoration(
-      color: MyTheme.currentThemeMode() == ThemeMode.dark
-          ? Color.fromARGB(135, 87, 87, 90)
-          : Colors.grey[100],
-      borderRadius: BorderRadius.circular(8),
-      border: Border.all(color: Colors.grey),
-    ),
-    child: Row(
-      children: [
-        Icon(Icons.info_outline_rounded, size: 20).marginOnly(right: 10),
-        Expanded(
-          child: Text(
-            translate('still_click_uac_tip'),
-            style: TextStyle(
-                fontSize: fontSizeNote, fontWeight: FontWeight.normal),
-          ),
-        )
-      ],
+  Widget UacNote = Builder(
+    builder: (context) => Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: WorkspaceStyle.elevatedSurface(context),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline_rounded, size: 20)
+              .marginOnly(right: 10),
+          Expanded(
+            child: Text(
+              translate('still_click_uac_tip'),
+              style: TextStyle(
+                  fontSize: fontSizeNote, fontWeight: FontWeight.normal),
+            ),
+          )
+        ],
+      ),
     ),
   );
 
@@ -1281,6 +1289,7 @@ void showRequestElevationDialog(
                 hintText: translate('elevation_username_tip'),
                 prefixIcon: DialogTextField.kUsernameIcon,
                 errorText: errUser.isEmpty ? null : errUser.value,
+                autofocus: true,
               ),
               PasswordWidget(
                 controller: pwdController,
@@ -1337,6 +1346,9 @@ void showRequestElevationDialog(
       onSubmit: submit,
       onCancel: close,
     );
+  }).whenComplete(() {
+    userController.dispose();
+    pwdController.dispose();
   });
 }
 
@@ -1529,46 +1541,72 @@ Widget buildNoteTextField({
   required TextEditingController controller,
   required VoidCallback onEscape,
 }) {
-  final focusNode = FocusNode(
-    onKey: (FocusNode node, RawKeyEvent evt) {
-      if (evt.logicalKey.keyLabel == 'Enter') {
-        if (evt is RawKeyDownEvent) {
-          int pos = controller.selection.base.offset;
-          controller.text =
-              '${controller.text.substring(0, pos)}\n${controller.text.substring(pos)}';
-          controller.selection =
-              TextSelection.fromPosition(TextPosition(offset: pos + 1));
-        }
-        return KeyEventResult.handled;
-      }
-      if (evt.logicalKey.keyLabel == 'Esc') {
-        if (evt is RawKeyDownEvent) {
-          onEscape();
-        }
-        return KeyEventResult.handled;
-      } else {
-        return KeyEventResult.ignored;
-      }
-    },
-  );
+  return _NoteTextField(controller: controller, onEscape: onEscape);
+}
 
-  return TextField(
-    autofocus: true,
-    keyboardType: TextInputType.multiline,
-    textInputAction: TextInputAction.newline,
-    decoration: InputDecoration(
-      hintText: translate('input note here'),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-      ),
-      contentPadding: EdgeInsets.all(12),
-    ),
-    minLines: 5,
-    maxLines: null,
-    maxLength: 256,
-    controller: controller,
-    focusNode: focusNode,
-  ).workaroundFreezeLinuxMint();
+class _NoteTextField extends StatefulWidget {
+  const _NoteTextField({required this.controller, required this.onEscape});
+
+  final TextEditingController controller;
+  final VoidCallback onEscape;
+
+  @override
+  State<_NoteTextField> createState() => _NoteTextFieldState();
+}
+
+class _NoteTextFieldState extends State<_NoteTextField> {
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      onKeyEvent: (node, evt) {
+        if (evt.logicalKey == LogicalKeyboardKey.enter ||
+            evt.logicalKey == LogicalKeyboardKey.numpadEnter) {
+          if (evt is KeyDownEvent) {
+            final text = widget.controller.text;
+            final base = widget.controller.selection.base.offset;
+            final pos = base < 0 ? text.length : base.clamp(0, text.length);
+            widget.controller.text =
+                '${text.substring(0, pos)}\n${text.substring(pos)}';
+            widget.controller.selection =
+                TextSelection.fromPosition(TextPosition(offset: pos + 1));
+          }
+          return KeyEventResult.handled;
+        }
+        if (evt.logicalKey == LogicalKeyboardKey.escape) {
+          if (evt is KeyDownEvent) {
+            widget.onEscape();
+          }
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: TextField(
+        autofocus: true,
+        keyboardType: TextInputType.multiline,
+        textInputAction: TextInputAction.newline,
+        decoration: InputDecoration(
+          hintText: translate('input note here'),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+          ),
+          contentPadding: const EdgeInsets.all(12),
+        ),
+        minLines: 5,
+        maxLines: null,
+        maxLength: 256,
+        controller: widget.controller,
+        focusNode: _focusNode,
+      ).workaroundFreezeLinuxMint(),
+    );
+  }
 }
 
 showAuditDialog(FFI ffi) async {
@@ -1583,9 +1621,8 @@ showAuditDialog(FFI ffi) async {
 
     return CustomAlertDialog(
       title: Text(translate('Note')),
-      content: SizedBox(
-          width: 250,
-          height: 120,
+      content: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 250, minHeight: 120),
           child: buildNoteTextField(
             controller: controller,
             onEscape: close,
@@ -1597,7 +1634,7 @@ showAuditDialog(FFI ffi) async {
       onSubmit: submit,
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 bool allowAskForNoteAtEndOfConnection(FFI? ffi, bool closedByControlling) {
@@ -1729,27 +1766,25 @@ Future<bool?> _showConnEndAuditDialogCloseCanceled({
       close(false);
     }
 
-    final buttons = [
-      dialogButton('OK', onPressed: isInProgress ? null : submit)
-    ];
-    if (type == 'relay-hint' || type == 'relay-hint2') {
-      buttons.add(dialogButton('Retry', onPressed: () async {
-        await set();
-        close(true);
-        ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, false);
-      }));
-      if (type == 'relay-hint2') {
-        buttons.add(dialogButton('Connect via relay', onPressed: () async {
+    final buttons = <Widget>[
+      if (closedByControlling)
+        dialogButton('Cancel',
+            onPressed: isInProgress ? null : cancel, isOutline: true),
+      if (type == 'relay-hint' || type == 'relay-hint2') ...[
+        dialogButton('Retry', onPressed: () async {
           await set();
           close(true);
-          ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, true);
-        }));
-      }
-    }
-    if (closedByControlling) {
-      buttons.add(dialogButton('Cancel',
-          onPressed: isInProgress ? null : cancel, isOutline: true));
-    }
+          ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, false);
+        }),
+        if (type == 'relay-hint2')
+          dialogButton('Connect via relay', onPressed: () async {
+            await set();
+            close(true);
+            ffi.ffiModel.reconnect(ffi.dialogManager, ffi.sessionId, true);
+          }),
+      ],
+      dialogButton('OK', onPressed: isInProgress ? null : submit),
+    ];
 
     Widget content;
     if (closedByControlling) {
@@ -2128,6 +2163,11 @@ class _MobileVideoDialog extends CustomAlertDialog {
   const _MobileVideoDialog({required super.content, required super.actions});
 
   @override
+  State<CustomAlertDialog> createState() => _MobileVideoDialogState();
+}
+
+class _MobileVideoDialogState extends State<_MobileVideoDialog> {
+  @override
   Widget build(BuildContext context) => FocusScope(
       autofocus: true,
       child: SafeArea(
@@ -2138,8 +2178,8 @@ class _MobileVideoDialog extends CustomAlertDialog {
           contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
           actionsPadding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
           title: Text(translate('Video settings')),
-          content: SizedBox(width: 440, child: content),
-          actions: actions,
+          content: SizedBox(width: 440, child: widget.content),
+          actions: widget.actions,
         ),
       ));
 }
@@ -2387,7 +2427,7 @@ void editAbPeerNoteDialog(String id) {
       onSubmit: submit,
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void renameDialog(
@@ -2518,7 +2558,7 @@ void changeBot({Function()? callback}) async {
       ],
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void change2fa({Function()? callback}) async {
@@ -2542,7 +2582,9 @@ void change2fa({Function()? callback}) async {
         callback?.call();
         close();
       } else {
-        errorText = translate('wrong-2fa-code');
+        if (context.mounted) {
+          setState(() => errorText = translate('wrong-2fa-code'));
+        }
       }
     }
 
@@ -2588,7 +2630,7 @@ void change2fa({Function()? callback}) async {
       ],
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void enter2FaDialog(
@@ -2651,9 +2693,11 @@ void enter2FaDialog(
                 onPressed: submitReady.isTrue ? submit : null,
               )),
         ],
-        onSubmit: submit,
+        onSubmit: () {
+          if (submitReady.isTrue) submit();
+        },
         onCancel: cancel);
-  });
+  }).whenComplete(controller.dispose);
 }
 
 // This dialog should not be dismissed, otherwise it will be black screen, have not reproduced this.
@@ -2754,8 +2798,8 @@ void addPeersToAbDialog(
     submit() async {
       if (controller.text != gFFI.abModel.translatedName(currentName.value)) {
         BotToast.showText(
-            text: 'illegal address book name: ${controller.text}',
-            contentColor: Colors.red);
+            text: '${translate('Invalid')}: ${controller.text}',
+            contentColor: WorkspaceStyle.danger(context));
         return;
       }
       isInProgress.value = true;
@@ -2773,7 +2817,8 @@ void addPeersToAbDialog(
       title: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(IconFont.addressBook, color: MyTheme.accent),
+          Icon(IconFont.addressBook,
+              color: Theme.of(context).colorScheme.primary),
           Text(translate('Add to address book')).paddingOnly(left: 10),
         ],
       ),
@@ -2848,7 +2893,7 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
       title: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.key, color: MyTheme.accent),
+          Icon(Icons.key, color: Theme.of(context).colorScheme.primary),
           Text(translate(peer.password.isEmpty
                   ? 'Set shared password'
                   : 'Change Password'))
@@ -2862,9 +2907,10 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
               obscureText: !passwordVisible,
               decoration: InputDecoration(
                 suffixIcon: IconButton(
+                  tooltip: translate(passwordVisible ? 'Hide' : 'Show'),
                   icon: Icon(
                       passwordVisible ? Icons.visibility : Icons.visibility_off,
-                      color: MyTheme.lightTheme.primaryColor),
+                      color: Theme.of(context).colorScheme.primary),
                   onPressed: () {
                     setState(() {
                       passwordVisible = !passwordVisible;
@@ -2875,10 +2921,13 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
             ).workaroundFreezeLinuxMint(),
             if (!gFFI.abModel.current.isPersonal())
               Row(children: [
-                Icon(Icons.info, color: Colors.amber).marginOnly(right: 4),
-                Text(
-                  translate('share_warning_tip'),
-                  style: TextStyle(fontSize: 12),
+                Icon(Icons.info, color: WorkspaceStyle.warning(context))
+                    .marginOnly(right: 4),
+                Expanded(
+                  child: Text(
+                    translate('share_warning_tip'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 )
               ]).marginSymmetric(vertical: 10),
             // NOT use Offstage to wrap LinearProgressIndicator
@@ -2897,7 +2946,8 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
             icon: Icon(Icons.delete_outline_rounded),
             onPressed: () => change(''),
             buttonStyle: ButtonStyle(
-                backgroundColor: MaterialStatePropertyAll(Colors.red)),
+                backgroundColor:
+                    WidgetStatePropertyAll(WorkspaceStyle.danger(context))),
           ),
         Obx(() => dialogButton(
               "OK",
@@ -2906,10 +2956,12 @@ void setSharedAbPasswordDialog(String abName, Peer peer) {
                   isInputEmpty.value ? null : () => change(controller.text),
             )),
       ],
-      onSubmit: isInputEmpty.value ? null : () => change(controller.text),
+      onSubmit: () {
+        if (!isInputEmpty.value) change(controller.text);
+      },
       onCancel: cancel,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void CommonConfirmDialog(OverlayDialogManager dialogManager, String content,
@@ -2931,8 +2983,8 @@ void CommonConfirmDialog(OverlayDialogManager dialogManager, String content,
         ],
       ).marginOnly(bottom: 12),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
-        dialogButton(translate("OK"), onPressed: submit),
+        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("OK", onPressed: submit),
       ],
       onSubmit: submit,
       onCancel: close,
@@ -2980,6 +3032,7 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
             obscureText: true,
             errorText: pinErrorText,
             maxLength: maxLength,
+            autofocus: true,
           ),
           DialogTextField(
             title: translate('Confirmation'),
@@ -2991,12 +3044,15 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
         ],
       ).marginOnly(bottom: 12),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
-        dialogButton(translate("OK"), onPressed: submit),
+        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("OK", onPressed: submit),
       ],
       onSubmit: submit,
       onCancel: close,
     );
+  }).whenComplete(() {
+    pinController.dispose();
+    confirmController.dispose();
   });
 }
 
@@ -3029,13 +3085,13 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
         ],
       ).marginOnly(bottom: 12),
       actions: [
-        dialogButton(translate("Cancel"), onPressed: close, isOutline: true),
-        dialogButton(translate("OK"), onPressed: submit),
+        dialogButton("Cancel", onPressed: close, isOutline: true),
+        dialogButton("OK", onPressed: submit),
       ],
       onSubmit: submit,
       onCancel: close,
     );
-  });
+  }).whenComplete(controller.dispose);
 }
 
 void confrimDeleteTrustedDevicesDialog(
@@ -3091,7 +3147,12 @@ void manageTrustedDeviceDialog() async {
       title: Text(translate("Manage trusted devices")),
       content: trustedDevicesTable(trustedDevices, selectedDevices),
       actions: [
-        Obx(() => dialogButton(translate("Delete"),
+        dialogButton("Close", onPressed: close, isOutline: true)
+            .marginOnly(top: 12),
+        Obx(() => dialogButton("Delete",
+                buttonStyle: ButtonStyle(
+                    backgroundColor:
+                        WidgetStatePropertyAll(WorkspaceStyle.danger(context))),
                 onPressed: selectedDevices.isEmpty
                     ? null
                     : () {
@@ -3102,8 +3163,6 @@ void manageTrustedDeviceDialog() async {
                       },
                 isOutline: false)
             .marginOnly(top: 12)),
-        dialogButton(translate("Close"), onPressed: close, isOutline: true)
-            .marginOnly(top: 12),
       ],
       onCancel: close,
     );
@@ -3192,71 +3251,102 @@ class TrustedDevice {
 
 Widget trustedDevicesTable(
     RxList<TrustedDevice> devices, RxList<Uint8List> selectedDevices) {
-  RxBool selectAll = false.obs;
-  setSelectAll() {
-    if (selectedDevices.isNotEmpty &&
-        selectedDevices.length == devices.length) {
-      selectAll.value = true;
-    } else {
-      selectAll.value = false;
-    }
+  return _TrustedDevicesTable(
+      devices: devices, selectedDevices: selectedDevices);
+}
+
+class _TrustedDevicesTable extends StatefulWidget {
+  const _TrustedDevicesTable({
+    required this.devices,
+    required this.selectedDevices,
+  });
+
+  final RxList<TrustedDevice> devices;
+  final RxList<Uint8List> selectedDevices;
+
+  @override
+  State<_TrustedDevicesTable> createState() => _TrustedDevicesTableState();
+}
+
+class _TrustedDevicesTableState extends State<_TrustedDevicesTable> {
+  StreamSubscription? _devicesSub;
+  StreamSubscription? _selectedSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _devicesSub = widget.devices.listen((_) {
+      if (mounted) setState(() {});
+    });
+    _selectedSub = widget.selectedDevices.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
-  devices.listen((_) {
-    setSelectAll();
-  });
-  selectedDevices.listen((_) {
-    setSelectAll();
-  });
-  return FittedBox(
-    child: Obx(() => DataTable(
-          columns: [
-            DataColumn(
-                label: Checkbox(
-              value: selectAll.value,
-              onChanged: (value) {
-                if (value == true) {
-                  selectedDevices.clear();
-                  selectedDevices.addAll(devices.map((e) => e.recordId));
-                } else {
-                  selectedDevices.clear();
-                }
-              },
-            )),
-            DataColumn(label: Text(translate('Platform'))),
-            DataColumn(label: Text(translate('ID'))),
-            DataColumn(label: Text(translate('Username'))),
-            DataColumn(label: Text(translate('Days remaining'))),
-          ],
-          rows: devices.map((device) {
-            return DataRow(cells: [
-              DataCell(Checkbox(
-                value: selectedDevices.contains(device.recordId),
+  @override
+  void dispose() {
+    _devicesSub?.cancel();
+    _selectedSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final devices = widget.devices;
+    final selectedDevices = widget.selectedDevices;
+    final selectAll = selectedDevices.isNotEmpty &&
+        selectedDevices.length == devices.length;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Obx(() => DataTable(
+            columns: [
+              DataColumn(
+                  label: Checkbox(
+                value: selectAll,
                 onChanged: (value) {
-                  if (value == null) return;
-                  if (value) {
-                    selectedDevices.remove(device.recordId);
-                    selectedDevices.add(device.recordId);
+                  if (value == true) {
+                    selectedDevices.clear();
+                    selectedDevices.addAll(devices.map((e) => e.recordId));
                   } else {
-                    selectedDevices.remove(device.recordId);
+                    selectedDevices.clear();
                   }
                 },
               )),
-              DataCell(Text(device.platform)),
-              DataCell(Text(device.id)),
-              DataCell(Text(device.name)),
-              DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
-                Text(device.daysRemaining()),
-                if (device.expiresAt != 0)
-                  IconButton(
-                    icon: Icon(Icons.refresh),
-                    tooltip: translate('Renew trust'),
-                    onPressed: () =>
-                        renewTrustedDevice(device, devices, selectedDevices),
-                  ),
-              ])),
-            ]);
-          }).toList(),
-        )),
-  );
+              DataColumn(label: Text(translate('Platform'))),
+              DataColumn(label: Text(translate('ID'))),
+              DataColumn(label: Text(translate('Username'))),
+              DataColumn(label: Text(translate('Days remaining'))),
+            ],
+            rows: devices.map((device) {
+              return DataRow(cells: [
+                DataCell(Checkbox(
+                  value: selectedDevices.contains(device.recordId),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    if (value) {
+                      selectedDevices.remove(device.recordId);
+                      selectedDevices.add(device.recordId);
+                    } else {
+                      selectedDevices.remove(device.recordId);
+                    }
+                  },
+                )),
+                DataCell(Text(device.platform)),
+                DataCell(Text(device.id)),
+                DataCell(Text(device.name)),
+                DataCell(Row(mainAxisSize: MainAxisSize.min, children: [
+                  Text(device.daysRemaining()),
+                  if (device.expiresAt != 0)
+                    IconButton(
+                      icon: Icon(Icons.refresh),
+                      tooltip: translate('Renew trust'),
+                      onPressed: () =>
+                          renewTrustedDevice(device, devices, selectedDevices),
+                    ),
+                ])),
+              ]);
+            }).toList(),
+          )),
+    );
+  }
 }

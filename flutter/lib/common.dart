@@ -343,9 +343,9 @@ class MyTheme {
         : EdgeInsets.fromLTRB(p, 0, (p - mobileTextButtonPaddingLR), (p / 2));
   }
 
-  static EdgeInsets dialogButtonPadding = (isDesktop || isWebDesktop)
-      ? EdgeInsets.only(left: dialogPadding)
-      : EdgeInsets.only(left: dialogPadding / 3);
+  static EdgeInsetsGeometry dialogButtonPadding = (isDesktop || isWebDesktop)
+      ? const EdgeInsetsDirectional.only(start: dialogPadding)
+      : const EdgeInsetsDirectional.only(start: dialogPadding / 3);
 
   static ScrollbarThemeData scrollbarTheme = ScrollbarThemeData(
     thickness: MaterialStateProperty.all(6),
@@ -1070,7 +1070,7 @@ void showToast(String text,
 // - Remove argument "contentPadding", no need for it, all should look the same.
 // - Remove "required" for argument "content". See simple confirm dialog "delete peer", only title and actions are used. No need to "content: SizedBox.shrink()".
 // - Make dead code alive, transform arguments "onSubmit" and "onCancel" into correspondenting buttons "ConfirmOkButton", "CancelButton".
-class CustomAlertDialog extends StatelessWidget {
+class CustomAlertDialog extends StatefulWidget {
   const CustomAlertDialog(
       {Key? key,
       this.title,
@@ -1093,34 +1093,57 @@ class CustomAlertDialog extends StatelessWidget {
   final Function()? onCancel;
 
   @override
-  Widget build(BuildContext context) {
-    // request focus
-    FocusScopeNode scopeNode = FocusScopeNode();
-    Future.delayed(Duration.zero, () {
-      if (!scopeNode.hasFocus) scopeNode.requestFocus();
-    });
-    bool tabTapped = false;
-    if (isAndroid) gFFI.invokeMethod("enable_soft_keyboard", true);
+  State<CustomAlertDialog> createState() => _CustomAlertDialogState();
+}
 
+class _CustomAlertDialogState extends State<CustomAlertDialog> {
+  final FocusScopeNode _scopeNode = FocusScopeNode();
+  bool _tabTapped = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (isAndroid) {
+      gFFI.invokeMethod("enable_soft_keyboard", true);
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_scopeNode.hasFocus) {
+        _scopeNode.requestFocus();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _scopeNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return FocusScope(
-      node: scopeNode,
+      node: _scopeNode,
       autofocus: true,
-      onKey: (node, key) {
-        if (key.logicalKey == LogicalKeyboardKey.escape) {
-          if (key is RawKeyDownEvent) {
-            onCancel?.call();
+      onKeyEvent: (node, event) {
+        if (event.logicalKey == LogicalKeyboardKey.escape) {
+          if (event is KeyDownEvent) {
+            widget.onCancel?.call();
           }
           return KeyEventResult.handled; // avoid TextField exception on escape
-        } else if (!tabTapped &&
-            onSubmit != null &&
-            (key.logicalKey == LogicalKeyboardKey.enter ||
-                key.logicalKey == LogicalKeyboardKey.numpadEnter)) {
-          if (key is RawKeyDownEvent) onSubmit?.call();
+        } else if (!_tabTapped &&
+            widget.onSubmit != null &&
+            (event.logicalKey == LogicalKeyboardKey.enter ||
+                event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
+          if (event is KeyDownEvent) widget.onSubmit?.call();
           return KeyEventResult.handled;
-        } else if (key.logicalKey == LogicalKeyboardKey.tab) {
-          if (key is RawKeyDownEvent) {
-            scopeNode.nextFocus();
-            tabTapped = true;
+        } else if (event.logicalKey == LogicalKeyboardKey.tab) {
+          if (event is KeyDownEvent || event is KeyRepeatEvent) {
+            if (HardwareKeyboard.instance.isShiftPressed) {
+              _scopeNode.previousFocus();
+            } else {
+              _scopeNode.nextFocus();
+            }
+            _tabTapped = true;
           }
           return KeyEventResult.handled;
         }
@@ -1128,15 +1151,15 @@ class CustomAlertDialog extends StatelessWidget {
       },
       child: AlertDialog(
           scrollable: true,
-          title: title,
+          title: widget.title,
           content: ConstrainedBox(
-            constraints: contentBoxConstraints,
-            child: content,
+            constraints: widget.contentBoxConstraints,
+            child: widget.content,
           ),
-          actions: actions,
-          titlePadding: titlePadding ?? MyTheme.dialogTitlePadding(),
+          actions: widget.actions,
+          titlePadding: widget.titlePadding ?? MyTheme.dialogTitlePadding(),
           contentPadding:
-              MyTheme.dialogContentPadding(actions: actions is List),
+              MyTheme.dialogContentPadding(actions: widget.actions is List),
           actionsPadding: MyTheme.dialogActionsPadding(),
           buttonPadding: MyTheme.dialogButtonPadding),
     );
@@ -3110,11 +3133,16 @@ Widget dialogButton(String text,
             );
     }
   } else {
+    final bgColor = buttonStyle?.backgroundColor?.resolve({});
+    final fgColor = buttonStyle?.foregroundColor?.resolve({}) ?? bgColor;
+    final resolvedStyle = fgColor != null
+        ? (style ?? const TextStyle()).copyWith(color: fgColor)
+        : style;
     return TextButton(
       onPressed: onPressed,
       child: Text(
         translate(text),
-        style: style,
+        style: resolvedStyle,
       ),
     );
   }
@@ -3980,27 +4008,34 @@ Widget _buildPresetPasswordWarning() {
       'N') {
     return SizedBox.shrink();
   }
-  return Container(
-    color: Colors.yellow,
-    child: Column(
-      children: [
-        Align(
-            child: Text(
-          translate("Security Alert"),
-          style: TextStyle(
-            color: Colors.red,
-            fontSize:
-                18, // https://github.com/rustdesk/rustdesk-server-pro/issues/261
-            fontWeight: FontWeight.bold,
-          ),
-        )).paddingOnly(bottom: 8),
-        Text(
-          translate("preset_password_warning"),
-          style: TextStyle(color: Colors.red),
-        )
-      ],
-    ).paddingAll(8),
-  ); // Show a warning message if the Future completed with true
+  return Builder(builder: (context) {
+    final warningColor = WorkspaceStyle.warning(context);
+    final dangerColor = WorkspaceStyle.danger(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: warningColor.withOpacity(0.16),
+        border: Border.all(color: warningColor.withOpacity(0.4)),
+      ),
+      child: Column(
+        children: [
+          Align(
+              child: Text(
+            translate("Security Alert"),
+            style: TextStyle(
+              color: dangerColor,
+              fontSize:
+                  18, // https://github.com/rustdesk/rustdesk-server-pro/issues/261
+              fontWeight: FontWeight.bold,
+            ),
+          )).paddingOnly(bottom: 8),
+          Text(
+            translate("preset_password_warning"),
+            style: TextStyle(color: dangerColor),
+          )
+        ],
+      ).paddingAll(8),
+    );
+  }); // Show a warning message if the Future completed with true
 }
 
 Widget buildPresetPasswordWarningMobile() {
@@ -4154,21 +4189,24 @@ disableWindowMovable(int? windowId) {
 }
 
 Widget netWorkErrorWidget() {
-  return Center(
-      child: Column(
-    mainAxisAlignment: MainAxisAlignment.center,
-    crossAxisAlignment: CrossAxisAlignment.center,
-    children: [
-      if (!gFFI.userModel.networkErrorFromServer.value)
-        Text(translate("network_error_tip")),
-      ElevatedButton(
-              onPressed: gFFI.userModel.refreshCurrentUser,
-              child: Text(translate("Retry")))
-          .marginSymmetric(vertical: 16),
-      SelectableText(gFFI.userModel.networkError.value,
-          style: TextStyle(fontSize: 11, color: Colors.red)),
-    ],
-  ));
+  return Builder(
+    builder: (context) => Center(
+        child: Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (!gFFI.userModel.networkErrorFromServer.value)
+          Text(translate("network_error_tip")),
+        ElevatedButton(
+                onPressed: gFFI.userModel.refreshCurrentUser,
+                child: Text(translate("Retry")))
+            .marginSymmetric(vertical: 16),
+        SelectableText(gFFI.userModel.networkError.value,
+            style: TextStyle(
+                fontSize: 11, color: WorkspaceStyle.danger(context))),
+      ],
+    )),
+  );
 }
 
 List<ResizeEdge>? get windowManagerEnableResizeEdges => isWindows
