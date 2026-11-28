@@ -762,6 +762,22 @@ impl Client {
         contained: bool,
         direct_permission: &DirectRetryPermission,
     ) -> ResultType<PeerConnection> {
+        // A WebRTC offer retains its signaling socket, so the native UDP mapping needs its own request.
+        let standalone_ice = (direct_permission.direct_only
+            && !direct_permission.native_upgrade
+            && !key.is_empty()
+            && crate::get_udp_punch_enabled()
+            && !interface.is_force_relay()
+            && !use_ws()
+            && !hbb_common::websocket::is_ws_endpoint(&rendezvous_server)
+            && Self::should_create_webrtc_offerer(&interface))
+        .then(|| {
+            Self::start_direct_ice(
+                peer, key, token, conn_type, interface.clone(), rendezvous_server.clone(),
+                servers.clone(), contained, direct_permission,
+            )
+            .boxed()
+        });
         if !direct_permission.direct_only && matches!(conn_type, ConnType::DEFAULT_CONN | ConnType::FILE_TRANSFER) {
             crate::p2p::regional_relay::prefetch(key);
         }
@@ -778,7 +794,7 @@ impl Client {
         // Shared state for UDP NAT test result
         if crate::get_udp_punch_enabled() && !interface.is_force_relay() && !ws_signaling {
             let socket = if !key.is_empty() && !Config::is_proxy() && !use_ws()
-                && (direct_permission.native_upgrade || !crate::get_webrtc_enabled()) {
+                && (direct_permission.native_upgrade || standalone_ice.is_some() || !crate::get_webrtc_enabled()) {
                 crate::p2p::ordinary_udp::controller_socket(&rendezvous_server, key,
                     direct_permission.native_upgrade || direct_permission.direct_only).await
             } else {
@@ -822,16 +838,8 @@ impl Client {
         // WebRTC uses its own ICE sockets and does not depend on the legacy UDP punch socket.
         // When this request carries an offer, `_start_inner` keeps its rendezvous socket solely
         // for trickle signaling; a separate offer-less request owns any TCP punch attempt.
-        let webrtc_offerer = if !direct_permission.native_upgrade && Self::should_create_webrtc_offerer(&interface) {
-            crate::p2p::observer_policy::prepare_direct_ice(&rendezvous_server, key).await;
-            let offer = WebRTCStream::new_direct_only("", CONNECT_TIMEOUT).await;
-            match offer {
-                Ok(stream) => Some(stream),
-                Err(err) => {
-                    log::warn!("webrtc offerer setup failed: {}", err);
-                    None
-                }
-            }
+        let webrtc_offerer = if standalone_ice.is_none() && !direct_permission.native_upgrade && Self::should_create_webrtc_offerer(&interface) {
+            Self::create_webrtc_offerer(&rendezvous_server, key).await
         } else {
             None
         };
@@ -856,9 +864,10 @@ impl Client {
             servers.clone(),
             contained,
             direct_permission,
-        );
+        )
+        .boxed();
         #[cfg(target_os = "ios")]
-        let fut = async move {
+        let fut = (async move {
             let mut observation = initial_observation;
             let result = fut.await;
             if let Some(observation) = observation.as_mut() {
@@ -866,39 +875,41 @@ impl Client {
                 observation.finish_initial(direct_webrtc, result.is_err());
             }
             result
-        };
+        })
+        .boxed();
         // The fallback request exists only to carry a TCP punch, so it is pointless once TCP
         // punch is off — it would reach `connect()` with nothing to try and just open a second
         // relay.
-        if ws_signaling || interface.is_force_relay()
-            || (udp.0.is_none() && !has_webrtc_offerer)
-            || !tcp_punch_allowed() || direct_permission.udp_upgrade_only
-        {
+        let tcp_fallback = !ws_signaling && !interface.is_force_relay()
+            && (udp.0.is_some() || has_webrtc_offerer)
+            && tcp_punch_allowed() && !direct_permission.udp_upgrade_only;
+        if !tcp_fallback && standalone_ice.is_none() {
             return fut.await;
         }
-        let preferred_fut = fut.boxed();
         // This is deliberately a pure TCP punch request: its WebRTC argument must stay `None`.
         // TCP punching closes the rendezvous socket before binding a new connection to the same
         // local address; a WebRTC ICE bridge would retain that socket and break the port reuse.
         // The preferred request retains its own socket for WebRTC signaling.
-        let fallback_fut = Self::_start_inner(
-            peer.to_owned(),
-            key.to_owned(),
-            token.to_owned(),
-            conn_type,
-            interface,
-            (None, None),
-            None,
-            None,
-            None,
-            rendezvous_server,
-            servers,
-            contained,
-            direct_permission,
-        )
-        .boxed();
+        let fallback_fut = tcp_fallback.then(|| {
+            Self::_start_inner(
+                peer.to_owned(),
+                key.to_owned(),
+                token.to_owned(),
+                conn_type,
+                interface,
+                (None, None),
+                None,
+                None,
+                None,
+                rendezvous_server,
+                servers,
+                contained,
+                direct_permission,
+            )
+            .boxed()
+        });
         transport_preference::choose(
-            [preferred_fut, fallback_fut],
+            [Some(fut), standalone_ice, fallback_fut].into_iter().flatten(),
             Self::udp_preference_window(),
             |result| direct_permission.session_rank(result),
         )

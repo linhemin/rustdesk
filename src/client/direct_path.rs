@@ -1,6 +1,63 @@
 use super::*;
 
 impl Client {
+    pub(super) async fn create_webrtc_offerer(server: &str, key: &str) -> Option<WebRTCStream> {
+        crate::p2p::observer_policy::prepare_direct_ice(server, key).await;
+        match WebRTCStream::new_direct_only("", CONNECT_TIMEOUT).await {
+            Ok(offer) => Some(offer),
+            Err(err) => {
+                log::warn!("webrtc offerer setup failed: {err}");
+                None
+            }
+        }
+    }
+
+    pub(super) async fn start_direct_ice(
+        peer: &str,
+        key: &str,
+        token: &str,
+        conn_type: ConnType,
+        interface: impl Interface,
+        server: String,
+        servers: Vec<String>,
+        contained: bool,
+        permission: &DirectRetryPermission,
+    ) -> ResultType<PeerConnection> {
+        let offer = Self::create_webrtc_offerer(&server, key)
+            .await
+            .context(DIRECT_ONLY_UNAVAILABLE)?;
+        #[cfg(target_os = "ios")]
+        let mut observation = crate::ios_p2p_diagnostics::Observation::new(true, "initial").map(
+            |mut observation| {
+                observation.observe(&offer);
+                observation
+            },
+        );
+        let result = Self::_start_inner(
+            peer.to_owned(),
+            key.to_owned(),
+            token.to_owned(),
+            conn_type,
+            interface,
+            (None, None),
+            None,
+            None,
+            Some(offer),
+            server,
+            servers,
+            contained,
+            permission,
+        )
+        .boxed()
+        .await;
+        #[cfg(target_os = "ios")]
+        if let Some(observation) = observation.as_mut() {
+            let direct_webrtc = matches!(&result, Ok(((Stream::WebRTC(_), true, ..), ..)));
+            observation.finish_initial(direct_webrtc, result.is_err());
+        }
+        result
+    }
+
     pub(super) fn native_path_dialer(
         interface: impl Interface,
         key: &str,

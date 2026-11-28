@@ -174,3 +174,62 @@ async fn different_server_key_never_receives_the_new_request() {
         .contains("Signature mismatch"));
     serve.await.unwrap();
 }
+
+#[cfg(feature = "flutter")]
+#[tokio::test]
+async fn standalone_direct_ice_signals_without_a_native_udp_mapping_or_relay() {
+    let hbbs = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server = hbbs.local_addr().unwrap().to_string();
+    let hbbr = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = hbbr.local_addr().unwrap().to_string();
+    let (authority, secret) = sign::gen_keypair();
+    let signaling = tokio::spawn(async move {
+        loop {
+            let (tcp, source) = hbbs.accept().await.unwrap();
+            let mut conn = FramedStream::from(tcp, source);
+            let (ephemeral, ephemeral_secret) = box_::gen_keypair();
+            let mut msg = RendezvousMessage::new();
+            msg.set_key_exchange(KeyExchange {
+                keys: vec![sign::sign(&ephemeral.0, &secret).into()],
+                ..Default::default()
+            });
+            conn.send(&msg).await.unwrap();
+            let bytes = conn.next_timeout(3_000).await.unwrap().unwrap();
+            let reply = RendezvousMessage::parse_from_bytes(&bytes).unwrap();
+            let keys = &reply.key_exchange().keys;
+            conn.set_key(Encrypt::decode(&keys[1], &keys[0], &ephemeral_secret).unwrap());
+            let Some(Ok(bytes)) = conn.next_timeout(3_000).await else {
+                // This server grants no extra STUN observers, so that exchange ends here.
+                continue;
+            };
+            let request = RendezvousMessage::parse_from_bytes(&bytes).unwrap();
+            let request = request.punch_hole_request();
+            assert!(request.direct_only);
+            assert_eq!(request.udp_port, 0);
+            assert!(request.session_relays.as_ref().unwrap().servers.is_empty());
+            assert!(WebRTCStream::endpoint_declares_direct_only(&request.webrtc_sdp_offer));
+            msg.set_relay_response(RelayResponse {
+                relay_server: relay,
+                ..Default::default()
+            });
+            conn.send(&msg).await.unwrap();
+            break;
+        }
+    });
+    let ui = crate::ui_session_interface::Session::<crate::flutter::FlutterHandler>::default();
+    let key = crate::encode64(authority.0);
+    let permission = DirectRetryPermission {
+        direct_only: true,
+        ..Default::default()
+    };
+    let attempt = Client::start_direct_ice(
+        "test-peer", &key, "", ConnType::FILE_TRANSFER, ui, server, Vec::new(), true, &permission,
+    );
+    tokio::select! {
+        biased;
+        _ = hbbr.accept() => panic!("direct ICE contacted the relay"),
+        result = attempt => assert_eq!(result.err().unwrap().to_string(), DIRECT_ONLY_UNAVAILABLE),
+        _ = tokio::time::sleep(Duration::from_secs(15)) => panic!("no direct ICE request"),
+    }
+    signaling.await.unwrap();
+}
