@@ -1,13 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common.dart';
+import 'package:flutter_hbb/common.dart' hide Dialog;
 import 'package:flutter_hbb/common/device_profile.dart';
 import 'package:flutter_hbb/common/widgets/autocomplete.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
+import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/generated_bridge.dart';
+import 'package:flutter_hbb/mobile/pages/home_page.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -23,12 +25,15 @@ class _Binding extends Fake implements RustdeskImpl {
   @override
   dynamic noSuchMethod(Invocation call) => switch (call.memberName) {
         #translate => call.namedArguments[#name],
+        #mainGetAppNameSync => 'RustDesk',
         #mainHandleRelayId => Future.value(call.namedArguments[#id] as String),
         #mainGetLastRemoteId => Future.value(''),
         #mainIsUsingPublicServer => Future.value(false),
         #isDisableAb ||
         #isDisableAccount ||
         #isDisableGroupPanel ||
+        #isCustomClient ||
+        #isIncomingOnly ||
         #isOutgoingOnly ||
         #mainIsOptionFixed =>
           false,
@@ -38,6 +43,7 @@ class _Binding extends Fake implements RustdeskImpl {
             _ => '',
           },
         #mainGetBuildinOption ||
+        #mainGetOptionSync ||
         #mainGetLocalOption =>
           '',
         #mainLoadRecentPeers ||
@@ -47,6 +53,15 @@ class _Binding extends Fake implements RustdeskImpl {
           Future<void>.value(),
         _ => super.noSuchMethod(call),
       };
+}
+
+class _RouteObserver extends NavigatorObserver {
+  Route<dynamic>? pushed;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushed = route;
+  }
 }
 
 void main() {
@@ -186,5 +201,65 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 1));
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('web commands find recent peers and stay on the home route',
+      (tester) async {
+    isTest = true;
+    platformFFI.setBindingForTesting(_Binding());
+    await initGlobalFFI();
+    gFFI.recentPeersModel.peers.add(Peer.fromJson({
+      'id': '123456789',
+      'hostname': 'West office',
+      'platform': 'Linux',
+    }));
+    final navigator = GlobalKey<NavigatorState>();
+    final observer = _RouteObserver();
+    await tester.pumpWidget(MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: gFFI.ffiModel),
+        ChangeNotifierProvider.value(value: gFFI.peerTabModel),
+      ],
+      child: MaterialApp(
+        theme: MyTheme.lightTheme.copyWith(platform: TargetPlatform.windows),
+        navigatorKey: navigator,
+        navigatorObservers: [observer],
+        home: const WebHomePage(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    final covered = MaterialPageRoute<void>(
+      builder: (_) => const Scaffold(body: Text('Remote session')),
+    );
+    navigator.currentState!.push(covered);
+    await tester.pumpAndSettle();
+
+    Future<void> pressPaletteShortcut() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyK);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pumpAndSettle();
+    }
+
+    await pressPaletteShortcut();
+    expect(observer.pushed, same(covered));
+    navigator.currentState!.pop();
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+          of: find.byType(AppBar), matching: find.byTooltip('Search')),
+      findsOneWidget,
+    );
+
+    await pressPaletteShortcut();
+    final palette = find.byType(Dialog);
+    expect(find.descendant(of: palette, matching: find.text('West office')),
+        findsOneWidget);
+    await tester.tap(
+        find.descendant(of: palette, matching: find.text('Settings')));
+    final route = observer.pushed as MaterialPageRoute;
+    expect(route.builder(navigator.currentContext!), isA<DesktopSettingPage>());
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 1));
   });
 }

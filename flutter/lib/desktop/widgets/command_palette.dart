@@ -81,7 +81,15 @@ List<DesktopCommandItem> buildPeerCommandItems({
       subtitle: sub,
       icon: Icons.desktop_windows_outlined,
       badge: translate('Connect'),
-      keywords: [peer.id, peer.alias, peer.hostname, peer.username, 'remote'],
+      keywords: [
+        peer.id,
+        peer.alias,
+        peer.hostname,
+        peer.username,
+        'remote',
+        '远程',
+        '桌面',
+      ],
       onRun: () => onConnectPeer(peer),
     ));
     result.add(DesktopCommandItem(
@@ -90,7 +98,15 @@ List<DesktopCommandItem> buildPeerCommandItems({
       subtitle: sub,
       icon: Icons.folder_open_outlined,
       badge: translate('Transfer file'),
-      keywords: [peer.id, peer.alias, peer.hostname, 'file', 'transfer'],
+      keywords: [
+        peer.id,
+        peer.alias,
+        peer.hostname,
+        'file',
+        'transfer',
+        '文件',
+        '传输',
+      ],
       onRun: () => onConnectPeer(peer, isFileTransfer: true),
     ));
     result.add(DesktopCommandItem(
@@ -99,7 +115,14 @@ List<DesktopCommandItem> buildPeerCommandItems({
       subtitle: sub,
       icon: Icons.terminal_rounded,
       badge: translate('Terminal'),
-      keywords: [peer.id, peer.alias, peer.hostname, 'terminal', 'ssh'],
+      keywords: [
+        peer.id,
+        peer.alias,
+        peer.hostname,
+        'terminal',
+        'ssh',
+        '终端',
+      ],
       onRun: () => onConnectPeer(peer, isTerminal: true),
     ));
   }
@@ -122,16 +145,21 @@ class _DesktopCommandPaletteDialog extends StatefulWidget {
 
 class _DesktopCommandPaletteDialogState
     extends State<_DesktopCommandPaletteDialog> {
+  static const double _kItemExtent = 56.0;
   final _ctrl = TextEditingController();
+  final _scrollCtrl = ScrollController();
   int _selected = 0;
+  String _cachedQuery = '';
+  late List<DesktopCommandItem> _cachedList = _computeFiltered();
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
   }
 
-  List<DesktopCommandItem> _filtered() {
+  List<DesktopCommandItem> _computeFiltered() {
     final matches = filterDesktopCommands(widget.items, _ctrl.text);
     final raw = _ctrl.text.trim();
     if (matches.isEmpty && raw.isNotEmpty && widget.onConnectRawId != null) {
@@ -146,6 +174,27 @@ class _DesktopCommandPaletteDialogState
       ];
     }
     return matches;
+  }
+
+  List<DesktopCommandItem> _filtered() {
+    if (_cachedQuery != _ctrl.text) {
+      _cachedQuery = _ctrl.text;
+      _cachedList = _computeFiltered();
+    }
+    return _cachedList;
+  }
+
+  void _ensureSelectedVisible() {
+    if (!_scrollCtrl.hasClients) return;
+    final top = _selected * _kItemExtent;
+    final bottom = top + _kItemExtent;
+    final offset = _scrollCtrl.offset;
+    final viewport = _scrollCtrl.position.viewportDimension;
+    if (top < offset) {
+      _scrollCtrl.jumpTo(top);
+    } else if (bottom > offset + viewport) {
+      _scrollCtrl.jumpTo(bottom - viewport);
+    }
   }
 
   void _runSelected(List<DesktopCommandItem> list) {
@@ -180,6 +229,8 @@ class _DesktopCommandPaletteDialogState
             if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
               if (list.isNotEmpty) {
                 setState(() => _selected = (_selected + 1) % list.length);
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _ensureSelectedVisible());
               }
               return KeyEventResult.handled;
             }
@@ -187,6 +238,8 @@ class _DesktopCommandPaletteDialogState
               if (list.isNotEmpty) {
                 setState(() =>
                     _selected = (_selected - 1 + list.length) % list.length);
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _ensureSelectedVisible());
               }
               return KeyEventResult.handled;
             }
@@ -208,7 +261,11 @@ class _DesktopCommandPaletteDialogState
                 child: TextField(
                   controller: _ctrl,
                   autofocus: true,
-                  onChanged: (_) => setState(() => _selected = 0),
+                  onChanged: (_) => setState(() {
+                    _selected = 0;
+                    _cachedQuery = _ctrl.text;
+                    _cachedList = _computeFiltered();
+                  }),
                   onSubmitted: (_) => _runSelected(_filtered()),
                   decoration: InputDecoration(
                     hintText: translate('Search'),
@@ -224,13 +281,20 @@ class _DesktopCommandPaletteDialogState
                             ),
                           )
                         : IconButton(
+                            tooltip: translate('Clear'),
                             onPressed: () {
                               _ctrl.clear();
-                              setState(() => _selected = 0);
+                              setState(() {
+                                _selected = 0;
+                                _cachedQuery = '';
+                                _cachedList = _computeFiltered();
+                              });
                             },
                             icon: const Icon(Icons.close_rounded, size: 16),
                           ),
                     border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
                     filled: false,
                   ),
                 ),
@@ -246,94 +310,125 @@ class _DesktopCommandPaletteDialogState
                         ),
                       )
                     : ListView.builder(
+                        controller: _scrollCtrl,
                         shrinkWrap: true,
+                        itemExtent: _kItemExtent,
                         padding: const EdgeInsets.symmetric(vertical: 6),
                         itemCount: list.length,
                         itemBuilder: (ctx, idx) {
                           final item = list[idx];
                           final active = idx == _selected;
-                          return InkWell(
-                            onTap: () {
-                              Navigator.of(context).pop();
-                              item.onRun();
-                            },
-                            onHover: (hover) {
-                              if (hover && _selected != idx) {
-                                setState(() => _selected = idx);
-                              }
-                            },
-                            child: Container(
-                              margin: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 2),
+                          return Semantics(
+                            selected: active,
+                            button: true,
+                            label: item.title,
+                            child: Padding(
                               padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 9),
-                              decoration: BoxDecoration(
+                                  horizontal: 8, vertical: 2),
+                              child: Material(
                                 color: active
                                     ? theme.colorScheme.primary
                                         .withOpacity(0.14)
                                     : Colors.transparent,
                                 borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    item.icon,
-                                    size: 18,
-                                    color: active
-                                        ? theme.colorScheme.primary
-                                        : theme.hintColor,
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      mainAxisSize: MainAxisSize.min,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () {
+                                    Navigator.of(context).pop();
+                                    item.onRun();
+                                  },
+                                  onHover: (hover) {
+                                    if (hover && _selected != idx) {
+                                      setState(() => _selected = idx);
+                                    }
+                                  },
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 12, vertical: 6),
+                                    child: Row(
                                       children: [
-                                        Text(
-                                          item.title,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 13.5,
-                                            fontWeight: FontWeight.w600,
+                                        Icon(
+                                          item.icon,
+                                          size: 18,
+                                          color: active
+                                              ? theme.colorScheme.primary
+                                              : theme.hintColor,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Text(
+                                                item.title,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 13.5,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                              if (item.subtitle.isNotEmpty)
+                                                Text(
+                                                  item.subtitle,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: theme
+                                                      .textTheme.bodySmall
+                                                      ?.copyWith(
+                                                          color:
+                                                              theme.hintColor),
+                                                ),
+                                            ],
                                           ),
                                         ),
-                                        if (item.subtitle.isNotEmpty)
-                                          Text(
-                                            item.subtitle,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: theme.textTheme.bodySmall
-                                                ?.copyWith(
-                                                    color: theme.hintColor),
+                                        if (item.badge != null)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 8, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: WorkspaceStyle
+                                                  .elevatedSurface(context),
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                            ),
+                                            child: Text(
+                                              item.badge!,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: theme.hintColor,
+                                              ),
+                                            ),
                                           ),
                                       ],
                                     ),
                                   ),
-                                  if (item.badge != null)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: WorkspaceStyle.elevatedSurface(
-                                            context),
-                                        borderRadius: BorderRadius.circular(6),
-                                      ),
-                                      child: Text(
-                                        item.badge!,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: theme.hintColor,
-                                        ),
-                                      ),
-                                    ),
-                                ],
+                                ),
                               ),
                             ),
                           );
                         },
                       ),
+              ),
+              Divider(height: 1, color: theme.dividerColor),
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Text(
+                      '↑↓  ·  ↵  ·  Esc',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: theme.hintColor),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),

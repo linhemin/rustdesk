@@ -77,8 +77,34 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     if (mounted) setState(() => _activeRemoteSessions = sessions);
   }
 
+  bool _commandPaletteOpen = false;
+  late final HardwareKeyboard _hardwareKeyboard = HardwareKeyboard.instance;
+
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (!mounted || _commandPaletteOpen || !usesWorkspaceStyle || bind.isIncomingOnly()) {
+      return false;
+    }
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) return false;
+    final primaryModifier = isMacOS
+        ? _hardwareKeyboard.isMetaPressed && !_hardwareKeyboard.isControlPressed
+        : _hardwareKeyboard.isControlPressed && !_hardwareKeyboard.isMetaPressed;
+    if (primaryModifier &&
+        !_hardwareKeyboard.isAltPressed &&
+        !_hardwareKeyboard.isShiftPressed &&
+        event.logicalKey == LogicalKeyboardKey.keyK) {
+      _openCommandPalette(context);
+      return true;
+    }
+    return false;
+  }
+
   Future<void> _openCommandPalette(BuildContext context) async {
-    final peers = <Peer>[];
+    if (_commandPaletteOpen) return;
+    _commandPaletteOpen = true;
+    try {
+      final peers = <Peer>[];
     try {
       final raw = await bind.mainLoadRecentPeersForAb(filter: '');
       final decoded = jsonDecode(raw);
@@ -134,11 +160,14 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         onRun: () => showServerConfigQrDialog(context),
       ),
     ];
-    await showDesktopCommandPalette(
-      context,
-      items: items,
-      onConnectRawId: (id) => connect(context, id),
-    );
+      await showDesktopCommandPalette(
+        context,
+        items: items,
+        onConnectRawId: (id) => connect(context, id),
+      );
+    } finally {
+      _commandPaletteOpen = false;
+    }
   }
 
   @override
@@ -286,7 +315,43 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                 destinations: destinations,
                 current: current,
                 onSelect: select,
-                identity: incoming ? _localIdentitySummary(context) : null,
+                identity: incoming
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _localIdentitySummary(context),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: () => _openCommandPalette(context),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 8),
+                              alignment: AlignmentDirectional.centerStart,
+                            ),
+                            icon: const Icon(Icons.search_rounded, size: 15),
+                            label: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    translate('Search'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                Text(
+                                  isMacOS ? '⌘K' : 'Ctrl+K',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(context).hintColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      )
+                    : null,
                 footer: incoming ? const OnlineStatusWidget(compact: true) : null,
                 nativeNavigation: isMacOS
                     ? LayoutBuilder(
@@ -1498,6 +1563,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   void initState() {
     super.initState();
+    _hardwareKeyboard.addHandler(_handleGlobalKeyEvent);
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
@@ -1671,6 +1737,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
   @override
   void dispose() {
+    _hardwareKeyboard.removeHandler(_handleGlobalKeyEvent);
+    _leftPaneScrollController.dispose();
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();

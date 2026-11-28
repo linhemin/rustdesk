@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
+import 'package:flutter_hbb/desktop/widgets/command_palette.dart';
 import 'package:flutter_hbb/mobile/pages/server_page.dart';
 import 'package:flutter_hbb/mobile/pages/settings_page.dart';
 import 'package:flutter_hbb/web/settings_page.dart';
@@ -269,26 +272,169 @@ class HomePageState extends State<HomePage> {
   }
 }
 
-class WebHomePage extends StatelessWidget {
-  final connectionPage =
+class WebHomePage extends StatefulWidget {
+  const WebHomePage({super.key});
+
+  @override
+  State<WebHomePage> createState() => _WebHomePageState();
+}
+
+class _WebHomePageState extends State<WebHomePage> {
+  final ConnectionPage _connectionPage =
       ConnectionPage(appBarActions: <Widget>[const WebSettingsPage()]);
+  int _selectedDestination = 0;
+  bool _commandPaletteOpen = false;
+
+  bool get _wideLayout => MediaQuery.sizeOf(context).width >= 960;
+  bool get _usesCommandKey => Theme.of(context).platform == TargetPlatform.macOS;
+  bool get _isCurrentRoute => ModalRoute.of(context)?.isCurrent != false;
+
+  @override
+  void initState() {
+    super.initState();
+    stateGlobal.isInMainPage = true;
+    if (gFFI.recentPeersModel.peers.isEmpty) {
+      unawaited(bind.mainLoadRecentPeers());
+    }
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _handleUnilink(context);
+    });
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    super.dispose();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (!mounted ||
+        _commandPaletteOpen ||
+        event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.keyK ||
+        !_isCurrentRoute) {
+      return false;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    final modifierPressed = _usesCommandKey
+        ? keyboard.isMetaPressed && !keyboard.isControlPressed
+        : keyboard.isControlPressed && !keyboard.isMetaPressed;
+    if (modifierPressed && !keyboard.isAltPressed && !keyboard.isShiftPressed) {
+      unawaited(_openCommandPalette(context));
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _openCommandPalette(BuildContext context) async {
+    if (_commandPaletteOpen || !_isCurrentRoute) return;
+    _commandPaletteOpen = true;
+    try {
+      final items = <DesktopCommandItem>[
+        ...buildPeerCommandItems(
+          peers: gFFI.recentPeersModel.peers,
+          onConnectPeer: (peer, {isFileTransfer = false, isTerminal = false}) {
+            connect(
+              context,
+              peer.id,
+              isFileTransfer: isFileTransfer,
+              isTerminal: isTerminal,
+            );
+          },
+        ),
+        DesktopCommandItem(
+          id: 'open-settings',
+          title: translate('Settings'),
+          subtitle: translate('General'),
+          icon: Icons.settings_outlined,
+          keywords: const ['settings', 'preferences'],
+          onRun: () {
+            if (_wideLayout) {
+              setState(() => _selectedDestination = 1);
+            } else {
+              WebSettingsPage.open(context);
+            }
+          },
+        ),
+      ];
+      await showDesktopCommandPalette(
+        context,
+        items: items,
+        onConnectRawId: (id) => connect(context, id),
+      );
+    } finally {
+      _commandPaletteOpen = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    stateGlobal.isInMainPage = true;
-    handleUnilink(context);
+    if (_wideLayout) {
+      final destinations = [
+        WorkspaceDestination(
+            translate('Home and devices'), Icons.home_outlined),
+        WorkspaceDestination(
+            translate('Settings'), Icons.settings_outlined),
+      ];
+      return WorkspaceNavigation(
+        brand: bind.mainGetAppNameSync(),
+        mark: !bind.isCustomClient()
+            ? ExcludeSemantics(
+                child: Container(
+                  width: 28,
+                  height: 28,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'R',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              )
+            : loadIcon(26),
+        destinations: destinations,
+        current: _selectedDestination,
+        onSelect: (index) => setState(() => _selectedDestination = index),
+        footer: SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => _openCommandPalette(context),
+            icon: const Icon(Icons.search_rounded, size: 15),
+            label: Text('${translate("Search")} (${_usesCommandKey ? "⌘K" : "Ctrl+K"})'),
+          ),
+        ),
+        child: _selectedDestination == 0
+            ? _connectionPage
+            : DesktopSettingPage(initialTabkey: SettingsTabKey.general),
+      );
+    }
     return Scaffold(
       // backgroundColor: MyTheme.grayBg,
       appBar: AppBar(
         centerTitle: true,
         title: Text("${bind.mainGetAppNameSync()} (Preview)"),
-        actions: connectionPage.appBarActions,
+        actions: [
+          IconButton(
+            tooltip: translate('Search'),
+            icon: const Icon(Icons.search_rounded),
+            onPressed: () => _openCommandPalette(context),
+          ),
+          ..._connectionPage.appBarActions,
+        ],
       ),
-      body: connectionPage,
+      body: _connectionPage,
     );
   }
 
-  handleUnilink(BuildContext context) {
+  void _handleUnilink(BuildContext context) {
     if (webInitialLink.isEmpty) {
       return;
     }
