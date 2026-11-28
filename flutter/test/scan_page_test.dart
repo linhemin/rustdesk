@@ -14,6 +14,7 @@ class _Binding extends Fake implements RustdeskImpl {
         #mainGetCommonSync => '{"url":""}',
         #getLocalFlutterOption ||
         #mainGetLocalOption ||
+        #mainGetOptionSync ||
         #mainGetBuildinOption =>
           '',
         #isDisableAb || #isDisableAccount || #isDisableGroupPanel => false,

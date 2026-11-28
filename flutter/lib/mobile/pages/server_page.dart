@@ -42,7 +42,7 @@ class _DropDownAction extends StatelessWidget {
   // should only have one action
   final actions = [
     PopupMenuButton<String>(
-        tooltip: "",
+        tooltip: translate('More'),
         icon: const Icon(Icons.more_vert),
         itemBuilder: (context) {
           listTile(String text, bool checked) {

@@ -180,8 +180,16 @@ class _AppleWorkspaceNavigationState extends State<AppleWorkspaceNavigation> {
       if (caption.width + 28 > itemWidth) itemWidth = caption.width + 28;
     }
     caption.dispose();
-    // Keep the compact host wide enough for the longest localized caption.
-    return itemWidth * widget.labels.length + 10;
+    // Keep the compact host wide enough for the longest localized caption,
+    // without exceeding the safe-area width on compact split views.
+    final horizontalInsets = MediaQuery.viewPaddingOf(context).horizontal;
+    final horizontalMargin = widget.compact ? 40.0 : 24.0;
+    final reserved = horizontalInsets > horizontalMargin
+        ? horizontalInsets
+        : horizontalMargin;
+    final maxWidth =
+        (MediaQuery.sizeOf(context).width - reserved).clamp(120.0, double.infinity);
+    return (itemWidth * widget.labels.length + 10).clamp(0.0, maxWidth);
   }
 
   Widget _iosView() => Listener(

@@ -102,7 +102,7 @@ class _ScanPageState extends State<ScanPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scan QR'),
+        title: Text(translate('Scan QR')),
         actions: [
           _buildImagePickerButton(),
           _buildFlashToggleButton(),
@@ -114,10 +114,8 @@ class _ScanPageState extends State<ScanPage> {
   }
 
   Widget _buildQrView(BuildContext context) {
-    var scanArea = MediaQuery.of(context).size.width < 400 ||
-            MediaQuery.of(context).size.height < 400
-        ? 150.0
-        : 300.0;
+    final size = MediaQuery.sizeOf(context);
+    var scanArea = size.width < 400 || size.height < 400 ? 150.0 : 300.0;
     return QRView(
       key: qrKey,
       onQRViewCreated: _onQRViewCreated,
