@@ -143,6 +143,7 @@ class _RemotePageState extends State<RemotePage>
   late final FocusNode _mobileFocusNode =
       FocusNode(onKeyEvent: _handleSessionImeKey);
   final FocusNode _physicalFocusNode = FocusNode();
+  final ScrollController _gestureHelpScrollController = ScrollController();
   var _showEdit = false; // use soft keyboard
   bool _showSessionKeyboard = false;
   Future<void> _virtualMouseInput = Future.value();
@@ -394,6 +395,7 @@ class _RemotePageState extends State<RemotePage>
     await gFFI.invokeMethod("enable_soft_keyboard", true);
     _mobileFocusNode.dispose();
     _physicalFocusNode.dispose();
+    _gestureHelpScrollController.dispose();
     _textController.dispose();
     clearWaylandKeyboardPromptSuppressedForConnection(sessionId.toString());
     _waylandKeyboardGateWorker?.dispose();
@@ -2247,6 +2249,7 @@ class _RemotePageState extends State<RemotePage>
           animation: gFFI.qualityMonitorModel,
           builder: (context, _) {
             final model = gFFI.qualityMonitorModel;
+            if (!model.show) return const SizedBox.shrink();
             final data = model.data;
             final kbps = int.tryParse(data.targetBitrate ?? '');
             final bitrate = switch (kbps) {
@@ -2258,27 +2261,23 @@ class _RemotePageState extends State<RemotePage>
                 ? '—'
                 : '${(data.fps ?? "").replaceAll(" ", "").replaceAll("0", "").isEmpty ? 0 : data.delay} ms';
             final direct = model.directConnection;
-            return Visibility(
-              visible: model.show,
-              maintainState: true,
-              child: MobileSessionQualityMonitor(
-                reserveGamepadSpace: _nativeSessionActive,
-                connection: direct == null
-                    ? translate('Quality')
-                    : '${translate(direct ? "Direct Connection" : "Relay Connection")} · ${model.activeTransport ?? "—"}',
-                direct: direct,
-                metrics: [
-                  (translate('Speed'), data.speed ?? '—'),
-                  ('FPS', data.fps ?? '—'),
-                  (translate('Delay'), delay),
-                  (translate('Target bitrate'), bitrate),
-                  (translate('Codec'), data.codecFormat ?? '—'),
-                  (translate('Chroma'), data.chroma ?? '—'),
-                ],
-                diagnostics: model.udpReports.isEmpty
-                    ? null
-                    : PeerUdpButton(model, foreground: Colors.white),
-              ),
+            return MobileSessionQualityMonitor(
+              reserveGamepadSpace: _nativeSessionActive,
+              connection: direct == null
+                  ? translate('Quality')
+                  : '${translate(direct ? "Direct Connection" : "Relay Connection")} · ${model.activeTransport ?? "—"}',
+              direct: direct,
+              metrics: [
+                (translate('Speed'), data.speed ?? '—'),
+                ('FPS', data.fps ?? '—'),
+                (translate('Delay'), delay),
+                (translate('Target bitrate'), bitrate),
+                (translate('Codec'), data.codecFormat ?? '—'),
+                (translate('Chroma'), data.chroma ?? '—'),
+              ],
+              diagnostics: model.udpReports.isEmpty
+                  ? null
+                  : PeerUdpButton(model, foreground: Colors.white),
             );
           },
         ),
@@ -2790,7 +2789,7 @@ class _RemotePageState extends State<RemotePage>
   BottomAppBar getGestureHelp() {
     return BottomAppBar(
         child: SingleChildScrollView(
-            controller: ScrollController(),
+            controller: _gestureHelpScrollController,
             padding: EdgeInsets.symmetric(vertical: 10),
             child: GestureHelp(
               touchMode: gFFI.ffiModel.touchMode,

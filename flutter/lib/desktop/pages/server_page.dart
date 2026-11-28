@@ -95,7 +95,7 @@ class _DesktopServerPageState extends State<DesktopServerPage>
       child: Consumer<ServerModel>(
         builder: (context, serverModel, child) {
           final body = Scaffold(
-            backgroundColor: Theme.of(context).colorScheme.background,
+            backgroundColor: Theme.of(context).colorScheme.surface,
             body: ConnectionManager(),
           );
           return isLinux
@@ -307,7 +307,7 @@ class ConnectionManagerState extends State<ConnectionManager>
                 windowManager.startDragging();
               },
               child: Container(
-                color: Theme.of(context).colorScheme.background,
+                color: Theme.of(context).colorScheme.surface,
               ),
             ),
           ),
@@ -404,6 +404,7 @@ class _CloseButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return IconButton(
+      tooltip: translate('Close'),
       onPressed: () {
         windowManager.close();
       },
@@ -564,6 +565,9 @@ class _CmHeaderState extends State<_CmHeader>
                     client.type_() != ClientType.file &&
                     client.type_() != ClientType.camera),
             child: IconButton(
+              tooltip: translate(client.type_() == ClientType.file
+                  ? 'Transfer file'
+                  : 'Chat'),
               onPressed: () => checkClickTime(client.id, () {
                 if (client.type_() == ClientType.file) {
                   gFFI.chatModel.toggleCMFilePage();
@@ -1136,7 +1140,7 @@ class _CmControlPanel extends StatelessWidget {
               child: buildButton(
                 context,
                 color: Colors.transparent,
-                border: Border.all(color: Colors.grey),
+                border: Border.all(color: Theme.of(context).dividerColor),
                 onClick: handleDisconnect,
                 text: 'Cancel',
                 textColor: null,
@@ -1291,6 +1295,14 @@ class _FileTransferLogPage extends StatefulWidget {
 }
 
 class __FileTransferLogPageState extends State<_FileTransferLogPage> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return statusList();
@@ -1370,7 +1382,7 @@ class __FileTransferLogPageState extends State<_FileTransferLogPage> {
             () {
               final jobTable = gFFI.cmFileModel.currentJobTable;
               statusListView(List<CmFileLog> jobs) => ListView.builder(
-                    controller: ScrollController(),
+                    controller: _scrollController,
                     itemBuilder: (BuildContext context, int index) {
                       final item = jobs[index];
                       return Padding(

@@ -82,6 +82,9 @@ class _PortForwardPageState extends State<PortForwardPage>
 
   @override
   void dispose() {
+    localPortController.dispose();
+    remoteHostController.dispose();
+    remotePortController.dispose();
     _ffi.close();
     _ffi.dialogManager.dismissAll();
     Get.delete<FFI>(tag: 'pf_${widget.id}');
@@ -143,8 +146,10 @@ class _PortForwardPageState extends State<PortForwardPage>
                     ),
                     Text(
                       translate('not_close_tcp_tip'),
-                      style: const TextStyle(
-                          fontSize: 10, color: Color(0xFFDDDDDD), height: 1.2),
+                      style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white.withOpacity(0.85),
+                          height: 1.2),
                     )
                   ])).marginOnly(bottom: 8),
         ));

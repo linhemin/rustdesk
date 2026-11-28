@@ -3,6 +3,7 @@ import 'package:auto_size_text/auto_size_text.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
 import 'package:flutter/material.dart';
 import 'package:rustdesk_ui/desktop.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:get/get.dart';
@@ -58,20 +59,28 @@ class DraggableChatWindow extends StatelessWidget {
             height: height,
             chatModel: chatModel,
             builder: (context, onPanUpdate) {
+              final isDesktopBar = isDesktop || isWebDesktop;
+              final barHeight = isDesktopBar
+                  ? ((isWindows || isMacOS || usesWorkspaceStyle) ? 44.0 : 38.0)
+                  : 50.0;
               final child = Scaffold(
                 resizeToAvoidBottomInset: false,
                 appBar: CustomAppBar(
+                  height: barHeight,
                   onPanUpdate: onPanUpdate,
-                  appBar: (isDesktop || isWebDesktop)
+                  appBar: isDesktopBar
                       ? _buildDesktopAppBar(context)
                       : _buildMobileAppBar(context),
                 ),
                 body: ChatPage(chatModel: chatModel),
               );
-              if (isWindows || isMacOS) return DesktopOverlaySurface(child: child);
+              if (usesWorkspaceStyle && (isDesktop || isWebDesktop)) {
+                return DesktopOverlaySurface(child: child);
+              }
               return Container(
-                  decoration:
-                      BoxDecoration(border: Border.all(color: MyTheme.border)),
+                  decoration: BoxDecoration(
+                      border:
+                          Border.all(color: Theme.of(context).dividerColor)),
                   child: child);
             });
   }
@@ -97,6 +106,7 @@ class DraggableChatWindow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               IconButton(
+                  tooltip: translate("Minimize"),
                   onPressed: () {
                     chatModel.hideChatWindowOverlay();
                   },
@@ -105,6 +115,7 @@ class DraggableChatWindow extends StatelessWidget {
                     color: Colors.white,
                   )),
               IconButton(
+                  tooltip: translate("Close"),
                   onPressed: () {
                     chatModel.hideChatWindowOverlay();
                     chatModel.hideChatIconOverlay();
@@ -121,7 +132,7 @@ class DraggableChatWindow extends StatelessWidget {
   }
 
   Widget _buildDesktopAppBar(BuildContext context) {
-    final nativeDesktop = isWindows || isMacOS;
+    final nativeDesktop = usesWorkspaceStyle;
     return Container(
       decoration: BoxDecoration(
           color: nativeDesktop ? Theme.of(context).cardColor : null,
@@ -162,9 +173,13 @@ class DraggableChatWindow extends StatelessWidget {
 class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   final GestureDragUpdateCallback onPanUpdate;
   final Widget appBar;
+  final double height;
 
   const CustomAppBar(
-      {Key? key, required this.onPanUpdate, required this.appBar})
+      {Key? key,
+      required this.onPanUpdate,
+      required this.appBar,
+      this.height = kToolbarHeight})
       : super(key: key);
 
   @override
@@ -173,7 +188,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 
   @override
-  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+  Size get preferredSize => Size.fromHeight(height);
 }
 
 /// floating buttons of back/home/recent actions for android
@@ -211,25 +226,31 @@ class DraggableMobileActions extends StatelessWidget {
                   shadowColor: Colors.transparent,
                   child: Container(
                     decoration: BoxDecoration(
-                        color: MyTheme.accent.withOpacity(0.4),
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withOpacity(0.45),
                         borderRadius:
                             BorderRadius.all(Radius.circular(15 * scale))),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
                         IconButton(
+                            tooltip: translate("Back"),
                             color: Colors.white,
                             onPressed: onBackPressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
                             icon: const Icon(Icons.arrow_back),
                             iconSize: 24 * scale),
                         IconButton(
+                            tooltip: translate("Home"),
                             color: Colors.white,
                             onPressed: onHomePressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
                             icon: const Icon(Icons.home),
                             iconSize: 24 * scale),
                         IconButton(
+                            tooltip: translate("Recent"),
                             color: Colors.white,
                             onPressed: onRecentPressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
@@ -242,6 +263,7 @@ class DraggableMobileActions extends StatelessWidget {
                           endIndent: 10,
                         ),
                         IconButton(
+                            tooltip: translate("Hide"),
                             color: Colors.white,
                             onPressed: onHidePressed,
                             splashRadius: kDesktopIconButtonSplashRadius,
@@ -419,8 +441,11 @@ class _DraggableState extends State<Draggable> {
 
     // reset
     if (_lastBottomHeight > 0 && bottomHeight == 0) {
-      setState(() {
-        widget.position.update(Offset(position.dx, _saveHeight));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          widget.position.update(Offset(position.dx, _saveHeight));
+        });
       });
     }
 
@@ -429,9 +454,12 @@ class _DraggableState extends State<Draggable> {
       final sumHeight = bottomHeight + widget.height;
       final contextHeight = MediaQuery.of(context).size.height;
       if (sumHeight + position.dy > contextHeight) {
-        final y = contextHeight - sumHeight;
-        setState(() {
-          widget.position.update(Offset(position.dx, y));
+        final y = (contextHeight - sumHeight).clamp(0.0, contextHeight);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            widget.position.update(Offset(position.dx, y));
+          });
         });
       }
     }
@@ -507,8 +535,11 @@ class IOSDraggableState extends State<IOSDraggable> {
 
     // reset
     if (_lastBottomHeight > 0 && bottomHeight == 0) {
-      setState(() {
-        position.update(Offset(position.pos.dx, _saveHeight));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          position.update(Offset(position.pos.dx, _saveHeight));
+        });
       });
     }
 
@@ -517,9 +548,12 @@ class IOSDraggableState extends State<IOSDraggable> {
       final sumHeight = bottomHeight + _height;
       final contextHeight = MediaQuery.of(context).size.height;
       if (sumHeight + position.pos.dy > contextHeight) {
-        final y = contextHeight - sumHeight;
-        setState(() {
-          position.update(Offset(position.pos.dx, y));
+        final y = (contextHeight - sumHeight).clamp(0.0, contextHeight);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          setState(() {
+            position.update(Offset(position.pos.dx, y));
+          });
         });
       }
     }
@@ -544,8 +578,15 @@ class IOSDraggableState extends State<IOSDraggable> {
           top: position.pos.dy,
           child: GestureDetector(
             onPanUpdate: (details) {
+              final size = MediaQuery.sizeOf(context);
+              final maxX = (size.width - _width).clamp(0.0, size.width);
+              final maxY = (size.height - _height).clamp(0.0, size.height);
+              final next = Offset(
+                (position.pos.dx + details.delta.dx).clamp(0.0, maxX),
+                (position.pos.dy + details.delta.dy).clamp(0.0, maxY),
+              );
               setState(() {
-                position.update(position.pos + details.delta);
+                position.update(next);
               });
               _chatModel?.setChatWindowPosition(position.pos);
             },
@@ -553,8 +594,9 @@ class IOSDraggableState extends State<IOSDraggable> {
               child: Container(
                 width: _width,
                 height: _height,
-                decoration:
-                    BoxDecoration(border: Border.all(color: MyTheme.border)),
+                decoration: BoxDecoration(
+                    border:
+                        Border.all(color: Theme.of(context).dividerColor)),
                 child: widget.builder(context),
               ),
             ),
@@ -632,7 +674,7 @@ class QualityMonitor extends StatelessWidget {
                         const SizedBox(width: 6),
                         // let delay be 0 if fps is 0
                         _metric(
-                            "Delay",
+                            translate("Delay"),
                             "${qualityMonitorModel.data.delay == null ? '-' : (qualityMonitorModel.data.fps ?? "").replaceAll(' ', '').replaceAll('0', '').isEmpty ? 0 : qualityMonitorModel.data.delay}ms"),
                       ]),
                       const Divider(color: Colors.white24, height: 10),
@@ -640,7 +682,7 @@ class QualityMonitor extends StatelessWidget {
                           "${qualityMonitorModel.data.targetBitrate ?? '-'}kb"),
                       _row(
                           translate("Codec"), qualityMonitorModel.data.codecFormat ?? '-'),
-                      _row("Chroma", qualityMonitorModel.data.chroma ?? '-'),
+                      _row(translate("Chroma"), qualityMonitorModel.data.chroma ?? '-'),
                       if (qualityMonitorModel.udpReports.isNotEmpty)
                         PeerUdpButton(qualityMonitorModel, foreground: Colors.white),
                       if (qualityMonitorModel.directConnection case final direct?)

@@ -60,17 +60,19 @@ class SessionToolbarSurface extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: radius,
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-          child: Material(
-            color: Theme.of(context).cardColor.withOpacity(dark ? 0.88 : 0.92),
-            shape: RoundedRectangleBorder(
-              borderRadius: radius,
-              side: BorderSide(color: WorkspaceStyle.strongBorder(context)),
+      child: RepaintBoundary(
+        child: ClipRRect(
+          borderRadius: radius,
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+            child: Material(
+              color: Theme.of(context).cardColor.withOpacity(dark ? 0.88 : 0.92),
+              shape: RoundedRectangleBorder(
+                borderRadius: radius,
+                side: BorderSide(color: WorkspaceStyle.strongBorder(context)),
+              ),
+              child: child,
             ),
-            child: child,
           ),
         ),
       ),
@@ -170,12 +172,13 @@ class SessionToolbarPillVisual extends StatelessWidget {
     return AnimatedContainer(
       duration: const Duration(milliseconds: 120),
       curve: Curves.easeOut,
-      height: height,
-      constraints: BoxConstraints(minWidth: height),
+      constraints: BoxConstraints(minWidth: height, minHeight: height),
       padding: showLabel
-          ? EdgeInsets.only(
-              left: destructive ? 10 : 9,
-              right: hasDropdown ? 6 : (destructive ? 10 : 9),
+          ? EdgeInsetsDirectional.only(
+              start: destructive ? 10 : 9,
+              end: hasDropdown ? 6 : (destructive ? 10 : 9),
+              top: 4,
+              bottom: 4,
             )
           : EdgeInsets.zero,
       decoration: BoxDecoration(
@@ -252,81 +255,100 @@ class SessionStatusPill extends StatefulWidget {
 
 class _SessionStatusPillState extends State<SessionStatusPill> {
   bool _hover = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final dark = theme.brightness == Brightness.dark;
     final color = widget.dotColor;
+    final highlighted = _hover || _focused;
     final bg = color.withOpacity(widget.active
         ? (dark ? 0.20 : 0.14)
-        : (_hover ? (dark ? 0.16 : 0.12) : (dark ? 0.10 : 0.08)));
+        : (highlighted ? (dark ? 0.16 : 0.12) : (dark ? 0.10 : 0.08)));
     final border = color.withOpacity(widget.active
         ? 0.44
-        : (_hover ? 0.30 : 0.18));
+        : (highlighted ? 0.30 : 0.18));
 
-    final pill = MouseRegion(
-      cursor: widget.onPressed != null
-          ? SystemMouseCursors.click
-          : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onPressed,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          curve: Curves.easeOut,
-          height: widget.height,
-          constraints: BoxConstraints(minWidth: widget.height),
-          padding: widget.compact
-              ? EdgeInsets.zero
-              : const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(widget.height / 2),
-            border: Border.all(color: border, width: 1),
-          ),
-          alignment: Alignment.center,
-          child: widget.compact
-              ? Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
-                  ),
-                )
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      widget.label,
-                      maxLines: 1,
-                      softWrap: false,
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        fontSize: 12,
-                        height: 1.1,
-                        fontWeight: FontWeight.w500,
-                        color: theme.colorScheme.onSurface,
-                        fontFeatures: const [ui.FontFeature.tabularFigures()],
-                      ),
-                    ),
-                    if (widget.trailing != null) ...[
-                      const SizedBox(width: 4),
-                      widget.trailing!,
-                    ],
-                  ],
+    final pill = Semantics(
+      button: widget.onPressed != null,
+      enabled: widget.onPressed != null,
+      label: widget.tooltip ?? widget.label,
+      child: FocusableActionDetector(
+        enabled: widget.onPressed != null,
+        mouseCursor: widget.onPressed != null
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        onShowHoverHighlight: (value) => setState(() => _hover = value),
+        onShowFocusHighlight: (value) => setState(() => _focused = value),
+        actions: widget.onPressed == null
+            ? null
+            : <Type, Action<Intent>>{
+                ActivateIntent: CallbackAction<Intent>(
+                  onInvoke: (_) {
+                    widget.onPressed?.call();
+                    return null;
+                  },
                 ),
+              },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOut,
+            constraints: BoxConstraints(
+                minWidth: widget.height, minHeight: widget.height),
+            padding: widget.compact
+                ? EdgeInsets.zero
+                : const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(widget.height / 2),
+              border: Border.all(
+                  color: _focused ? color : border, width: _focused ? 1.4 : 1),
+            ),
+            alignment: Alignment.center,
+            child: widget.compact
+                ? Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  )
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        widget.label,
+                        maxLines: 1,
+                        softWrap: false,
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          fontSize: 12,
+                          height: 1.1,
+                          fontWeight: FontWeight.w500,
+                          color: theme.colorScheme.onSurface,
+                          fontFeatures: const [ui.FontFeature.tabularFigures()],
+                        ),
+                      ),
+                      if (widget.trailing != null) ...[
+                        const SizedBox(width: 4),
+                        widget.trailing!,
+                      ],
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -353,11 +375,13 @@ class SessionOverlayFrame extends StatelessWidget {
                   blurRadius: 20,
                   offset: Offset(0, 6))
             ]),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(15),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-            child: child,
+        child: RepaintBoundary(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(15),
+            child: BackdropFilter(
+              filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+              child: child,
+            ),
           ),
         ),
       );

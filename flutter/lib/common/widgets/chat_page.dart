@@ -30,7 +30,7 @@ class ChatPage extends StatelessWidget implements PageShape {
   @override
   final appBarActions = [
     PopupMenuButton<MessageKey>(
-        tooltip: "",
+        tooltip: translate("Chat"),
         icon: unreadTopRightBuilder(gFFI.chatModel.mobileUnreadSum,
             icon: Icon(Icons.group)),
         itemBuilder: (context) {
@@ -50,16 +50,19 @@ class ChatPage extends StatelessWidget implements PageShape {
                           key.isOut
                               ? Icons.call_made_rounded
                               : Icons.call_received_rounded,
-                          color: MyTheme.accent)
+                          color: Theme.of(context).colorScheme.primary)
                       .marginOnly(right: 6),
-                  Text("${user.firstName}   ${user.id}"),
+                  Flexible(
+                    child: Text("${user.firstName}   ${user.id}",
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                  ),
                   if (connected)
                     Container(
                       width: 10,
                       height: 10,
                       decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: Color.fromARGB(255, 46, 205, 139)),
+                          color: WorkspaceStyle.success(context)),
                     ).marginSymmetric(horizontal: 2),
                   if (client != null)
                     unreadMessageCountBuilder(client.unreadChatMessageCount)

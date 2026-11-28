@@ -35,7 +35,8 @@ Future<void> showPeerUdpReport(BuildContext context, QualityMonitorModel model) 
                           ],
                           rows: [
                             for (final line in report.split('\n\n').first.split('\n').skip(2))
-                              DataRow(cells: [for (final value in line.split(' | ')) DataCell(Text(value))]),
+                              if (line.split(' | ').length == 6)
+                                DataRow(cells: [for (final value in line.split(' | ')) DataCell(Text(value))]),
                           ],
                         ),
                       ),
@@ -73,9 +74,11 @@ class PeerUdpButton extends StatelessWidget {
   final Color? foreground;
 
   @override
-  Widget build(BuildContext context) => TextButton(
-        onPressed: () => showPeerUdpReport(context, model),
-        style: TextButton.styleFrom(foregroundColor: foreground),
-        child: Text(model.udpReports.last.split('\n').first),
-      );
+  Widget build(BuildContext context) => model.udpReports.isEmpty
+      ? const SizedBox.shrink()
+      : TextButton(
+          onPressed: () => showPeerUdpReport(context, model),
+          style: TextButton.styleFrom(foregroundColor: foreground),
+          child: Text(model.udpReports.last.split('\n').first),
+        );
 }

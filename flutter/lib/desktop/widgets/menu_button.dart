@@ -31,33 +31,41 @@ class _MenuButtonState extends State<MenuButton> {
 
   @override
   Widget build(BuildContext context) {
+    final button = Material(
+      type: MaterialType.transparency,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(_borderRadius),
+          color: _isHover ? widget.hoverColor : widget.color,
+        ),
+        child: InkWell(
+          hoverColor: widget.hoverColor,
+          onHover: (val) {
+            setState(() {
+              _isHover = val;
+            });
+          },
+          borderRadius: BorderRadius.circular(_borderRadius),
+          splashColor: widget.splashColor,
+          enableFeedback: widget.enableFeedback,
+          onTap: widget.onPressed,
+          child: widget.child,
+        ),
+      ),
+    );
+    final tooltipText = widget.tooltip ?? '';
     return Padding(
       padding: widget.padding,
-      child: Tooltip(
-        waitDuration: Duration(milliseconds: 300),
-        message: widget.tooltip,
-        child: Material(
-          type: MaterialType.transparency,
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(_borderRadius),
-              color: _isHover ? widget.hoverColor : widget.color,
-            ),
-            child: InkWell(
-              hoverColor: widget.hoverColor,
-              onHover: (val) {
-                setState(() {
-                  _isHover = val;
-                });
-              },
-              borderRadius: BorderRadius.circular(_borderRadius),
-              splashColor: widget.splashColor,
-              enableFeedback: widget.enableFeedback,
-              onTap: widget.onPressed,
-              child: widget.child,
-            ),
-          ),
-        ),
+      child: Semantics(
+        button: true,
+        label: tooltipText.isEmpty ? null : tooltipText,
+        child: tooltipText.isEmpty
+            ? button
+            : Tooltip(
+                waitDuration: const Duration(milliseconds: 300),
+                message: tooltipText,
+                child: button,
+              ),
       ),
     );
   }

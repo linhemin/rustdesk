@@ -362,7 +362,7 @@ class ToolbarState {
 }
 
 class _ToolbarTheme {
-  static final nativeDesktop = isWindows || isMacOS;
+  static final nativeDesktop = usesWorkspaceStyle;
   static const Color blueColor = MyTheme.button;
   static final Color commandColor =
       nativeDesktop ? Colors.transparent : blueColor;
@@ -2791,6 +2791,13 @@ class _ResolutionsMenuState extends State<_ResolutionsMenu> {
     });
   }
 
+  @override
+  void dispose() {
+    _customWidth.dispose();
+    _customHeight.dispose();
+    super.dispose();
+  }
+
   Rect? scaledRect() {
     final scale = pi.scaleOfDisplay(pi.currentDisplay);
     final rect = ffiModel.rect;
@@ -4647,25 +4654,29 @@ class _CompactNativeIconButtonState extends State<_CompactNativeIconButton> {
         : (_hover
             ? ink.withOpacity(dark ? 0.10 : 0.07)
             : Colors.transparent);
-    return Tooltip(
-      message: widget.tooltip,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onPressed,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 120),
-            width: 24,
-            height: 24,
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(12),
+    return Semantics(
+      button: true,
+      label: widget.tooltip,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onPressed,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.center,
+              child: Icon(widget.icon, size: 15, color: fg),
             ),
-            alignment: Alignment.center,
-            child: Icon(widget.icon, size: 15, color: fg),
           ),
         ),
       ),

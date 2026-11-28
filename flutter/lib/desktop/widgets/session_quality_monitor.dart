@@ -92,6 +92,9 @@ class DesktopQualityMonitor extends StatelessWidget {
                             style: theme.textTheme.labelLarge)),
                     IconButton(
                       tooltip: translate('Close'),
+                      constraints:
+                          const BoxConstraints.tightFor(width: 28, height: 28),
+                      padding: EdgeInsets.zero,
                       icon: const Icon(Icons.close_rounded, size: 16),
                       onPressed: () async {
                         final sessionId = model.parent.target?.sessionId;

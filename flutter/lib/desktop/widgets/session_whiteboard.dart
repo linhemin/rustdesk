@@ -25,6 +25,7 @@ class WhiteboardController extends ChangeNotifier {
   final List<WhiteboardStroke> _strokes = [];
   Offset? _laserPoint;
   Timer? _laserFadeTimer;
+  int _revision = 0;
 
   WhiteboardTool get tool => _tool;
   bool get active => _tool != WhiteboardTool.off;
@@ -33,6 +34,11 @@ class WhiteboardController extends ChangeNotifier {
   List<WhiteboardStroke> get strokes => List.unmodifiable(_strokes);
   Offset? get laserPoint => _laserPoint;
 
+  void _touch() {
+    _revision++;
+    notifyListeners();
+  }
+
   void setTool(WhiteboardTool next) {
     if (_tool == next) return;
     _tool = next;
@@ -40,7 +46,7 @@ class WhiteboardController extends ChangeNotifier {
       _laserPoint = null;
       _laserFadeTimer?.cancel();
     }
-    notifyListeners();
+    _touch();
   }
 
   void toggle() {
@@ -50,13 +56,13 @@ class WhiteboardController extends ChangeNotifier {
   void setColor(Color next) {
     if (_color == next) return;
     _color = next;
-    notifyListeners();
+    _touch();
   }
 
   void setStrokeWidth(double next) {
     if (_strokeWidth == next) return;
     _strokeWidth = next;
-    notifyListeners();
+    _touch();
   }
 
   void startStroke(Offset point) {
@@ -70,7 +76,7 @@ class WhiteboardController extends ChangeNotifier {
       color: _color,
       width: _strokeWidth,
     ));
-    notifyListeners();
+    _touch();
   }
 
   void extendStroke(Offset point) {
@@ -80,7 +86,7 @@ class WhiteboardController extends ChangeNotifier {
     }
     if (_tool != WhiteboardTool.pen || _strokes.isEmpty) return;
     _strokes.last.points.add(point);
-    notifyListeners();
+    _touch();
   }
 
   void updateLaser(Offset point) {
@@ -88,15 +94,15 @@ class WhiteboardController extends ChangeNotifier {
     _laserFadeTimer?.cancel();
     _laserFadeTimer = Timer(const Duration(milliseconds: 900), () {
       _laserPoint = null;
-      notifyListeners();
+      _touch();
     });
-    notifyListeners();
+    _touch();
   }
 
   void undo() {
     if (_strokes.isEmpty) return;
     _strokes.removeLast();
-    notifyListeners();
+    _touch();
   }
 
   void clear() {
@@ -105,7 +111,7 @@ class WhiteboardController extends ChangeNotifier {
     if (_strokes.isEmpty && _laserPoint == null) return;
     _strokes.clear();
     _laserPoint = null;
-    notifyListeners();
+    _touch();
   }
 
   @override
@@ -151,11 +157,14 @@ class SessionWhiteboardOverlay extends StatelessWidget {
                       controller.updateLaser(d.localPosition);
                     }
                   },
-                  child: CustomPaint(
-                    painter: _WhiteboardPainter(
-                      strokes: controller.strokes,
-                      laserPoint: controller.laserPoint,
-                      laserColor: controller.color,
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      painter: _WhiteboardPainter(
+                        strokes: controller.strokes,
+                        laserPoint: controller.laserPoint,
+                        laserColor: controller.color,
+                        revision: controller._revision,
+                      ),
                     ),
                   ),
                 ),
@@ -192,21 +201,24 @@ class SessionWhiteboardOverlay extends StatelessWidget {
                           ),
                           const SizedBox(width: 6),
                           for (final c in _palette)
-                            GestureDetector(
-                              onTap: () => controller.setColor(c),
-                              child: Container(
-                                width: 18,
-                                height: 18,
-                                margin:
-                                    const EdgeInsets.symmetric(horizontal: 3),
-                                decoration: BoxDecoration(
-                                  color: c,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: controller.color == c
-                                        ? Colors.white
-                                        : Colors.white30,
-                                    width: controller.color == c ? 2.5 : 1,
+                            MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: GestureDetector(
+                                onTap: () => controller.setColor(c),
+                                child: Container(
+                                  width: 18,
+                                  height: 18,
+                                  margin:
+                                      const EdgeInsets.symmetric(horizontal: 3),
+                                  decoration: BoxDecoration(
+                                    color: c,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: controller.color == c
+                                          ? Colors.white
+                                          : Colors.white30,
+                                      width: controller.color == c ? 2.5 : 1,
+                                    ),
                                   ),
                                 ),
                               ),
@@ -280,11 +292,13 @@ class _WhiteboardPainter extends CustomPainter {
     required this.strokes,
     required this.laserPoint,
     required this.laserColor,
+    required this.revision,
   });
 
   final List<WhiteboardStroke> strokes;
   final Offset? laserPoint;
   final Color laserColor;
+  final int revision;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -329,5 +343,6 @@ class _WhiteboardPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_WhiteboardPainter oldDelegate) => true;
+  bool shouldRepaint(_WhiteboardPainter oldDelegate) =>
+      revision != oldDelegate.revision;
 }

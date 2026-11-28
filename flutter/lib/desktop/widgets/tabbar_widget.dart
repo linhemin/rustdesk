@@ -6,6 +6,7 @@ import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide TabBarTheme;
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/remote_page.dart';
@@ -156,7 +157,7 @@ class DesktopTabController {
     state.update((val) {
       if (val != null) {
         val.selected = index;
-        Future.delayed(Duration(milliseconds: 100), (() {
+        void syncControllers() {
           if (val.pageController.hasClients) {
             val.pageController.jumpToPage(index);
           }
@@ -166,7 +167,13 @@ class DesktopTabController {
             val.scrollController
                 .scrollToItem(index, center: false, animate: true);
           }
-        }));
+        }
+
+        if (val.pageController.hasClients) {
+          syncControllers();
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) => syncControllers());
+        }
       }
     });
     if ((isDesktop && (bind.isIncomingOnly() || bind.isOutgoingOnly())) ||
@@ -753,6 +760,7 @@ class WindowActionPanelState extends State<WindowActionPanel> {
             widget.tabController.tabType == DesktopTabType.fileTransfer ||
             widget.tabController.tabType == DesktopTabType.viewCamera ||
             widget.tabController.tabType == DesktopTabType.portForward ||
+            widget.tabController.tabType == DesktopTabType.terminal ||
             widget.tabController.tabType == DesktopTabType.cm);
   }
 
@@ -1139,6 +1147,10 @@ class _TabState extends State<_Tab> with RestorationMixin {
         if (e.kind != ui.PointerDeviceKind.mouse) {
           return;
         }
+        if (e.buttons == kMiddleMouseButton && widget.closable) {
+          widget.onClose();
+          return;
+        }
         if (e.buttons == 2) {
           if (widget.tabMenuBuilder != null) {
             showRightMenu(
@@ -1159,12 +1171,12 @@ class _TabState extends State<_Tab> with RestorationMixin {
     bool isSelected = widget.index == widget.selected;
     bool showDivider =
         widget.index != widget.selected - 1 && widget.index != widget.selected;
-    RxBool hover = restoreHover.value.obs;
     return Ink(
       child: InkWell(
         onHover: (value) {
-          hover.value = value;
-          restoreHover.value = value;
+          if (mounted) {
+            setState(() => restoreHover.value = value);
+          }
         },
         onTap: () => widget.onTap(),
         child: Container(
@@ -1193,12 +1205,14 @@ class _TabState extends State<_Tab> with RestorationMixin {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             _buildTabContent(),
-                            Obx((() => _CloseButton(
-                                  visible: hover.value && widget.closable,
-                                  tabSelected: isSelected,
-                                  onClose: () => widget.onClose(),
-                                )))
-                          ])).paddingOnly(left: 10, right: 5),
+                            if (widget.closable)
+                              _CloseButton(
+                                visible: restoreHover.value || isSelected,
+                                tabSelected: isSelected,
+                                onClose: () => widget.onClose(),
+                              ),
+                          ])).paddingOnly(
+                      left: 10, right: widget.closable ? 5 : 10),
                   Offstage(
                     offstage: !showDivider,
                     child: VerticalDivider(
@@ -1393,17 +1407,18 @@ class _TabDropDownButtonState extends State<_TabDropDownButton> {
               height: 32,
               onTap: () {
                 widget.controller.jumpToByKey(e);
-                if (Navigator.of(context).canPop()) {
-                  Navigator.of(context).pop();
-                }
               },
               child: MouseRegion(
-                onHover: (event) => setState(() => menuHover.value = true),
-                onExit: (event) => setState(() => menuHover.value = false),
+                onEnter: (_) => menuHover.value = true,
+                onExit: (_) => menuHover.value = false,
                 child: Row(
                   children: [
                     Expanded(
-                      child: InkWell(child: Text(label)),
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                     Obx(
                       () {
@@ -1418,15 +1433,15 @@ class _TabDropDownButtonState extends State<_TabDropDownButton> {
                               },
                               child: MouseRegion(
                                   cursor: SystemMouseCursors.click,
-                                  onHover: (event) =>
-                                      setState(() => btnHover.value = true),
-                                  onExit: (event) =>
-                                      setState(() => btnHover.value = false),
+                                  onEnter: (_) => btnHover.value = true,
+                                  onExit: (_) => btnHover.value = false,
                                   child: Icon(Icons.close,
-                                      color:
-                                          btnHover.value ? Colors.red : null)));
+                                      size: 16,
+                                      color: btnHover.value
+                                          ? WorkspaceStyle.danger(context)
+                                          : null)));
                         } else {
-                          return Offstage();
+                          return const Offstage();
                         }
                       },
                     ),
@@ -1470,28 +1485,28 @@ class TabbarTheme extends ThemeExtension<TabbarTheme> {
       required this.selectedTabBackgroundColor});
 
   static const light = TabbarTheme(
-      selectedTabIconColor: MyTheme.accent,
-      unSelectedTabIconColor: Color(0xff61718a),
-      selectedTextColor: Color(0xFF17233B),
-      unSelectedTextColor: Color.fromARGB(255, 112, 112, 112),
-      selectedIconColor: Color.fromARGB(255, 26, 26, 26),
-      unSelectedIconColor: Color.fromARGB(255, 96, 96, 96),
+      selectedTabIconColor: WorkspaceStyle.blue,
+      unSelectedTabIconColor: WorkspaceStyle.muted,
+      selectedTextColor: WorkspaceStyle.navy,
+      unSelectedTextColor: WorkspaceStyle.muted,
+      selectedIconColor: WorkspaceStyle.navy,
+      unSelectedIconColor: WorkspaceStyle.muted,
       dividerColor: Color(0xFFE2E7F0),
-      hoverColor: Colors.white54,
-      closeHoverColor: Colors.white,
+      hoverColor: Color(0x120F172A),
+      closeHoverColor: Color(0x180F172A),
       selectedTabBackgroundColor: Colors.white);
 
   static const dark = TabbarTheme(
-      selectedTabIconColor: MyTheme.accent,
-      unSelectedTabIconColor: Color(0xffabbcd1),
-      selectedTextColor: Colors.white,
-      unSelectedTextColor: Color.fromARGB(255, 192, 192, 192),
-      selectedIconColor: Color.fromARGB(255, 192, 192, 192),
-      unSelectedIconColor: Color.fromARGB(255, 255, 255, 255),
-      dividerColor: Color(0xFF303E54),
-      hoverColor: Colors.black26,
-      closeHoverColor: Colors.black,
-      selectedTabBackgroundColor: Color(0xFF1A2436));
+      selectedTabIconColor: WorkspaceStyle.ice,
+      unSelectedTabIconColor: WorkspaceStyle.mutedDark,
+      selectedTextColor: WorkspaceStyle.inkDark,
+      unSelectedTextColor: WorkspaceStyle.mutedDark,
+      selectedIconColor: WorkspaceStyle.inkDark,
+      unSelectedIconColor: WorkspaceStyle.mutedDark,
+      dividerColor: WorkspaceStyle.borderDark,
+      hoverColor: Color(0x1AFFFFFF),
+      closeHoverColor: Color(0x26FFFFFF),
+      selectedTabBackgroundColor: WorkspaceStyle.slate);
 
   @override
   ThemeExtension<TabbarTheme> copyWith({

@@ -66,90 +66,92 @@ class _MobileSessionQualityMonitorState
                       offset: Offset(0, 12)),
                 ],
               ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: BackdropFilter(
-                  filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-                  child: Container(
-                    width: 162,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xc2101622),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0x24ffffff)),
-                    ),
-                    child: DefaultTextStyle(
-                      style: const TextStyle(
-                          color: Color(0xfff1f5fa),
-                          fontSize: 10.5,
-                          height: 1.4),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(children: [
-                            Container(
-                                width: 6,
-                                height: 6,
-                                decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: widget.direct == null
-                                        ? const Color(0xff94a3b8)
-                                        : widget.direct!
-                                            ? const Color(0xff34d399)
-                                            : const Color(0xff60a5fa))),
-                            const SizedBox(width: 6),
-                            Expanded(
-                                child: Text(widget.connection,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600))),
-                            const Icon(Icons.drag_indicator,
-                                size: 12, color: Color(0x9ee2eaf6)),
-                          ]),
-                          const Divider(color: Color(0x17ffffff), height: 13),
-                          Flexible(
-                            child: SingleChildScrollView(
-                              physics: const ClampingScrollPhysics(),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  for (final (label, value) in widget.metrics)
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 1),
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Expanded(
-                                              flex: 5,
-                                              child: Text(label,
-                                                  style: const TextStyle(
-                                                      color:
-                                                          Color(0x9ee2eaf6)))),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                              flex: 7,
-                                              child: Text(value,
-                                                  textAlign: TextAlign.end,
-                                                  style: const TextStyle(
-                                                      fontFeatures: [
-                                                        ui.FontFeature
-                                                            .tabularFigures()
-                                                      ]))),
-                                        ],
+              child: RepaintBoundary(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: BackdropFilter(
+                    filter: ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+                    child: Container(
+                      width: 162,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xc2101622),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0x24ffffff)),
+                      ),
+                      child: DefaultTextStyle(
+                        style: const TextStyle(
+                            color: Color(0xfff1f5fa),
+                            fontSize: 10.5,
+                            height: 1.4),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(children: [
+                              Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: widget.direct == null
+                                          ? const Color(0xff94a3b8)
+                                          : widget.direct!
+                                              ? const Color(0xff34d399)
+                                              : const Color(0xff60a5fa))),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                  child: Text(widget.connection,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600))),
+                              const Icon(Icons.drag_indicator,
+                                  size: 12, color: Color(0x9ee2eaf6)),
+                            ]),
+                            const Divider(color: Color(0x17ffffff), height: 13),
+                            Flexible(
+                              child: SingleChildScrollView(
+                                physics: const ClampingScrollPhysics(),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    for (final (label, value) in widget.metrics)
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            vertical: 1),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Expanded(
+                                                flex: 5,
+                                                child: Text(label,
+                                                    style: const TextStyle(
+                                                        color:
+                                                            Color(0x9ee2eaf6)))),
+                                            const SizedBox(width: 4),
+                                            Expanded(
+                                                flex: 7,
+                                                child: Text(value,
+                                                    textAlign: TextAlign.end,
+                                                    style: const TextStyle(
+                                                        fontFeatures: [
+                                                          ui.FontFeature
+                                                              .tabularFigures()
+                                                        ]))),
+                                          ],
+                                        ),
                                       ),
-                                    ),
-                                  if (widget.diagnostics
-                                      case final diagnostics?)
-                                    diagnostics,
-                                ],
+                                    if (widget.diagnostics
+                                        case final diagnostics?)
+                                      diagnostics,
+                                  ],
+                                ),
                               ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),

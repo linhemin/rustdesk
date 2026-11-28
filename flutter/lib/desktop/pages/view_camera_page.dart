@@ -318,7 +318,7 @@ class _ViewCameraPageState extends State<ViewCameraPage>
     }
 
     return Scaffold(
-      backgroundColor: Theme.of(context).colorScheme.background,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       body: Obx(() {
         final imageReady = _ffi.ffiModel.pi.isSet.isTrue &&
             _ffi.ffiModel.waitForFirstImage.isFalse;
@@ -687,7 +687,7 @@ class _ImagePaintState extends State<ImagePaint> {
     if (layoutSize.width < size.width) {
       widget = RawScrollbar(
         thickness: kScrollbarThickness,
-        thumbColor: Colors.grey,
+        thumbColor: Theme.of(context).hintColor.withOpacity(0.55),
         controller: horizontal,
         thumbVisibility: false,
         trackVisibility: false,
@@ -700,7 +700,7 @@ class _ImagePaintState extends State<ImagePaint> {
     if (layoutSize.height < size.height) {
       widget = RawScrollbar(
         thickness: kScrollbarThickness,
-        thumbColor: Colors.grey,
+        thumbColor: Theme.of(context).hintColor.withOpacity(0.55),
         controller: vertical,
         thumbVisibility: false,
         trackVisibility: false,

@@ -41,7 +41,7 @@ class _KBImage extends StatelessWidget {
           borderRadius: BorderRadius.circular(_kBorderRadius),
           border: Border.all(
             color: chosenType.value == kbLayoutType
-                ? _kImageBorderColor
+                ? Theme.of(context).colorScheme.primary
                 : Colors.transparent,
             width: _kImageBoarderWidth,
           ),
