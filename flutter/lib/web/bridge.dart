@@ -100,6 +100,7 @@ class RustdeskImpl {
     js.context.callMethod('getCursorShape', [
       id,
       (int hotx, int hoty, int width, int height, Uint8List? colors) {
+        if (completer.isCompleted) return;
         completer.complete(colors == null
             ? null
             : CursorShape(
@@ -1334,12 +1335,16 @@ class RustdeskImpl {
     Future<String> timeoutFuture = completer.future.timeout(
       Duration(seconds: 2),
       onTimeout: () {
-        completer.completeError(TimeoutException('Load ab timed out'));
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Load ab timed out'));
+        }
         return 'Timeout';
       },
     );
     js.context["onLoadAbFinished"] = (String s) {
-      completer.complete(s);
+      if (!completer.isCompleted) {
+        completer.complete(s);
+      }
     };
     js.context.callMethod('setByName', ['load_ab']);
     return timeoutFuture;
@@ -1359,12 +1364,16 @@ class RustdeskImpl {
     Future<String> timeoutFuture = completer.future.timeout(
       Duration(seconds: 2),
       onTimeout: () {
-        completer.completeError(TimeoutException('Load group timed out'));
+        if (!completer.isCompleted) {
+          completer.completeError(TimeoutException('Load group timed out'));
+        }
         return 'Timeout';
       },
     );
     js.context["onLoadGroupFinished"] = (String s) {
-      completer.complete(s);
+      if (!completer.isCompleted) {
+        completer.complete(s);
+      }
     };
     js.context.callMethod('setByName', ['load_group']);
     return timeoutFuture;

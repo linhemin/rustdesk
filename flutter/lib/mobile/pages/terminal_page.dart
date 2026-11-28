@@ -140,7 +140,9 @@ class _TerminalPageState extends State<TerminalPage>
     WidgetsBinding.instance.addObserver(this);
 
     if (isWeb) {
-      loadLocalTerminalFontIfNeeded();
+      loadLocalTerminalFontIfNeeded().then((_) {
+        if (mounted) setState(() {});
+      });
     }
 
     debugPrint(
