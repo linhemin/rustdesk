@@ -479,7 +479,7 @@ class TrackpadSpeedWidget extends StatefulWidget {
     this.onDebouncer,
     this.onTextChanged,
     this.onTextSubmitted,
-  });
+  }) : super(key: key);
 
   @override
   TrackpadSpeedWidgetState createState() => TrackpadSpeedWidgetState();
@@ -534,6 +534,7 @@ class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
   @override
   void initState() {
     super.initState();
+    _controller.text = value.toString();
     debouncerSpeed = Debouncer<int>(
       Duration(milliseconds: 1000),
       onChanged: widget.onDebouncer,
@@ -542,14 +543,17 @@ class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
   }
 
   @override
+  void dispose() {
+    _controller.dispose();
+    debouncerSpeed.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (_controller.text.isEmpty) {
-      _controller.text = value.toString();
-    }
     return Row(
       children: [
         Expanded(
-          flex: 3,
           child: Slider(
             value: value.toDouble(),
             min: kMinTrackpadSpeed.toDouble(),
@@ -558,31 +562,30 @@ class TrackpadSpeedWidgetState extends State<TrackpadSpeedWidget> {
             onChanged: (double v) => updateValue(v.round()),
           ),
         ),
-        Expanded(
-            flex: 1,
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 56,
-                  child: TextField(
-                    controller: _controller,
-                    keyboardType: TextInputType.number,
-                    textAlign: TextAlign.center,
-                    onChanged: updateTextValue,
-                    onSubmitted: submitTextValue,
-                    style: const TextStyle(fontSize: 13),
-                    decoration: InputDecoration(
-                      contentPadding:
-                          EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
-                    ),
-                  ),
-                ).marginOnly(right: 8.0),
-                Text(
-                  '%',
-                  style: const TextStyle(fontSize: 15),
-                )
-              ],
-            )),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 56,
+              child: TextField(
+                controller: _controller,
+                keyboardType: TextInputType.number,
+                textAlign: TextAlign.center,
+                onChanged: updateTextValue,
+                onSubmitted: submitTextValue,
+                style: const TextStyle(fontSize: 13),
+                decoration: const InputDecoration(
+                  contentPadding:
+                      EdgeInsets.symmetric(vertical: 8.0, horizontal: 12.0),
+                ),
+              ),
+            ).marginOnly(right: 8.0),
+            const Text(
+              '%',
+              style: TextStyle(fontSize: 15),
+            )
+          ],
+        ),
       ],
     );
   }

@@ -24,6 +24,7 @@ Future<void> showServerConfigQrDialog(BuildContext context) async {
     builder: (ctx) {
       final theme = Theme.of(ctx);
       return AlertDialog(
+        scrollable: true,
         title: Text(translate('ID/Relay Server')),
         content: SizedBox(
           width: 300,
@@ -143,6 +144,7 @@ class _NetworkDiagnosticsDialogState extends State<_NetworkDiagnosticsDialog> {
     final theme = Theme.of(context);
     final checks = _checks;
     return AlertDialog(
+      scrollable: true,
       title: Text(translate('Diagnostics')),
       content: SizedBox(
         width: 400,

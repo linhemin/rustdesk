@@ -19,6 +19,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 import '../../common.dart';
 import '../../common/widgets/workspace.dart';
@@ -38,8 +39,8 @@ class _DesktopKeyboardShortcutsPageState
 
   @override
   Widget build(BuildContext context) {
-    final foregroundColor =
-        AppBarTheme.of(context).titleTextStyle?.color ?? Colors.white;
+    final foregroundColor = AppBarTheme.of(context).titleTextStyle?.color ??
+        Theme.of(context).colorScheme.onSurface;
     final body = KeyboardShortcutsPageBody(
       key: _bodyKey,
       compact: true,
@@ -62,7 +63,7 @@ class _DesktopKeyboardShortcutsPageState
           ).marginOnly(right: 12),
         ],
       ),
-      body: (isWindows || isMacOS)
+      body: usesWorkspaceStyle
           ? Padding(
               padding: const EdgeInsets.all(16),
               child: WorkspacePanel(

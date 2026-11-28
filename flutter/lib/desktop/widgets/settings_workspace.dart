@@ -85,10 +85,17 @@ class WorkspaceSettingsNavItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 3),
       child: Material(
-        color: selected ? accent : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
+        color: selected ? WorkspaceStyle.accentSoft(context) : Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(
+            color: selected
+                ? WorkspaceStyle.accentBorder(context)
+                : Colors.transparent,
+          ),
+        ),
         child: InkWell(
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(8),
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -108,8 +115,7 @@ class WorkspaceSettingsNavItem extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13,
-                    color:
-                        selected ? Colors.white : theme.colorScheme.onSurface,
+                    color: selected ? accent : theme.colorScheme.onSurface,
                     fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
@@ -283,11 +289,25 @@ class WorkspaceSettingsThemePicker extends StatelessWidget {
                       Expanded(
                           child: Container(
                               margin: const EdgeInsets.fromLTRB(0, 6, 6, 6),
+                              clipBehavior: Clip.antiAlias,
                               decoration: BoxDecoration(
-                                  color: entry.key == 'dark'
-                                      ? const Color(0xff262c38)
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(3)))),
+                                  borderRadius: BorderRadius.circular(3)),
+                              child: entry.key == 'system'
+                                  ? const Row(children: [
+                                      Expanded(
+                                          child: ColoredBox(
+                                              color: Colors.white,
+                                              child: SizedBox.expand())),
+                                      Expanded(
+                                          child: ColoredBox(
+                                              color: Color(0xff262c38),
+                                              child: SizedBox.expand())),
+                                    ])
+                                  : ColoredBox(
+                                      color: entry.key == 'dark'
+                                          ? const Color(0xff262c38)
+                                          : Colors.white,
+                                      child: const SizedBox.expand()))),
                     ]),
                   ),
                   const SizedBox(height: 8),

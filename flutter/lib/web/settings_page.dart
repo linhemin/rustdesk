@@ -1,26 +1,25 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 
 class WebSettingsPage extends StatelessWidget {
   const WebSettingsPage({Key? key}) : super(key: key);
 
-  @override
-  Widget build(BuildContext context) {
-    return _buildDesktopButton(context);
+  static void open(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => DesktopSettingPage(initialTabkey: SettingsTabKey.general),
+      ),
+    );
   }
 
-  Widget _buildDesktopButton(BuildContext context) {
+  @override
+  Widget build(BuildContext context) {
     return IconButton(
-      icon: const Icon(Icons.more_vert),
-      onPressed: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (BuildContext context) =>
-                DesktopSettingPage(initialTabkey: SettingsTabKey.general),
-          ),
-        );
-      },
+      tooltip: translate('Settings'),
+      icon: const Icon(Icons.settings_outlined),
+      onPressed: () => open(context),
     );
   }
 }

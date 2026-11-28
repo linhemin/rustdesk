@@ -35,6 +35,21 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
     labelKey: 'Check for software updates on startup',
     aliases: ['update', '更新'],
   ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.general,
+    labelKey: 'Enable Direct3D render',
+    aliases: ['directx', 'd3d', 'render', '渲染'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.general,
+    labelKey: 'Enable Wayland',
+    aliases: ['wayland', 'linux'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.general,
+    labelKey: 'Wake Lock',
+    aliases: ['wakelock', 'sleep', '休眠', '唤醒锁'],
+  ),
   // Appearance
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.appearance,
@@ -54,8 +69,8 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.network,
-    labelKey: 'Enable direct IP access',
-    aliases: ['ip', 'lan', '直连', '局域网'],
+    labelKey: 'Direct connections only',
+    aliases: ['direct', 'relay', '仅直连', '跳过中继'],
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.network,
@@ -65,8 +80,23 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   // Security
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.safety,
+    labelKey: 'Enable direct IP access',
+    aliases: ['ip', 'lan', '直连', '局域网', 'port', '端口'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.safety,
+    labelKey: 'Timeout in minutes',
+    aliases: ['auto disconnect', 'timeout', '自动断开', '超时'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.safety,
     labelKey: 'Password',
     aliases: ['permanent', 'one-time', '密码', '固定密码', '临时密码'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.safety,
+    labelKey: 'Set PIN',
+    aliases: ['pin', 'unlock', '解锁'],
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.safety,
@@ -76,12 +106,17 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.safety,
     labelKey: '2FA',
-    aliases: ['totp', '两步验证', '双重验证'],
+    aliases: ['totp', '两步验证', '双重验证', 'trusted'],
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.safety,
     labelKey: 'Enable file transfer',
     aliases: ['file', 'clipboard', '文件传输', '剪贴板', '权限'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.safety,
+    labelKey: 'Enable clipboard',
+    aliases: ['clipboard', 'copy', 'paste', '剪贴板'],
   ),
   // Display & quality
   DesktopSettingSearchEntry(
@@ -96,8 +131,18 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.display,
+    labelKey: 'Trackpad speed',
+    aliases: ['trackpad', 'touchpad', 'scroll', '触控板', '滚动速度'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.display,
     labelKey: 'Privacy mode',
     aliases: ['black screen', '隐私屏', '黑屏'],
+  ),
+  DesktopSettingSearchEntry(
+    tab: SettingsTabKey.display,
+    labelKey: 'Virtual display',
+    aliases: ['virtual', 'monitor', '虚拟显示器', 'amyuni'],
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.display,
@@ -108,7 +153,7 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.audio,
     labelKey: 'Audio Input',
-    aliases: ['microphone', 'mic', 'speaker', '音频', '麦克风', '扬声器', 'vb-cable'],
+    aliases: ['microphone', 'mic', 'speaker', '音频', '麦克风', '扬声器', 'vb-cable', 'virtual'],
   ),
   DesktopSettingSearchEntry(
     tab: SettingsTabKey.audio,
@@ -141,11 +186,20 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   ),
 ];
 
+const _nativeP2pEntries = {
+  'Enable UDP hole punching': ['udp', 'hole punching', 'p2p', '打洞'],
+  'Enable TCP hole punching': ['tcp', 'hole punching', 'p2p', '打洞'],
+  'Enable IPv6 P2P connection': ['ipv6', 'p2p'],
+};
+
 /// Returns matching setting tabs and specific item matches for [query].
 ({Set<SettingsTabKey> matchingTabs, List<DesktopSettingSearchEntry> matches})
     searchDesktopSettings({
   required String query,
   required List<SettingsTabKey> availableTabs,
+  bool expandedSettings = true,
+  bool includeNativeP2p = true,
+  bool canConnect = true,
   String Function(String key)? translateLabel,
 }) {
   final tr = translateLabel ?? translate;
@@ -156,8 +210,25 @@ const List<DesktopSettingSearchEntry> kDesktopSettingSearchEntries = [
   final available = availableTabs.toSet();
   final matchingTabs = <SettingsTabKey>{};
   final matches = <DesktopSettingSearchEntry>[];
+  final p2pTab = expandedSettings && available.contains(SettingsTabKey.network)
+      ? SettingsTabKey.network
+      : SettingsTabKey.general;
+  final entries = [
+    ...kDesktopSettingSearchEntries,
+    if (canConnect && available.contains(SettingsTabKey.general)) ...[
+      if (includeNativeP2p)
+        for (final entry in _nativeP2pEntries.entries)
+          DesktopSettingSearchEntry(
+            tab: p2pTab, labelKey: entry.key, aliases: entry.value),
+      DesktopSettingSearchEntry(
+        tab: p2pTab,
+        labelKey: 'Enable WebRTC P2P connection',
+        aliases: const ['webrtc', 'p2p'],
+      ),
+    ],
+  ];
 
-  for (final entry in kDesktopSettingSearchEntries) {
+  for (final entry in entries) {
     if (!available.contains(entry.tab)) continue;
     final localized = tr(entry.labelKey).toLowerCase();
     final hit = localized.contains(q) ||

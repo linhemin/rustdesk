@@ -13,6 +13,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 import '../../../common.dart';
 import 'shortcut_utils.dart';
@@ -305,15 +306,16 @@ class _RecordingDialogState extends State<_RecordingDialog> {
       // captured-combo states so the user gets explicit feedback that their
       // last keystroke was ignored, regardless of whether a previous combo
       // is still captured.
+      final dangerColor = WorkspaceStyle.danger(context);
       statusLine = Row(
         children: [
-          const Icon(Icons.close, size: 16, color: Colors.red),
+          Icon(Icons.close, size: 16, color: dangerColor),
           const SizedBox(width: 6),
           Flexible(
             child: Text(
               translate('shortcut-key-not-supported')
                   .replaceAll('{}', _unsupportedKey!),
-              style: const TextStyle(color: Colors.red),
+              style: TextStyle(color: dangerColor),
             ),
           ),
         ],
@@ -324,40 +326,42 @@ class _RecordingDialogState extends State<_RecordingDialog> {
         style: TextStyle(color: Theme.of(context).hintColor),
       );
     } else if (!_hasRequiredPrefix) {
+      final dangerColor = WorkspaceStyle.danger(context);
       statusLine = Row(
         children: [
-          Icon(Icons.close, size: 16, color: Colors.red),
+          Icon(Icons.close, size: 16, color: dangerColor),
           const SizedBox(width: 6),
           Flexible(
             child: Text(
               translate('shortcut-must-include-modifiers')
                   .replaceAll('{}', _formatPrefix()),
-              style: const TextStyle(color: Colors.red),
+              style: TextStyle(color: dangerColor),
             ),
           ),
         ],
       );
     } else if (hasConflict) {
       final otherLabel = widget.actionLabelLookup(conflictId);
+      final warningColor = WorkspaceStyle.warning(context);
       statusLine = Row(
         children: [
-          Icon(Icons.warning_amber_outlined,
-              size: 16, color: Colors.orange.shade700),
+          Icon(Icons.warning_amber_outlined, size: 16, color: warningColor),
           const SizedBox(width: 6),
           Flexible(
             child: Text(
               '${translate('shortcut-already-bound-to')} "$otherLabel"',
-              style: TextStyle(color: Colors.orange.shade700),
+              style: TextStyle(color: warningColor),
             ),
           ),
         ],
       );
     } else {
+      final successColor = WorkspaceStyle.success(context);
       statusLine = Row(
         children: [
-          const Icon(Icons.check, size: 16, color: Colors.green),
+          Icon(Icons.check, size: 16, color: successColor),
           const SizedBox(width: 6),
-          Text(translate('Valid'), style: const TextStyle(color: Colors.green)),
+          Text(translate('Valid'), style: TextStyle(color: successColor)),
         ],
       );
     }
@@ -366,6 +370,8 @@ class _RecordingDialogState extends State<_RecordingDialog> {
 
     final parts = _comboParts();
     final theme = Theme.of(context);
+    final dialogWidth =
+        (MediaQuery.sizeOf(context).width - 80).clamp(240.0, 420.0);
     return AlertDialog(
       scrollable: true,
       title: Text(
@@ -377,7 +383,7 @@ class _RecordingDialogState extends State<_RecordingDialog> {
         onKeyEvent: _onKeyEvent,
         onKey: _onRawKeyEvent,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 380),
+          constraints: BoxConstraints(maxWidth: dialogWidth, minWidth: 240),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -392,7 +398,8 @@ class _RecordingDialogState extends State<_RecordingDialog> {
                 padding:
                     const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.background,
+                  color: WorkspaceStyle.elevatedSurface(context),
+                  border: Border.all(color: theme.dividerColor),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: ExcludeSemantics(child: parts.isEmpty

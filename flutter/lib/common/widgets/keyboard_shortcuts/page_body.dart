@@ -469,7 +469,7 @@ class InfoTooltipIcon extends StatelessWidget {
       waitDuration: const Duration(milliseconds: 250),
       showDuration: const Duration(seconds: 6),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6),
+        padding: const EdgeInsets.all(10),
         child: Icon(
           Icons.help_outline,
           size: 16,

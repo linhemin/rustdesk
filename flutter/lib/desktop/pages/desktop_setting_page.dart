@@ -5,7 +5,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
-import '../../common/relay_servers.dart';
 import '../../common/widgets/relay_servers.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
@@ -152,6 +151,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   late Rx<SettingsTabKey> selectedTab;
   TabController? _workspaceTabs;
   final TextEditingController _searchController = TextEditingController();
+  final ScrollController _tabListScrollController = ScrollController();
   String _searchQuery = '';
 
   @override
@@ -222,6 +222,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     controller.dispose();
     _workspaceTabs?.dispose();
     _searchController.dispose();
+    _tabListScrollController.dispose();
     super.dispose();
   }
 
@@ -330,21 +331,27 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         if (videoConnBlock)
           Container(
             color: Colors.black.withOpacity(0.5),
+            alignment: Alignment.center,
+            child: const Icon(
+              Icons.lock_outline_rounded,
+              size: 32,
+              color: Colors.white,
+            ),
           )
       ]);
     });
   }
 
-  Color _tileColorFor(SettingsTabKey key) => switch (key) {
+  Color _tileColorFor(BuildContext context, SettingsTabKey key) => switch (key) {
         SettingsTabKey.general => WorkspaceStyle.neutralTile,
         SettingsTabKey.safety => WorkspaceStyle.green,
         SettingsTabKey.network => WorkspaceStyle.blue,
         SettingsTabKey.display => WorkspaceStyle.amber,
         SettingsTabKey.account => WorkspaceStyle.indigo,
         SettingsTabKey.printer => WorkspaceStyle.purple,
-        SettingsTabKey.about => const Color(0xff8e8e93),
+        SettingsTabKey.about => const Color(0xff64748b),
         SettingsTabKey.appearance => WorkspaceStyle.purple,
-        SettingsTabKey.audio => Colors.red,
+        SettingsTabKey.audio => WorkspaceStyle.danger(context),
         SettingsTabKey.shortcuts => WorkspaceStyle.indigo,
       };
 
@@ -368,6 +375,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
       final searchResult = searchDesktopSettings(
         query: query,
         availableTabs: [for (final t in tabs) t.key],
+        expandedSettings: _expandedDesktopSettings,
+        includeNativeP2p: !isWeb,
+        canConnect: !bind.isIncomingOnly(),
       );
       final filteredIndices = <int>[
         for (var i = 0; i < tabs.length; i++)
@@ -422,6 +432,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                                   : IconButton(
                                       padding: EdgeInsets.zero,
                                       iconSize: 14,
+                                      tooltip: translate('Clear'),
                                       onPressed: () {
                                         _searchController.clear();
                                         setState(() => _searchQuery = '');
@@ -446,40 +457,127 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                         ),
                       ),
                       Expanded(
-                          child: ListView(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              children: [
-                            for (var index = 0;
-                                index < filteredIndices.length;
-                                index++) ...[
-                              if (index == 0 ||
-                                  _groupFor(tabs[filteredIndices[index]].key) !=
-                                      _groupFor(
-                                          tabs[filteredIndices[index - 1]].key))
-                                Padding(
-                                  padding: EdgeInsets.fromLTRB(
-                                      18, index == 0 ? 0 : 16, 18, 6),
-                                  child: Text(
-                                      translate(_groupFor(
-                                          tabs[filteredIndices[index]].key)),
+                          child: filteredIndices.isEmpty &&
+                                  searchResult.matches.isEmpty
+                              ? Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(16),
+                                    child: Text(
+                                      translate('Empty'),
                                       style: TextStyle(
-                                          fontSize: 11,
+                                          fontSize: 12.5,
                                           color: WorkspaceStyle.tertiaryInk(
-                                              context))),
-                                ),
-                              Obx(() {
-                                final i = filteredIndices[index];
-                                return WorkspaceSettingsNavItem(
-                                    label: translate(tabs[i].label),
-                                    icon: selectedTab.value == tabs[i].key
-                                        ? tabs[i].selected
-                                        : tabs[i].unselected,
-                                    tileColor: _tileColorFor(tabs[i].key),
-                                    selected: selectedTab.value == tabs[i].key,
-                                    onTap: () => controller.jumpToPage(i));
-                              }),
-                            ],
-                          ])),
+                                              context)),
+                                    ),
+                                  ),
+                                )
+                              : ListView(
+                                  padding: const EdgeInsets.only(bottom: 12),
+                                  children: [
+                                      for (var index = 0;
+                                          index < filteredIndices.length;
+                                          index++) ...[
+                                        if (index == 0 ||
+                                            _groupFor(tabs[
+                                                        filteredIndices[index]]
+                                                    .key) !=
+                                                _groupFor(tabs[filteredIndices[
+                                                        index - 1]]
+                                                    .key))
+                                          Padding(
+                                            padding: EdgeInsets.fromLTRB(
+                                                18, index == 0 ? 0 : 16, 18, 6),
+                                            child: Text(
+                                                translate(_groupFor(tabs[
+                                                        filteredIndices[index]]
+                                                    .key)),
+                                                style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: WorkspaceStyle
+                                                        .tertiaryInk(context))),
+                                          ),
+                                        Obx(() {
+                                          final i = filteredIndices[index];
+                                          return WorkspaceSettingsNavItem(
+                                              label: translate(tabs[i].label),
+                                              icon: selectedTab.value ==
+                                                      tabs[i].key
+                                                  ? tabs[i].selected
+                                                  : tabs[i].unselected,
+                                              tileColor: _tileColorFor(
+                                                  context, tabs[i].key),
+                                              selected: selectedTab.value ==
+                                                  tabs[i].key,
+                                              onTap: () =>
+                                                  controller.jumpToPage(i));
+                                        }),
+                                      ],
+                                      if (query.isNotEmpty &&
+                                          searchResult.matches.isNotEmpty) ...[
+                                        Divider(
+                                            height: 20,
+                                            indent: 14,
+                                            endIndent: 14,
+                                            color: theme.dividerColor),
+                                        for (final match
+                                            in searchResult.matches.take(12))
+                                          Builder(builder: (context) {
+                                            final tabIndex = tabs.indexWhere(
+                                                (t) => t.key == match.tab);
+                                            if (tabIndex < 0) {
+                                              return const SizedBox.shrink();
+                                            }
+                                            final tab = tabs[tabIndex];
+                                            return Padding(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 10,
+                                                      vertical: 1.5),
+                                              child: InkWell(
+                                                borderRadius:
+                                                    BorderRadius.circular(8),
+                                                onTap: () => controller
+                                                    .jumpToPage(tabIndex),
+                                                child: Padding(
+                                                  padding: const EdgeInsets
+                                                      .symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 6),
+                                                  child: Row(
+                                                    children: [
+                                                      WorkspaceIconTile(
+                                                        icon: tab.selected,
+                                                        color: _tileColorFor(
+                                                            context, tab.key),
+                                                        size: 18,
+                                                        radius: 5,
+                                                        iconSize: 11,
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Expanded(
+                                                        child: Text(
+                                                          translate(
+                                                              match.labelKey),
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          style: theme.textTheme
+                                                              .bodySmall
+                                                              ?.copyWith(
+                                                            fontSize: 12,
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            );
+                                          }),
+                                      ],
+                                    ])),
                       if (_expandedDesktopSettings)
                         Padding(
                           padding: const EdgeInsets.all(10),
@@ -501,17 +599,114 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                   Obx(() {
                     final tab =
                         tabs.firstWhere((tab) => tab.key == selectedTab.value);
-                    return WorkspaceSettingsHeader(
-                      title: translate(tab.label),
-                      icon: tab.selected,
-                      tileColor: _tileColorFor(tab.key),
+                    return Row(
+                      children: [
+                        if (isWeb && Navigator.canPop(context))
+                          Padding(
+                            padding: const EdgeInsetsDirectional.only(start: 8),
+                            child: BackButton(
+                                onPressed: () =>
+                                    Navigator.of(context).maybePop()),
+                          ),
+                        Expanded(
+                          child: WorkspaceSettingsHeader(
+                            title: translate(tab.label),
+                            icon: tab.selected,
+                            tileColor: _tileColorFor(context, tab.key),
+                          ),
+                        ),
+                      ],
                     );
                   })
                 else ...[
                   Padding(
                       padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
-                      child: Text(translate('Settings'),
-                          style: theme.textTheme.headlineSmall)),
+                      child: Row(
+                        children: [
+                          if (isWeb && Navigator.canPop(context))
+                            BackButton(
+                                onPressed: () =>
+                                    Navigator.of(context).maybePop()),
+                          Expanded(
+                            child: Text(translate('Settings'),
+                                style: theme.textTheme.headlineSmall),
+                          ),
+                          SizedBox(
+                            width: 190,
+                            height: 32,
+                            child: TextField(
+                              controller: _searchController,
+                              onChanged: (value) =>
+                                  setState(() => _searchQuery = value),
+                              style: theme.textTheme.bodyMedium
+                                  ?.copyWith(fontSize: 12.5),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                filled: true,
+                                fillColor: theme.cardColor,
+                                hintText: translate('Search'),
+                                hintStyle: TextStyle(
+                                    fontSize: 12.5, color: theme.hintColor),
+                                prefixIcon: Icon(Icons.search_rounded,
+                                    size: 16, color: theme.hintColor),
+                                prefixIconConstraints:
+                                    const BoxConstraints(minWidth: 30),
+                                suffixIcon: _searchQuery.isEmpty
+                                    ? null
+                                    : IconButton(
+                                        padding: EdgeInsets.zero,
+                                        iconSize: 14,
+                                        tooltip: translate('Clear'),
+                                        onPressed: () {
+                                          _searchController.clear();
+                                          setState(() => _searchQuery = '');
+                                        },
+                                        icon: Icon(Icons.close_rounded,
+                                            color: theme.hintColor),
+                                      ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide:
+                                      BorderSide(color: theme.dividerColor),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide:
+                                      BorderSide(color: theme.dividerColor),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )),
+                  if (query.isNotEmpty && searchResult.matches.isNotEmpty)
+                    SizedBox(
+                      height: 36,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        children: [
+                          for (final match in searchResult.matches.take(10))
+                            Builder(builder: (context) {
+                              final tabIndex =
+                                  tabs.indexWhere((t) => t.key == match.tab);
+                              if (tabIndex < 0) return const SizedBox.shrink();
+                              return Padding(
+                                padding:
+                                    const EdgeInsetsDirectional.only(end: 6),
+                                child: ActionChip(
+                                  label: Text(translate(match.labelKey),
+                                      style: const TextStyle(fontSize: 12)),
+                                  onPressed: () =>
+                                      controller.jumpToPage(tabIndex),
+                                ),
+                              );
+                            }),
+                        ],
+                      ),
+                    ),
                   TabBar(
                       controller: _workspaceTabs,
                       isScrollable: true,
@@ -538,7 +733,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                                   children: [
                                 WorkspaceIconTile(
                                   icon: tab.selected,
-                                  color: _tileColorFor(tab.key),
+                                  color: _tileColorFor(context, tab.key),
                                   size: 20,
                                   radius: 5.5,
                                   iconSize: 12,
@@ -630,9 +825,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   }
 
   Widget _listView({required List<_TabInfo> tabs}) {
-    final scrollController = ScrollController();
     return ListView(
-      controller: scrollController,
+      controller: _tabListScrollController,
       children: tabs.map((tab) => _listItem(tab: tab)).toList(),
     );
   }
@@ -695,6 +889,26 @@ class _GeneralState extends State<_General> {
       isWeb ? RxBool(false) : Get.find<RxBool>(tag: 'stop-service');
   RxBool serviceBtnEnabled = true.obs;
   final GlobalKey _minToolbarOptionKey = GlobalKey();
+  final ScrollController _scrollController = ScrollController();
+  late final TextEditingController _relayFallbackController;
+  final RxString _relayFallbackTyped = ''.obs;
+  final RxString _relayFallbackSaved = ''.obs;
+
+  @override
+  void initState() {
+    super.initState();
+    final stored = bind.mainGetLocalOption(key: kOptionRelayFallbackDelay);
+    _relayFallbackController = TextEditingController(text: stored);
+    _relayFallbackTyped.value = stored;
+    _relayFallbackSaved.value = stored;
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _relayFallbackController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -734,13 +948,12 @@ class _GeneralState extends State<_General> {
         if (widget.section == SettingsTabKey.shortcuts) keyboardShortcuts(),
       ]).marginOnly(bottom: _kListViewBottomMargin);
     }
-    final scrollController = ScrollController();
     return ListView(
-      controller: scrollController,
+      controller: _scrollController,
       children: [
         if (!isWeb) service(),
         theme(),
-        if (isWindows || isMacOS)
+        if (usesWorkspaceStyle)
           _Card(
               title: 'Language',
               title_suffix: [Flexible(child: language())],
@@ -816,7 +1029,7 @@ class _GeneralState extends State<_General> {
         ),
       ]);
     }
-    if (isWindows || isMacOS) {
+    if (usesWorkspaceStyle) {
       const themes = {
         'light': 'Light',
         'dark': 'Dark',
@@ -1339,7 +1552,7 @@ class _GeneralState extends State<_General> {
         if (!isWeb) bind.mainChangeLanguage(lang: key);
       }
 
-      if (isWindows || isMacOS) {
+      if (usesWorkspaceStyle) {
         return WorkspaceSettingsChoice(
             value: currentKey,
             options: Map.fromIterables(keys, values),
@@ -1361,13 +1574,12 @@ class _GeneralState extends State<_General> {
   // the box is clear — the shape `directIp` uses for its port.
   List<Widget> webrtcOptions(BuildContext context) {
     final stored = bind.mainGetLocalOption(key: kOptionRelayFallbackDelay);
-    final controller = TextEditingController(text: stored);
-    // What the field holds against what is saved. Apply is offered only while
-    // the two differ, so an untouched field shows no button at all, and neither
-    // does one typed back to its saved value or cleared when nothing was saved
-    // — the state an "edited" flag alone would still call dirty.
-    final typed = RxString(stored);
-    final saved = RxString(stored);
+    if (_relayFallbackSaved.value != stored &&
+        _relayFallbackTyped.value == _relayFallbackSaved.value) {
+      _relayFallbackController.text = stored;
+      _relayFallbackTyped.value = stored;
+      _relayFallbackSaved.value = stored;
+    }
     return [
       _OptionCheckBox(
         context,
@@ -1390,9 +1602,9 @@ class _GeneralState extends State<_General> {
                 SizedBox(
                   width: 95,
                   child: TextField(
-                    controller: controller,
+                    controller: _relayFallbackController,
                     enabled: enabled && !isOptFixed,
-                    onChanged: (v) => typed.value = v,
+                    onChanged: (v) => _relayFallbackTyped.value = v,
                     inputFormatters: [
                       // Seconds, at most one decimal. Clearing the field is
                       // allowed and restores the built-in default.
@@ -1407,19 +1619,26 @@ class _GeneralState extends State<_General> {
                   ).workaroundFreezeLinuxMint().marginOnly(right: 15),
                 ),
                 Obx(() => Offstage(
-                      offstage: typed.value.trim() == saved.value.trim(),
+                      offstage: _relayFallbackTyped.value.trim() ==
+                          _relayFallbackSaved.value.trim(),
                       child: ElevatedButton(
                         onPressed: enabled &&
                                 !isOptFixed &&
-                                !typed.value.trim().endsWith('.') &&
-                                double.tryParse(typed.value.trim()) != 0
+                                !_relayFallbackTyped.value
+                                    .trim()
+                                    .endsWith('.') &&
+                                double.tryParse(
+                                        _relayFallbackTyped.value.trim()) !=
+                                    0
                             ? () async {
-                                final v = controller.text.trim();
+                                final v = _relayFallbackController.text.trim();
                                 await bind.mainSetLocalOption(
                                     key: kOptionRelayFallbackDelay, value: v);
-                                if (controller.text != v) controller.text = v;
-                                typed.value = v;
-                                saved.value = v;
+                                if (_relayFallbackController.text != v) {
+                                  _relayFallbackController.text = v;
+                                }
+                                _relayFallbackTyped.value = v;
+                                _relayFallbackSaved.value = v;
                               }
                             : null,
                         child: Text(translate('Apply')),
@@ -1453,6 +1672,27 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   bool get wantKeepAlive => true;
   bool locked = bind.mainIsInstalled();
   final scrollController = ScrollController();
+  late final TextEditingController _directAccessPortController;
+  final RxBool _directAccessApplyEnabled = false.obs;
+  late final TextEditingController _autoDisconnectController;
+  final RxBool _autoDisconnectApplyEnabled = false.obs;
+
+  @override
+  void initState() {
+    super.initState();
+    _directAccessPortController = TextEditingController(
+        text: bind.mainGetOptionSync(key: kOptionDirectAccessPort));
+    _autoDisconnectController = TextEditingController(
+        text: bind.mainGetOptionSync(key: kOptionAutoDisconnectTimeout));
+  }
+
+  @override
+  void dispose() {
+    scrollController.dispose();
+    _directAccessPortController.dispose();
+    _autoDisconnectController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1932,9 +2172,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   }
 
   List<Widget> directIp(BuildContext context) {
-    TextEditingController controller = TextEditingController();
     update(bool v) => setState(() {});
-    RxBool applyEnabled = false.obs;
     return [
       _OptionCheckBox(context, 'Enable direct IP access', kOptionDirectServer,
           update: update, enabled: !locked),
@@ -1943,9 +2181,13 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
         tmpWrapper() {
           bool enabled = option2bool(kOptionDirectServer,
               bind.mainGetOptionSync(key: kOptionDirectServer));
-          if (!enabled) applyEnabled.value = false;
-          controller.text =
-              bind.mainGetOptionSync(key: kOptionDirectAccessPort);
+          if (!enabled) _directAccessApplyEnabled.value = false;
+          if (!_directAccessApplyEnabled.value) {
+            final current = bind.mainGetOptionSync(key: kOptionDirectAccessPort);
+            if (_directAccessPortController.text != current) {
+              _directAccessPortController.text = current;
+            }
+          }
           final isOptFixed = isOptionFixed(kOptionDirectAccessPort);
           return Offstage(
             offstage: !enabled,
@@ -1956,9 +2198,9 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 SizedBox(
                   width: 95,
                   child: TextField(
-                    controller: controller,
+                    controller: _directAccessPortController,
                     enabled: enabled && !locked && !isOptFixed,
-                    onChanged: (_) => applyEnabled.value = true,
+                    onChanged: (_) => _directAccessApplyEnabled.value = true,
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(
                           r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$')),
@@ -1971,15 +2213,15 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   ).workaroundFreezeLinuxMint().marginOnly(right: 15),
                 ),
                 Obx(() => ElevatedButton(
-                      onPressed: applyEnabled.value &&
+                      onPressed: _directAccessApplyEnabled.value &&
                               enabled &&
                               !locked &&
                               !isOptFixed
                           ? () async {
-                              applyEnabled.value = false;
+                              _directAccessApplyEnabled.value = false;
                               await bind.mainSetOption(
                                   key: kOptionDirectAccessPort,
-                                  value: controller.text);
+                                  value: _directAccessPortController.text);
                             }
                           : null,
                       child: Text(
@@ -2023,8 +2265,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                   Offstage(
                     offstage: !hasWhitelist.value,
                     child: MouseRegion(
-                      child: const Icon(Icons.warning_amber_rounded,
-                              color: Color.fromARGB(255, 255, 204, 0))
+                      child: Icon(Icons.warning_amber_rounded,
+                              color: WorkspaceStyle.warning(context))
                           .marginOnly(right: 5),
                       cursor: SystemMouseCursors.click,
                     ),
@@ -2073,8 +2315,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 Offstage(
                   offstage: !hasIdWhitelist.value,
                   child: MouseRegion(
-                    child: const Icon(Icons.warning_amber_rounded,
-                            color: Color.fromARGB(255, 255, 204, 0))
+                    child: Icon(Icons.warning_amber_rounded,
+                            color: WorkspaceStyle.warning(context))
                         .marginOnly(right: 5),
                     cursor: SystemMouseCursors.click,
                   ),
@@ -2136,9 +2378,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
   }
 
   List<Widget> autoDisconnect(BuildContext context) {
-    TextEditingController controller = TextEditingController();
     update(bool v) => setState(() {});
-    RxBool applyEnabled = false.obs;
     return [
       _OptionCheckBox(
           context, 'auto_disconnect_option_tip', kOptionAllowAutoDisconnect,
@@ -2146,9 +2386,14 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
       () {
         bool enabled = option2bool(kOptionAllowAutoDisconnect,
             bind.mainGetOptionSync(key: kOptionAllowAutoDisconnect));
-        if (!enabled) applyEnabled.value = false;
-        controller.text =
-            bind.mainGetOptionSync(key: kOptionAutoDisconnectTimeout);
+        if (!enabled) _autoDisconnectApplyEnabled.value = false;
+        if (!_autoDisconnectApplyEnabled.value) {
+          final current =
+              bind.mainGetOptionSync(key: kOptionAutoDisconnectTimeout);
+          if (_autoDisconnectController.text != current) {
+            _autoDisconnectController.text = current;
+          }
+        }
         final isOptFixed = isOptionFixed(kOptionAutoDisconnectTimeout);
         return Offstage(
           offstage: !enabled,
@@ -2159,9 +2404,9 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               SizedBox(
                 width: 95,
                 child: TextField(
-                  controller: controller,
+                  controller: _autoDisconnectController,
                   enabled: enabled && !locked && !isOptFixed,
-                  onChanged: (_) => applyEnabled.value = true,
+                  onChanged: (_) => _autoDisconnectApplyEnabled.value = true,
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(
                         r'^([0-9]|[1-9]\d|[1-9]\d{2}|[1-9]\d{3}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$')),
@@ -2174,15 +2419,17 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                 ).workaroundFreezeLinuxMint().marginOnly(right: 15),
               ),
               Obx(() => ElevatedButton(
-                    onPressed:
-                        applyEnabled.value && enabled && !locked && !isOptFixed
-                            ? () async {
-                                applyEnabled.value = false;
-                                await bind.mainSetOption(
-                                    key: kOptionAutoDisconnectTimeout,
-                                    value: controller.text);
-                              }
-                            : null,
+                    onPressed: _autoDisconnectApplyEnabled.value &&
+                            enabled &&
+                            !locked &&
+                            !isOptFixed
+                        ? () async {
+                            _autoDisconnectApplyEnabled.value = false;
+                            await bind.mainSetOption(
+                                key: kOptionAutoDisconnectTimeout,
+                                value: _autoDisconnectController.text);
+                          }
+                        : null,
                     child: Text(
                       translate('Apply'),
                     ),
@@ -2243,6 +2490,12 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
   bool locked = !isWeb && bind.mainIsInstalled();
 
   final scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    scrollController.dispose();
+    super.dispose();
+  }
 
   Future<void> _selectP2pInterface() async {
     final interfaces = Map<String, String>.from(
@@ -2452,10 +2705,17 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
                 ),
               if (!hideServer && !isWeb)
                 ListTile(
-                  leading: const Icon(Icons.hub_outlined, color: _accentColor),
+                  leading: Icon(Icons.hub_outlined,
+                      color: Theme.of(context).colorScheme.primary),
                   title: Text(translate('Relay servers')),
                   subtitle: Text(relaySummary(configuredRelayText()),
                       maxLines: 2, overflow: TextOverflow.ellipsis),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  minLeadingWidth: 0,
+                  horizontalTitleGap: 10,
                   onTap: locked
                       ? null
                       : () async {
@@ -2592,10 +2852,17 @@ class _Display extends StatefulWidget {
 }
 
 class _DisplayState extends State<_Display> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final scrollController = ScrollController();
-    return ListView(controller: scrollController, children: [
+    return ListView(controller: _scrollController, children: [
       if (_expandedDesktopSettings &&
           DesktopSettingPage.tabKeys.contains(SettingsTabKey.general))
         const _General(section: SettingsTabKey.display),
@@ -2636,7 +2903,7 @@ class _DisplayState extends State<_Display> {
     }
 
     final groupValue = bind.mainGetUserDefaultOption(key: kOptionViewStyle);
-    if (isWindows || isMacOS) {
+    if (usesWorkspaceStyle) {
       return _desktopChoice(
           'Default View Style',
           groupValue,
@@ -2676,18 +2943,18 @@ class _DisplayState extends State<_Display> {
       setState(() {});
     }
 
-    if (isWindows || isMacOS) {
+    if (usesWorkspaceStyle) {
       return _desktopChoice(
           'Default Scroll Style',
           groupValue,
-          const {
+          {
             kRemoteScrollStyleAuto: 'ScrollAuto',
             kRemoteScrollStyleBar: 'Scrollbar',
-            kRemoteScrollStyleEdge: 'ScrollEdge'
+            if (!isWeb) kRemoteScrollStyleEdge: 'ScrollEdge',
           },
           isOptFixed ? null : onChanged,
           children: [
-            if (groupValue == kRemoteScrollStyleEdge)
+            if (!isWeb && groupValue == kRemoteScrollStyleEdge)
               EdgeThicknessControl(
                   value: double.tryParse(bind.mainGetUserDefaultOption(
                           key: kOptionEdgeScrollEdgeThickness)) ??
@@ -2737,7 +3004,7 @@ class _DisplayState extends State<_Display> {
 
     final isOptFixed = isOptionFixed(kOptionImageQuality);
     final groupValue = bind.mainGetUserDefaultOption(key: kOptionImageQuality);
-    if (isWindows || isMacOS) {
+    if (usesWorkspaceStyle) {
       return _desktopChoice(
           'Default Image Quality',
           groupValue,
@@ -2821,7 +3088,7 @@ class _DisplayState extends State<_Display> {
     } catch (e) {
       debugPrint("failed to parse supported hwdecodings, err=$e");
     }
-    if (isWindows || isMacOS) {
+    if (usesWorkspaceStyle) {
       return _desktopChoice(
           'Default Codec',
           groupValue,
@@ -2911,7 +3178,7 @@ class _DisplayState extends State<_Display> {
       setState(() {});
     }
 
-    if (isWindows || isMacOS) {
+    if (usesWorkspaceStyle) {
       return SwitchListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
@@ -2950,11 +3217,18 @@ class _Account extends StatefulWidget {
 }
 
 class _AccountState extends State<_Account> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final scrollController = ScrollController();
     return ListView(
-      controller: scrollController,
+      controller: _scrollController,
       children: [
         _Card(title: 'Account', children: [accountAction(), useInfo()]),
       ],
@@ -3021,7 +3295,7 @@ class _AccountState extends State<_Account> {
               );
             }),
           ),
-        )).marginOnly(left: 18, top: 16);
+        )).marginOnly(left: usesWorkspaceStyle ? 0 : 18, top: 16);
   }
 
   Widget? _buildUserAvatar() {
@@ -3094,10 +3368,17 @@ class _Printer extends StatefulWidget {
 }
 
 class __PrinterState extends State<_Printer> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    final scrollController = ScrollController();
-    return ListView(controller: scrollController, children: [
+    return ListView(controller: _scrollController, children: [
       outgoing(context),
       incoming(context),
     ]).marginOnly(bottom: _kListViewBottomMargin);
@@ -3241,6 +3522,14 @@ class _About extends StatefulWidget {
 }
 
 class _AboutState extends State<_About> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return futureBuilder(future: () async {
@@ -3262,12 +3551,11 @@ class _AboutState extends State<_About> {
       final buildDate = data['buildDate'].toString();
       final fingerprint = data['fingerprint'].toString();
       final myId = data['myId'].toString();
-      final native = isWindows || isMacOS;
+      final native = usesWorkspaceStyle;
       final colors = Theme.of(context).colorScheme;
       const linkStyle = TextStyle(decoration: TextDecoration.underline);
-      final scrollController = ScrollController();
       return SingleChildScrollView(
-        controller: scrollController,
+        controller: _scrollController,
         child: _Card(title: native ? bind.mainGetAppNameSync() : translate('About RustDesk'), children: [
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3350,7 +3638,7 @@ Widget _Card(
     {required String title,
     required List<Widget> children,
     List<Widget>? title_suffix}) {
-  if (isWindows || isMacOS) {
+  if (usesWorkspaceStyle) {
     return WorkspaceSettingsSection(
         title: translate(title), trailing: title_suffix, children: children);
   }
@@ -3433,7 +3721,7 @@ Widget _OptionCheckBox(
     enabled = false;
   }
 
-  if (isWindows || isMacOS) {
+  if (usesWorkspaceStyle) {
     return Obx(() => SwitchListTile(
           dense: true,
           contentPadding: EdgeInsets.zero,
@@ -3668,7 +3956,7 @@ class _WaylandCardState extends State<WaylandCard> {
                 child: Text(_clearShortcutsInhibitorFailedMsg.value,
                         style: DefaultTextStyle.of(context)
                             .style
-                            .copyWith(color: Colors.red))
+                            .copyWith(color: WorkspaceStyle.danger(context)))
                     .marginOnly(bottom: 10.0)),
       ),
       _Button(
@@ -3754,16 +4042,20 @@ Widget _lock(
     }
   }
 
-  if (isWindows || isMacOS) {
+  if (usesWorkspaceStyle) {
     if (!locked) return const SizedBox.shrink();
     return Align(
-        alignment: AlignmentDirectional.centerStart,
-        child: Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 20, 14),
-            child: OutlinedButton.icon(
-                icon: const Icon(Icons.lock_open_outlined, size: 17),
-                label: Text(translate(label)),
-                onPressed: requestUnlock)));
+        alignment: AlignmentDirectional.topCenter,
+        child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(24, 0, 24, 14),
+                child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: OutlinedButton.icon(
+                        icon: const Icon(Icons.lock_open_outlined, size: 17),
+                        label: Text(translate(label)),
+                        onPressed: requestUnlock)))));
   }
   return Offstage(
       offstage: !locked,
