@@ -5,6 +5,7 @@ import 'package:dynamic_layouts/dynamic_layouts.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/ab_model.dart';
 import 'package:flutter_hbb/models/peer_tab_model.dart';
@@ -120,12 +121,39 @@ class _PeersViewState extends State<_PeersView>
     windowManager.addListener(this);
     WidgetsBinding.instance.addObserver(this);
     super.initState();
+    _loadInitialPeers();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PeersView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.peerTabIndex != widget.peerTabIndex) {
+      _loadInitialPeers();
+    }
+  }
+
+  void _loadInitialPeers() {
+    switch (widget.peerTabIndex) {
+      case PeerTabIndex.recent:
+        bind.mainLoadRecentPeers();
+        break;
+      case PeerTabIndex.fav:
+        bind.mainLoadFavPeers();
+        break;
+      case PeerTabIndex.lan:
+        bind.mainLoadLanPeers();
+        bind.mainDiscover();
+        break;
+      default:
+        break;
+    }
   }
 
   @override
   void dispose() {
     windowManager.removeListener(this);
     WidgetsBinding.instance.removeObserver(this);
+    _scrollController.dispose();
     _exit = true;
     super.dispose();
   }
@@ -235,9 +263,7 @@ class _PeersViewState extends State<_PeersView>
   Widget _buildPeersView(Peers peers) {
     final updateEvent = peers.event;
     final iPhone = !isWeb && Theme.of(context).platform == TargetPlatform.iOS;
-    final workspaceCards = !isWeb &&
-        const {TargetPlatform.iOS, TargetPlatform.macOS, TargetPlatform.windows}
-            .contains(Theme.of(context).platform);
+    final workspaceCards = usesWorkspaceStyle;
     final cardTextGrowth =
         (MediaQuery.textScalerOf(context).scale(14) - 14).clamp(0, 28).toDouble() * 4;
     final body = ObxValue<RxList>((filters) {
@@ -263,7 +289,7 @@ class _PeersViewState extends State<_PeersView>
               // Because the currentTab change event will trigger the peers change event,
               // and the peers change event will trigger _buildPeersView().
               return !isPortrait
-                  ? Obx(() => peerCardUiType.value == PeerUiType.list
+                  ? (peerCardUiType.value == PeerUiType.list
                       ? Container(
                           height: workspaceCards ? 70 + cardTextGrowth : 45,
                           child: visibilityChild)
@@ -319,7 +345,7 @@ class _PeersViewState extends State<_PeersView>
               _curPeers.addAll(peers.map((e) => e.id));
               _queryOnlines(true);
             }
-            if ((isWindows || isMacOS) &&
+            if (usesWorkspaceStyle &&
                 peers.isEmpty &&
                 filters[0].value.trim().isNotEmpty) {
               return Center(
@@ -406,6 +432,8 @@ class _PeersViewState extends State<_PeersView>
       String searchText, String sortedBy, List<Peer> peers) async {
     if (widget.peerFilter != null) {
       peers = peers.where((peer) => widget.peerFilter!(peer)).toList();
+    } else {
+      peers = List<Peer>.of(peers);
     }
 
     if (widget.peers.loadEvent != LoadEvent.recent) {
@@ -499,13 +527,6 @@ class RecentPeersView extends BasePeersView {
             menuPadding: menuPadding,
           ),
         );
-
-  @override
-  Widget build(BuildContext context) {
-    final widget = super.build(context);
-    bind.mainLoadRecentPeers();
-    return widget;
-  }
 }
 
 class FavoritePeersView extends BasePeersView {
@@ -519,13 +540,6 @@ class FavoritePeersView extends BasePeersView {
             menuPadding: menuPadding,
           ),
         );
-
-  @override
-  Widget build(BuildContext context) {
-    final widget = super.build(context);
-    bind.mainLoadFavPeers();
-    return widget;
-  }
 }
 
 class DiscoveredPeersView extends BasePeersView {
@@ -539,14 +553,6 @@ class DiscoveredPeersView extends BasePeersView {
             menuPadding: menuPadding,
           ),
         );
-
-  @override
-  Widget build(BuildContext context) {
-    final widget = super.build(context);
-    bind.mainLoadLanPeers();
-    bind.mainDiscover();
-    return widget;
-  }
 }
 
 class AddressBookPeersView extends BasePeersView {

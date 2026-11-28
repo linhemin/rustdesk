@@ -680,12 +680,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget _incomingHostReadinessAndVisitors(BuildContext context) {
     final theme = Theme.of(context);
     final visitors = _incomingVisitors;
-    final readySvc =
-        !svcStopped.value && stateGlobal.svcStatus.value == SvcStatus.ready;
-    final hasPassword = gFFI.serverModel.serverPasswd.text.trim().isNotEmpty;
-    final macPermsOk = !isMacOS ||
-        (bind.mainIsCanScreenRecording(prompt: false) &&
-            bind.mainIsProcessTrusted(prompt: false));
     Widget checkRow(String label, bool ok) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: Row(
@@ -715,16 +709,27 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             WorkspacePanel(
               radius: 12,
               padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(translate('Status'),
-                      style: theme.textTheme.labelLarge),
-                  const SizedBox(height: 8),
-                  checkRow(translate('Service is running'), readySvc),
-                  checkRow(translate('Password'), hasPassword),
-                  checkRow(translate('Permissions'), macPermsOk),
-                ],
+              child: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: gFFI.serverModel.serverPasswd,
+                builder: (_, passwdValue, __) => Obx(() {
+                  final readySvc = !svcStopped.value &&
+                      stateGlobal.svcStatus.value == SvcStatus.ready;
+                  final hasPassword = passwdValue.text.trim().isNotEmpty;
+                  final macPermsOk = !isMacOS ||
+                      (bind.mainIsCanScreenRecording(prompt: false) &&
+                          bind.mainIsProcessTrusted(prompt: false));
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(translate('Status'),
+                          style: theme.textTheme.labelLarge),
+                      const SizedBox(height: 8),
+                      checkRow(translate('Service is running'), readySvc),
+                      checkRow(translate('Password'), hasPassword),
+                      checkRow(translate('Permissions'), macPermsOk),
+                    ],
+                  );
+                }),
               ),
             ),
             const SizedBox(height: 14),
@@ -1041,6 +1046,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                         readOnly: true,
                         decoration: InputDecoration(
                           border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
                           filled: false,
                           contentPadding: EdgeInsets.only(top: 10, bottom: 10),
                         ),
@@ -1139,6 +1146,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                             readOnly: true,
                             decoration: InputDecoration(
                               border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
                               filled: false,
                               contentPadding:
                                   EdgeInsets.only(top: 14, bottom: 10),
@@ -1147,6 +1156,26 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                           ).workaroundFreezeLinuxMint(),
                         ),
                       ),
+                      if (showOneTime)
+                        IconButton(
+                          tooltip: MaterialLocalizations.of(context)
+                              .copyButtonLabel,
+                          padding: EdgeInsets.zero,
+                          constraints:
+                              const BoxConstraints.tightFor(width: 28, height: 28),
+                          icon: Icon(
+                            Icons.copy_rounded,
+                            size: 18,
+                            color: Theme.of(context).hintColor,
+                          ),
+                          onPressed: model.serverPasswd.text.trim().isEmpty
+                              ? null
+                              : () {
+                                  Clipboard.setData(ClipboardData(
+                                      text: model.serverPasswd.text));
+                                  showToast(translate("Copied"));
+                                },
+                        ).marginOnly(right: 4, top: 4),
                       if (showOneTime)
                         AnimatedRotationWidget(
                           onPressed: () => bind.mainUpdateTemporaryPassword(),
@@ -1158,7 +1187,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                   Icons.refresh,
                                   color: refreshHover.value
                                       ? textColor
-                                      : Color(0xFFDDDDDD),
+                                      : Theme.of(context).hintColor,
                                   size: 22,
                                 ))),
                           ),
@@ -1173,7 +1202,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                                 Icons.edit,
                                 color: editHover.value
                                     ? textColor
-                                    : Color(0xFFDDDDDD),
+                                    : Theme.of(context).hintColor,
                                 size: 22,
                               ).marginOnly(right: 8, top: 4),
                             ),
@@ -1447,9 +1476,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                     Icon(
                         title == 'Permissions'
                             ? Icons.verified_user_outlined
-                            : Icons.info_outline_rounded,
+                            : title == 'Warning'
+                                ? Icons.warning_amber_rounded
+                                : Icons.info_outline_rounded,
                         size: 17,
-                        color: theme.colorScheme.primary),
+                        color: title == 'Warning'
+                            ? WorkspaceStyle.warning(context)
+                            : theme.colorScheme.primary),
                     const SizedBox(width: 8),
                     Expanded(
                         child: bounds.maxWidth < 390
@@ -1767,6 +1800,8 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       (await bind.mainGetCommon(key: "permanent-password-set")) == "true";
   final presetPassword = permanentPasswordSet && !localPasswordSet;
   var canSubmit = false;
+  var showPassword0 = false;
+  var showPassword1 = false;
   final RxString rxPass = "".obs;
   final rules = [
     DigitValidationRule(),
@@ -1846,10 +1881,18 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
               children: [
                 Expanded(
                   child: TextField(
-                    obscureText: true,
+                    obscureText: !showPassword0,
                     decoration: InputDecoration(
                         labelText: translate('Password'),
-                        errorText: errMsg0.isNotEmpty ? errMsg0 : null),
+                        errorText: errMsg0.isNotEmpty ? errMsg0 : null,
+                        suffixIcon: IconButton(
+                          tooltip: translate(showPassword0 ? 'Hide' : 'Show'),
+                          icon: Icon(showPassword0
+                              ? Icons.visibility
+                              : Icons.visibility_off),
+                          onPressed: () =>
+                              setState(() => showPassword0 = !showPassword0),
+                        )),
                     controller: p0,
                     autofocus: true,
                     onChanged: (value) {
@@ -1876,10 +1919,18 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
               children: [
                 Expanded(
                   child: TextField(
-                    obscureText: true,
+                    obscureText: !showPassword1,
                     decoration: InputDecoration(
                         labelText: translate('Confirmation'),
-                        errorText: errMsg1.isNotEmpty ? errMsg1 : null),
+                        errorText: errMsg1.isNotEmpty ? errMsg1 : null,
+                        suffixIcon: IconButton(
+                          tooltip: translate(showPassword1 ? 'Hide' : 'Show'),
+                          icon: Icon(showPassword1
+                              ? Icons.visibility
+                              : Icons.visibility_off),
+                          onPressed: () =>
+                              setState(() => showPassword1 = !showPassword1),
+                        )),
                     controller: p1,
                     onChanged: (value) {
                       setState(() {
@@ -1895,7 +1946,8 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
             if (statusTip.isNotEmpty)
               Row(
                 children: [
-                  Icon(Icons.info, color: Colors.amber, size: 18)
+                  Icon(Icons.info,
+                          color: WorkspaceStyle.warning(context), size: 18)
                       .marginOnly(right: 6),
                   Expanded(
                       child: Text(
@@ -1911,18 +1963,16 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
                   runSpacing: showStatusTipOnMobile ? 2.0 : 8.0,
                   spacing: 4,
                   children: rules.map((e) {
-                    var checked = e.validate(rxPass.value.trim());
+                    final checked = e.validate(rxPass.value.trim());
+                    final chipColor = checked
+                        ? WorkspaceStyle.success(context)
+                        : WorkspaceStyle.danger(context);
                     return Chip(
                         label: Text(
                           e.name,
-                          style: TextStyle(
-                              color: checked
-                                  ? const Color(0xFF0A9471)
-                                  : Color.fromARGB(255, 198, 86, 157)),
+                          style: TextStyle(color: chipColor),
                         ),
-                        backgroundColor: checked
-                            ? const Color(0xFFD0F7ED)
-                            : Color.fromARGB(255, 247, 205, 232));
+                        backgroundColor: chipColor.withOpacity(0.14));
                   }).toList(),
                 ))
           ],
@@ -1954,7 +2004,8 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
             close();
           },
           buttonStyle: ButtonStyle(
-              backgroundColor: MaterialStatePropertyAll(Colors.red)),
+              backgroundColor:
+                  WidgetStatePropertyAll(WorkspaceStyle.danger(context))),
         );
         final okButton = dialogButton(
           "OK",
@@ -1991,5 +2042,8 @@ void setPasswordDialog({VoidCallback? notEmptyCallback}) async {
       onSubmit: canSubmit ? submit : null,
       onCancel: close,
     );
+  }).whenComplete(() {
+    p0.dispose();
+    p1.dispose();
   });
 }

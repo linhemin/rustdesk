@@ -34,11 +34,15 @@ class OwnedDevices extends StatelessWidget {
       return Column(
         children: [
           if (error.isNotEmpty)
-            ListTile(
-              title: Text(translate(error)),
-              trailing: TextButton(
-                onPressed: () => user.refreshOwnedDevices(force: true),
-                child: Text(translate('Retry')),
+            Container(
+              color: MyTheme.color(context).errorBannerBg,
+              child: ListTile(
+                dense: true,
+                title: Text(translate(error)),
+                trailing: TextButton(
+                  onPressed: () => user.refreshOwnedDevices(force: true),
+                  child: Text(translate('Retry')),
+                ),
               ),
             ),
           Expanded(child: _OwnedPeers(menuPadding: menuPadding)),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import '../../../models/platform_model.dart';
@@ -305,13 +306,15 @@ class AutocompletePeerTileState extends State<AutocompletePeerTile> {
     final greyStyle = TextStyle(
         fontSize: 11,
         color: Theme.of(context).textTheme.titleLarge?.color?.withOpacity(0.6));
-    final child = GestureDetector(
+    final child = InkWell(
+        borderRadius: BorderRadius.circular(tileRadius),
         onTap: () => widget.onSelect(),
         child: Padding(
-            padding: EdgeInsets.only(left: 5, right: 5),
-            child: Container(
-                height: 42,
-                margin: EdgeInsets.only(bottom: 5),
+            padding: const EdgeInsets.only(left: 5, right: 5),
+            child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 42),
+                child: Container(
+                margin: const EdgeInsets.only(bottom: 5),
                 child: Row(
                   mainAxisSize: MainAxisSize.max,
                   children: [
@@ -326,16 +329,16 @@ class AutocompletePeerTileState extends State<AutocompletePeerTile> {
                         ),
                         alignment: Alignment.center,
                         width: 42,
-                        height: null,
+                        height: 42,
                         child: Padding(
-                            padding: EdgeInsets.all(6),
+                            padding: const EdgeInsets.all(6),
                             child: getPlatformImage(widget.peer.platform,
                                 size: 30))),
                     Expanded(
                       child: Container(
-                          padding: EdgeInsets.only(left: 10),
+                          padding: const EdgeInsetsDirectional.only(start: 10),
                           decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.background,
+                            color: WorkspaceStyle.elevatedSurface(context),
                             borderRadius: BorderRadius.only(
                               topRight: Radius.circular(tileRadius),
                               bottomRight: Radius.circular(tileRadius),
@@ -344,63 +347,56 @@ class AutocompletePeerTileState extends State<AutocompletePeerTile> {
                           child: Row(
                             children: [
                               Expanded(
-                                  child: Container(
-                                      margin: EdgeInsets.only(top: 2),
-                                      child: Container(
-                                          margin: EdgeInsets.only(top: 2),
-                                          child: Column(
-                                            children: [
-                                              Container(
-                                                  margin:
-                                                      EdgeInsets.only(top: 2),
-                                                  child: Row(children: [
-                                                    getOnline(
-                                                        8, widget.peer.online),
-                                                    Expanded(
-                                                        child: Text(
-                                                      widget.peer.alias.isEmpty
-                                                          ? formatID(
-                                                              widget.peer.id)
-                                                          : widget.peer.alias,
+                                  child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 4),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Row(children: [
+                                            getOnline(8, widget.peer.online),
+                                            Expanded(
+                                                child: Text(
+                                              widget.peer.alias.isEmpty
+                                                  ? formatID(widget.peer.id)
+                                                  : widget.peer.alias,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleSmall,
+                                            )),
+                                            if (widget.peer.alias.isNotEmpty)
+                                              Flexible(
+                                                child: Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            left: 5, right: 5),
+                                                    child: Text(
+                                                      "(${widget.peer.id})",
+                                                      style: greyStyle,
+                                                      maxLines: 1,
                                                       overflow:
                                                           TextOverflow.ellipsis,
-                                                      style: Theme.of(context)
-                                                          .textTheme
-                                                          .titleSmall,
                                                     )),
-                                                    widget.peer.alias.isNotEmpty
-                                                        ? Padding(
-                                                            padding:
-                                                                const EdgeInsets
-                                                                    .only(
-                                                                    left: 5,
-                                                                    right: 5),
-                                                            child: Text(
-                                                              "(${widget.peer.id})",
-                                                              style: greyStyle,
-                                                              overflow:
-                                                                  TextOverflow
-                                                                      .ellipsis,
-                                                            ))
-                                                        : Container(),
-                                                  ])),
-                                              Align(
-                                                alignment: Alignment.centerLeft,
-                                                child: Text(
-                                                  name,
-                                                  style: greyStyle,
-                                                  textAlign: TextAlign.start,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
                                               ),
-                                            ],
-                                          )))),
+                                          ]),
+                                          Align(
+                                            alignment:
+                                                AlignmentDirectional.centerStart,
+                                            child: Text(
+                                              name,
+                                              style: greyStyle,
+                                              textAlign: TextAlign.start,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ))),
                             ],
                           )),
                     )
                   ],
-                ))));
+                )))));
     final colors = _frontN(widget.peer.tags, 25)
         .map((e) => gFFI.abModel.getCurrentAbTagColor(e))
         .toList();

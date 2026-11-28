@@ -1,4 +1,5 @@
 import 'package:bot_toast/bot_toast.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
@@ -68,8 +69,7 @@ class _PeerCard extends StatefulWidget {
 }
 
 /// State for the connection page.
-class _PeerCardState extends State<_PeerCard>
-    with AutomaticKeepAliveClientMixin {
+class _PeerCardState extends State<_PeerCard> {
   var _menuPos = RelativeRect.fill;
   final double _cardRadius = 16;
   final double _tileRadius = 12;
@@ -77,31 +77,31 @@ class _PeerCardState extends State<_PeerCard>
 
   @override
   Widget build(BuildContext context) {
-    super.build(context);
     final onConnect = ConnectionPeerList.of(context)?.onConnect;
-    if (!isWeb &&
-        const {
-          TargetPlatform.iOS,
-          TargetPlatform.android,
-          TargetPlatform.macOS,
-          TargetPlatform.windows,
-          TargetPlatform.linux,
-        }.contains(Theme.of(context).platform)) {
-      final isPhonePlatform =
-          Theme.of(context).platform == TargetPlatform.iOS ||
-              Theme.of(context).platform == TargetPlatform.android;
+    if (usesWorkspaceStyle) {
+      final isPhonePlatform = !isWeb &&
+          (Theme.of(context).platform == TargetPlatform.iOS ||
+              Theme.of(context).platform == TargetPlatform.android);
+      final (multiSelectionMode, isSelected) =
+          context.select<PeerTabModel, (bool, bool)>(
+              (m) => (m.multiSelectionMode, m.isPeerSelected(widget.peer.id)));
       return isPhonePlatform
-          ? _workspaceCard(onConnect)
-          : Obx(() => _workspaceCard(onConnect));
+          ? _workspaceCard(onConnect,
+              multiSelectionMode: multiSelectionMode, isSelected: isSelected)
+          : Obx(() => _workspaceCard(onConnect,
+              multiSelectionMode: multiSelectionMode, isSelected: isSelected));
     }
     if (onConnect != null) return _connectionRow(onConnect);
     return Obx(() =>
         stateGlobal.isPortrait.isTrue ? _buildPortrait() : _buildLandscape());
   }
 
-  Widget _workspaceCard(void Function(Peer, PeerTabIndex)? onConnect) {
+  Widget _workspaceCard(
+    void Function(Peer, PeerTabIndex)? onConnect, {
+    required bool multiSelectionMode,
+    required bool isSelected,
+  }) {
     final peer = widget.peer;
-    final model = Provider.of<PeerTabModel>(context);
     hideUsernameOnCard ??=
         bind.mainGetBuildinOption(key: kHideUsernameOnCard) == 'Y';
     final host = [
@@ -160,10 +160,10 @@ class _PeerCardState extends State<_PeerCard>
       note: _showNote(peer) ? peer.note : '',
       tags: peer.tags.map((tag) => tag.toString()).toList(),
       grid: grid,
-      selected: model.isPeerSelected(peer.id),
+      selected: isSelected,
       passwordSaved: _shouldBuildPasswordIcon(peer),
       actions: [
-        if (!model.multiSelectionMode && !isPhonePlatform) ...[
+        if (!multiSelectionMode && !isPhonePlatform) ...[
           desktopAction(
               'Transfer file',
               Icons.folder_outlined,
@@ -177,7 +177,7 @@ class _PeerCardState extends State<_PeerCard>
           desktopAction('Connect', Icons.arrow_forward_rounded,
               () => connectInPeerTab(context, peer, widget.tab),
               primary: true),
-        ] else if (!model.multiSelectionMode)
+        ] else if (!multiSelectionMode)
           IconButton(
             tooltip: translate('Transfer file'),
             visualDensity: VisualDensity.compact,
@@ -195,14 +195,14 @@ class _PeerCardState extends State<_PeerCard>
             onPressed: () => connectInPeerTab(context, peer, widget.tab,
                 isFileTransfer: true),
           ),
-        if (!model.multiSelectionMode && _canConnectPhoneMicrophone(peer))
+        if (!multiSelectionMode && _canConnectPhoneMicrophone(peer))
           IconButton(
             tooltip: translate('Audio mode'),
             visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.headset_mic_outlined, size: 18),
             onPressed: () => PhoneMicrophonePage.open(context, peer.id),
           ),
-        if (!model.multiSelectionMode)
+        if (!multiSelectionMode)
           Builder(builder: (menuContext) => IconButton(
             tooltip: translate('More'),
             visualDensity: VisualDensity.compact,
@@ -235,13 +235,15 @@ class _PeerCardState extends State<_PeerCard>
     final child = onConnect == null
         ? gestureDetector(child: card)
         : GestureDetector(
-            onTap: () => model.multiSelectionMode
-                ? model.select(peer)
-                : onConnect(peer, widget.tab),
-            onDoubleTap: model.multiSelectionMode
-                ? null
-                : () => onConnect(peer, widget.tab),
-            onLongPress: () => model.select(peer),
+            onTap: () {
+              final model = context.read<PeerTabModel>();
+              if (model.multiSelectionMode) {
+                model.select(peer);
+              } else {
+                onConnect(peer, widget.tab);
+              }
+            },
+            onLongPress: () => context.read<PeerTabModel>().select(peer),
             child: card,
           );
     return GestureDetector(
@@ -825,7 +827,7 @@ class _PeerCardState extends State<_PeerCard>
         child: selected
             ? Icon(
                 Icons.check_box,
-                color: MyTheme.accent,
+                color: Theme.of(context).colorScheme.primary,
               )
             : Icon(Icons.check_box_outline_blank),
       );
@@ -860,7 +862,7 @@ class _PeerCardState extends State<_PeerCard>
       final icon = selected
           ? Icon(
               Icons.check_box,
-              color: MyTheme.accent,
+              color: Theme.of(context).colorScheme.primary,
             )
           : Icon(Icons.check_box_outline_blank);
       final checkbox = isWebDesktop
@@ -876,7 +878,8 @@ class _PeerCardState extends State<_PeerCard>
       if (last) {
         return Container(
           decoration: BoxDecoration(
-              border: Border.all(color: MyTheme.accent, width: 1)),
+              border: Border.all(
+                  color: Theme.of(context).colorScheme.primary, width: 1)),
           child: checkbox,
         ).marginOnly(right: right);
       } else {
@@ -926,9 +929,6 @@ class _PeerCardState extends State<_PeerCard>
       elevation: 8,
     );
   }
-
-  @override
-  bool get wantKeepAlive => true;
 }
 
 abstract class BasePeerCard extends StatelessWidget {
@@ -1807,10 +1807,14 @@ void _rdpDialog(String id) async {
       close();
     }
 
+    final maxDialogWidth =
+        (MediaQuery.sizeOf(context).width - 64).clamp(240.0, 500.0);
     return CustomAlertDialog(
       title: Text(translate('RDP Settings')),
       content: ConstrainedBox(
-        constraints: const BoxConstraints(minWidth: 500),
+        constraints: BoxConstraints(
+            minWidth: isDesktop ? maxDialogWidth : 0,
+            maxWidth: maxDialogWidth),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1877,6 +1881,9 @@ void _rdpDialog(String id) async {
                                 labelText:
                                     isDesktop ? null : translate('Password'),
                                 suffixIcon: IconButton(
+                                    tooltip: translate(secure.value
+                                        ? 'Show'
+                                        : 'Hide'),
                                     onPressed: () =>
                                         secure.value = !secure.value,
                                     icon: Icon(secure.value
@@ -1897,6 +1904,10 @@ void _rdpDialog(String id) async {
       onSubmit: submit,
       onCancel: close,
     );
+  }).whenComplete(() {
+    portController.dispose();
+    userController.dispose();
+    passwordController.dispose();
   });
 }
 
@@ -1920,21 +1931,15 @@ Widget build_more(BuildContext context,
       child: Obx(() => CircleAvatar(
           radius: 14,
           backgroundColor: hover.value
-              ? (invert
-                  ? Theme.of(context).colorScheme.background
-                  : Theme.of(context).scaffoldBackgroundColor)
+              ? Theme.of(context).hoverColor
               : (invert
                   ? Theme.of(context).scaffoldBackgroundColor
-                  : Theme.of(context).colorScheme.background),
+                  : Colors.transparent),
           child: Icon(Icons.more_vert,
               size: 18,
               color: hover.value
-                  ? Theme.of(context).textTheme.titleLarge?.color
-                  : Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.color
-                      ?.withOpacity(0.5)))));
+                  ? Theme.of(context).colorScheme.onSurface
+                  : Theme.of(context).hintColor))));
   if (onTap == null) return button;
   // Serial taps preserve cancellation without waiting for the card's double tap.
   return RawGestureDetector(
@@ -1983,8 +1988,9 @@ class TagPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true;
+  bool shouldRepaint(covariant TagPainter oldDelegate) {
+    return oldDelegate.radius != radius ||
+        !listEquals(oldDelegate.colors, colors);
   }
 }
 

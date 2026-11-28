@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:flutter_hbb/common/widgets/workspace.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/desktop.dart';
 import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/widgets/popup_menu.dart';
@@ -175,10 +176,10 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
                 borderRadius: BorderRadius.circular(4),
                 color: _svcStopped.value ||
                         stateGlobal.svcStatus.value == SvcStatus.connecting
-                    ? kColorWarn
+                    ? WorkspaceStyle.warning(context)
                     : (stateGlobal.svcStatus.value == SvcStatus.ready
-                        ? Color.fromARGB(255, 50, 190, 166)
-                        : Color.fromARGB(255, 224, 79, 95)),
+                        ? WorkspaceStyle.success(context)
+                        : WorkspaceStyle.danger(context)),
               ),
             ).marginSymmetric(horizontal: em),
             Container(
@@ -210,7 +211,11 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
   }
 
   Text _buildConnStatusMsg() {
-    widget.onSvcStatusChanged?.call();
+    if (widget.onSvcStatusChanged != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onSvcStatusChanged?.call();
+      });
+    }
     return Text(
       _svcStopped.value
           ? translate("Service is not running")
@@ -590,46 +595,45 @@ class _ConnectionPageState extends State<ConnectionPage>
           ) {
             updateTextAndPreserveSelection(
                 fieldTextEditingController, _idController.text);
-            return Obx(() => TextField(
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  keyboardType: TextInputType.visiblePassword,
-                  focusNode: fieldFocusNode,
-                  style: TextStyle(
-                    fontFamily: usesWorkspaceStyle ? 'monospace' : 'WorkSans',
-                    fontSize: usesWorkspaceStyle ? 15 : 22,
-                    height: 1.4,
-                  ),
-                  maxLines: 1,
-                  cursorColor: Theme.of(context).textTheme.titleLarge?.color,
-                  decoration: InputDecoration(
-                      filled: usesWorkspaceStyle,
-                      fillColor: usesWorkspaceStyle
-                          ? WorkspaceStyle.well(context)
-                          : null,
-                      prefixIcon: usesWorkspaceStyle
-                          ? Icon(Icons.arrow_forward_rounded,
-                              size: 18,
-                              color: Theme.of(context).colorScheme.primary)
-                          : null,
-                      counterText: '',
-                      hintText: _idInputFocused.value
-                          ? null
-                          : translate(
-                              usesWorkspaceStyle && (isMacOS || isWindows)
-                                  ? 'Enter remote ID or device name…'
-                                  : 'Enter Remote ID'),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 15, vertical: 13)),
-                  controller: fieldTextEditingController,
-                  inputFormatters: [IDTextInputFormatter()],
-                  onChanged: (v) {
-                    _idController.id = v;
-                  },
-                  onSubmitted: (_) {
-                    _startSelectedMode();
-                  },
-                ).workaroundFreezeLinuxMint());
+            return LayoutBuilder(
+              builder: (context, constraints) => TextField(
+                autocorrect: false,
+                enableSuggestions: false,
+                keyboardType: TextInputType.visiblePassword,
+                focusNode: fieldFocusNode,
+                style: TextStyle(
+                  fontFamily: usesWorkspaceStyle ? 'monospace' : 'WorkSans',
+                  fontSize: usesWorkspaceStyle ? 15 : 22,
+                  height: 1.4,
+                ),
+                maxLines: 1,
+                cursorColor: Theme.of(context).textTheme.titleLarge?.color,
+                decoration: InputDecoration(
+                    filled: usesWorkspaceStyle,
+                    fillColor: usesWorkspaceStyle
+                        ? WorkspaceStyle.well(context)
+                        : null,
+                    prefixIcon: usesWorkspaceStyle
+                        ? Icon(Icons.arrow_forward_rounded,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.primary)
+                        : null,
+                    counterText: '',
+                    hintText: translate(usesWorkspaceStyle
+                        ? 'Enter remote ID or device name…'
+                        : 'Enter Remote ID'),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 15, vertical: 13)),
+                controller: fieldTextEditingController,
+                inputFormatters: [IDTextInputFormatter()],
+                onChanged: (v) {
+                  _idController.id = v;
+                },
+                onSubmitted: (_) {
+                  _startSelectedMode();
+                },
+              ).workaroundFreezeLinuxMint(),
+            );
           },
           onSelected: (option) {
             setState(() {
@@ -649,49 +653,55 @@ class _ConnectionPageState extends State<ConnectionPage>
               maxHeight = 193;
             }
             maxHeight = maxHeight.clamp(0, 200);
+            final dropdownWidth =
+                (MediaQuery.sizeOf(context).width - 80).clamp(280.0, 460.0);
+            final listChild = _allPeersLoader.peers.isEmpty &&
+                    !_allPeersLoader.isPeersLoaded
+                ? const SizedBox(
+                    height: 80,
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    ),
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(top: 5),
+                    child: ListView.builder(
+                      padding: EdgeInsets.zero,
+                      itemCount: options.length,
+                      itemBuilder: (itemContext, index) {
+                        final peer = options.elementAt(index);
+                        final highlighted =
+                            AutocompleteHighlightedOption.of(itemContext) ==
+                                index;
+                        return DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: highlighted
+                                ? Theme.of(itemContext).hoverColor
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: AutocompletePeerTile(
+                            onSelect: () => onSelected(peer),
+                            peer: peer,
+                          ),
+                        );
+                      },
+                    ),
+                  );
 
             return Align(
               alignment: Alignment.topLeft,
-              child: Container(
-                  decoration: BoxDecoration(
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.3),
-                        blurRadius: 5,
-                        spreadRadius: 1,
-                      ),
-                    ],
+              child: DesktopOverlaySurface(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: maxHeight,
+                    maxWidth: dropdownWidth,
                   ),
-                  child: ClipRRect(
-                      borderRadius: BorderRadius.circular(5),
-                      child: Material(
-                        elevation: 4,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: maxHeight,
-                            maxWidth: 319,
-                          ),
-                          child: _allPeersLoader.peers.isEmpty &&
-                                  !_allPeersLoader.isPeersLoaded
-                              ? Container(
-                                  height: 80,
-                                  child: Center(
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ))
-                              : Padding(
-                                  padding: const EdgeInsets.only(top: 5),
-                                  child: ListView(
-                                    children: options
-                                        .map((peer) => AutocompletePeerTile(
-                                            onSelect: () => onSelected(peer),
-                                            peer: peer))
-                                        .toList(),
-                                  ),
-                                ),
-                        ),
-                      ))),
+                  child: listChild,
+                ),
+              ),
             );
           },
         )),
@@ -716,30 +726,31 @@ class _ConnectionPageState extends State<ConnectionPage>
             width: usesWorkspaceStyle ? 36 : 28,
             decoration: BoxDecoration(
               border: Border.all(color: Theme.of(context).dividerColor),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(usesWorkspaceStyle ? 12 : 8),
             ),
-            child: Center(
-              child: StatefulBuilder(
-                builder: (context, setState) {
-                  var offset = Offset(0, 0);
-                  return Obx(() => InkWell(
-                        child: _menuOpen.value
-                            ? Transform.rotate(
-                                angle: pi,
-                                child: Icon(IconFont.more, size: 14),
-                              )
-                            : Icon(IconFont.more, size: 14),
-                        onTapDown: (e) {
-                          offset = e.globalPosition;
-                        },
-                        onTap: () async {
-                          _menuOpen.value = true;
-                          final x = offset.dx;
-                          final y = offset.dy;
-                          await mod_menu
-                              .showMenu(
-                            context: context,
-                            position: RelativeRect.fromLTRB(x, y, x, y),
+            child: StatefulBuilder(
+              builder: (btnContext, setState) {
+                final buttonRadius =
+                    BorderRadius.circular(usesWorkspaceStyle ? 12 : 8);
+                return Tooltip(
+                  message: translate('More'),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: Obx(() => InkWell(
+                          borderRadius: buttonRadius,
+                          onTap: () async {
+                            final box =
+                                btnContext.findRenderObject() as RenderBox?;
+                            final pos = box != null
+                                ? box.localToGlobal(
+                                    box.size.bottomLeft(Offset.zero))
+                                : Offset.zero;
+                            _menuOpen.value = true;
+                            await mod_menu
+                                .showMenu(
+                              context: btnContext,
+                              position: RelativeRect.fromLTRB(
+                                  pos.dx, pos.dy + 4, pos.dx, pos.dy + 4),
                             items: [
                               (
                                 'Transfer file',
@@ -789,13 +800,22 @@ class _ConnectionPageState extends State<ConnectionPage>
                                 .toList(),
                             elevation: 8,
                           )
-                              .then((_) {
-                            _menuOpen.value = false;
-                          });
-                        },
-                      ));
-                },
-              ),
+                            .then((_) {
+                          _menuOpen.value = false;
+                        });
+                      },
+                          child: Center(
+                            child: _menuOpen.value
+                                ? Transform.rotate(
+                                    angle: pi,
+                                    child: Icon(IconFont.more, size: 14),
+                                  )
+                                : Icon(IconFont.more, size: 14),
+                          ),
+                        )),
+                  ),
+                );
+              },
             ),
           ),
         ]);

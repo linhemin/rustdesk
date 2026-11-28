@@ -62,9 +62,9 @@ class _MyGroupState extends State<MyGroup> {
       children: [
         Container(
           decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
-              border:
-                  Border.all(color: Theme.of(context).colorScheme.background)),
+              border: Border.all(color: Theme.of(context).dividerColor)),
           child: Container(
             width: 150,
             height: double.infinity,
@@ -98,9 +98,9 @@ class _MyGroupState extends State<MyGroup> {
       children: [
         Container(
           decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(6),
-              border:
-                  Border.all(color: Theme.of(context).colorScheme.background)),
+              border: Border.all(color: Theme.of(context).dividerColor)),
           child: Container(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -147,6 +147,8 @@ class _MyGroupState extends State<MyGroup> {
             hintText: translate("Search"),
             hintStyle: TextStyle(fontSize: fontSize),
             border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
             isDense: true,
           ),
         ).workaroundFreezeLinuxMint()),
@@ -218,8 +220,7 @@ class _MyGroupState extends State<MyGroup> {
             color: selected ? MyTheme.color(context).highlight : null,
             border: Border(
                 bottom: BorderSide(
-                    width: 0.7,
-                    color: Theme.of(context).dividerColor.withOpacity(0.1))),
+                    width: 0.7, color: Theme.of(context).dividerColor)),
           ),
           child: Container(
             child: Row(
@@ -235,14 +236,19 @@ class _MyGroupState extends State<MyGroup> {
                     alignment: Alignment.center,
                     child: Center(
                       child: Text(
-                        displayName.characters.first.toUpperCase(),
+                        displayName.isEmpty
+                            ? '?'
+                            : displayName.characters.first.toUpperCase(),
                         style: TextStyle(color: Colors.white),
                         textAlign: TextAlign.center,
                       ),
                     ),
                   ),
                 ).marginOnly(right: 4),
-                if (isMe) Flexible(child: Text(displayName)),
+                if (isMe)
+                  Flexible(
+                      child: Text(displayName,
+                          maxLines: 1, overflow: TextOverflow.ellipsis)),
                 if (isMe)
                   Flexible(
                     child: Container(
@@ -254,12 +260,17 @@ class _MyGroupState extends State<MyGroup> {
                           border: Border.all(color: colorMe.withAlpha(100))),
                       child: Text(
                         translate('Me'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                             color: colorMe.withAlpha(200), fontSize: 12),
                       ),
                     ),
                   ),
-                if (!isMe) Expanded(child: Text(displayName)),
+                if (!isMe)
+                  Expanded(
+                      child: Text(displayName,
+                          maxLines: 1, overflow: TextOverflow.ellipsis)),
               ],
             ).paddingSymmetric(vertical: 4),
           ),
@@ -286,8 +297,7 @@ class _MyGroupState extends State<MyGroup> {
             color: selected ? MyTheme.color(context).highlight : null,
             border: Border(
                 bottom: BorderSide(
-                    width: 0.7,
-                    color: Theme.of(context).dividerColor.withOpacity(0.1))),
+                    width: 0.7, color: Theme.of(context).dividerColor)),
           ),
           child: Container(
             child: Row(
@@ -296,9 +306,11 @@ class _MyGroupState extends State<MyGroup> {
                   width: 20,
                   height: 20,
                   child: Icon(IconFont.deviceGroupOutline,
-                      color: MyTheme.accent, size: 19),
+                      color: Theme.of(context).colorScheme.primary, size: 19),
                 ).marginOnly(right: 4),
-                Expanded(child: Text(name)),
+                Expanded(
+                    child: Text(name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis)),
               ],
             ).paddingSymmetric(vertical: 4),
           ),

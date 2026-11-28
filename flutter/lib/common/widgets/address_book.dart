@@ -4,6 +4,7 @@ import 'package:bot_toast/bot_toast.dart';
 import 'package:dropdown_button2/dropdown_button2.dart';
 import 'package:dynamic_layouts/dynamic_layouts.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/common/widgets/peer_card.dart';
@@ -36,6 +37,14 @@ class AddressBook extends StatefulWidget {
 
 class _AddressBookState extends State<AddressBook> {
   var menuPos = RelativeRect.fill;
+  final TextEditingController _abDropdownSearchController =
+      TextEditingController();
+
+  @override
+  void dispose() {
+    _abDropdownSearchController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Obx(() {
@@ -79,9 +88,9 @@ class _AddressBookState extends State<AddressBook> {
             offstage: hideAbTagsPanel.value,
             child: Container(
               decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                      color: Theme.of(context).colorScheme.background)),
+                  border: Border.all(color: Theme.of(context).dividerColor)),
               child: Container(
                 width: 200,
                 height: double.infinity,
@@ -117,9 +126,9 @@ class _AddressBookState extends State<AddressBook> {
             offstage: hideAbTagsPanel.value,
             child: Container(
               decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                      color: Theme.of(context).colorScheme.background)),
+                  border: Border.all(color: Theme.of(context).dividerColor)),
               child: Container(
                 padding:
                     const EdgeInsets.fromLTRB(padding, 0, padding, padding),
@@ -229,7 +238,7 @@ class _AddressBookState extends State<AddressBook> {
       customHeights[1] = 4;
       menuItemStyleData = MenuItemStyleData(customHeights: customHeights);
     }
-    final TextEditingController textEditingController = TextEditingController();
+    final textEditingController = _abDropdownSearchController;
 
     final isOptFixed = isOptionFixed(kOptionCurrentAbName);
     return DropdownButton2<String>(
@@ -253,7 +262,7 @@ class _AddressBookState extends State<AddressBook> {
           )),
       underline: Container(
         height: 0.7,
-        color: Theme.of(context).dividerColor.withOpacity(0.1),
+        color: Theme.of(context).dividerColor,
       ),
       menuItemStyleData: menuItemStyleData,
       items: items,
@@ -591,11 +600,13 @@ class _AddressBookState extends State<AddressBook> {
                                 ? null
                                 : translate('Password'),
                             suffixIcon: IconButton(
+                              tooltip: translate(
+                                  passwordVisible ? 'Hide' : 'Show'),
                               icon: Icon(
                                   passwordVisible
                                       ? Icons.visibility
                                       : Icons.visibility_off,
-                                  color: MyTheme.lightTheme.primaryColor),
+                                  color: Theme.of(context).colorScheme.primary),
                               onPressed: () {
                                 setState(() {
                                   passwordVisible = !passwordVisible;
@@ -657,10 +668,13 @@ class _AddressBookState extends State<AddressBook> {
             ),
             if (!gFFI.abModel.current.isPersonal())
               Row(children: [
-                Icon(Icons.info, color: Colors.amber).marginOnly(right: 4),
-                Text(
-                  translate('share_warning_tip'),
-                  style: TextStyle(fontSize: 12),
+                Icon(Icons.info, color: WorkspaceStyle.warning(context))
+                    .marginOnly(right: 4),
+                Expanded(
+                  child: Text(
+                    translate('share_warning_tip'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 )
               ]).marginSymmetric(vertical: 10),
             // NOT use Offstage to wrap LinearProgressIndicator
@@ -697,8 +711,11 @@ class _AddressBookState extends State<AddressBook> {
           for (var t in [kUntagged, translate(kUntagged)]) {
             if (tags.contains(t)) {
               BotToast.showText(
-                  contentColor: Colors.red, text: 'Tag name cannot be "$t"');
-              isInProgress = false;
+                  contentColor: WorkspaceStyle.danger(context),
+                  text: 'Tag name cannot be "$t"');
+              setState(() {
+                isInProgress = false;
+              });
               return;
             }
           }
@@ -776,43 +793,51 @@ class AddressBookTag extends StatelessWidget {
     const double radius = 8;
     final isUnTagged = name == kUntagged;
     final showAction = showActionMenu && !isUnTagged;
-    return GestureDetector(
+    return InkWell(
+      borderRadius: BorderRadius.circular(4),
       onTap: onTap,
       onTapDown: showAction ? setPosition : null,
       onSecondaryTapDown: showAction ? setPosition : null,
       onSecondaryTap: showAction ? () => _showMenu(context, pos) : null,
       onLongPress: showAction ? () => _showMenu(context, pos) : null,
-      child: Obx(() => Container(
-            decoration: BoxDecoration(
-                color: tags.contains(name)
-                    ? gFFI.abModel.getCurrentAbTagColor(name)
-                    : Theme.of(context).colorScheme.background,
-                borderRadius: BorderRadius.circular(4)),
-            margin: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),
-            padding: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 6.0),
-            child: IntrinsicWidth(
-              child: Row(
-                children: [
-                  if (!isUnTagged)
-                    Container(
-                      width: radius,
-                      height: radius,
-                      decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: tags.contains(name)
-                              ? Colors.white
-                              : gFFI.abModel.getCurrentAbTagColor(name)),
-                    ).marginOnly(right: radius / 2),
-                  Expanded(
-                    child: Text(isUnTagged ? translate(name) : name,
-                        style: TextStyle(
-                            overflow: TextOverflow.ellipsis,
-                            color: tags.contains(name) ? Colors.white : null)),
-                  ),
-                ],
-              ),
+      child: Obx(() {
+        final isSelected = tags.contains(name);
+        final tagColor = gFFI.abModel.getCurrentAbTagColor(name);
+        final selectedFg =
+            tagColor.computeLuminance() > 0.5 ? Colors.black87 : Colors.white;
+        return Container(
+          decoration: BoxDecoration(
+              color: isSelected
+                  ? tagColor
+                  : WorkspaceStyle.elevatedSurface(context),
+              border: isSelected
+                  ? null
+                  : Border.all(color: Theme.of(context).dividerColor),
+              borderRadius: BorderRadius.circular(4)),
+          margin: const EdgeInsets.symmetric(horizontal: 4.0, vertical: 4.0),
+          padding: const EdgeInsets.symmetric(vertical: 2.0, horizontal: 6.0),
+          child: IntrinsicWidth(
+            child: Row(
+              children: [
+                if (!isUnTagged)
+                  Container(
+                    width: radius,
+                    height: radius,
+                    decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: isSelected ? selectedFg : tagColor),
+                  ).marginOnly(right: radius / 2),
+                Expanded(
+                  child: Text(isUnTagged ? translate(name) : name,
+                      style: TextStyle(
+                          overflow: TextOverflow.ellipsis,
+                          color: isSelected ? selectedFg : null)),
+                ),
+              ],
             ),
-          )),
+          ),
+        );
+      }),
     );
   }
 
@@ -841,7 +866,7 @@ class AddressBookTag extends StatelessWidget {
               Future.delayed(Duration.zero, () => Get.back());
             });
       }),
-      getEntry(translate(translate('Change Color')), () async {
+      getEntry(translate('Change Color'), () async {
         final model = gFFI.abModel;
         Color oldColor = model.getCurrentAbTagColor(name);
         Color newColor = await showColorPickerDialog(

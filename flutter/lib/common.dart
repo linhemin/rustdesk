@@ -4418,6 +4418,29 @@ String mouseButtonsToPeer(int buttons) {
   }
 }
 
+final Map<String, Uint8List> _avatarDataUriCache = <String, Uint8List>{};
+const int _kMaxCachedAvatars = 64;
+
+Uint8List? _decodeCachedAvatarDataUri(String dataUri) {
+  final existing = _avatarDataUriCache.remove(dataUri);
+  if (existing != null) {
+    _avatarDataUriCache[dataUri] = existing;
+    return existing;
+  }
+  final comma = dataUri.indexOf(',');
+  if (comma <= 0) return null;
+  try {
+    final bytes = base64Decode(dataUri.substring(comma + 1));
+    if (_avatarDataUriCache.length >= _kMaxCachedAvatars) {
+      _avatarDataUriCache.remove(_avatarDataUriCache.keys.first);
+    }
+    _avatarDataUriCache[dataUri] = bytes;
+    return bytes;
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Build an avatar widget from an avatar URL or data URI string.
 /// Returns [fallback] if avatar is empty or cannot be decoded.
 /// [borderRadius] defaults to [size]/2 (circle).
@@ -4432,11 +4455,9 @@ Widget? buildAvatarWidget({
 
   ImageProvider? imageProvider;
   if (trimmed.startsWith('data:image/')) {
-    final comma = trimmed.indexOf(',');
-    if (comma > 0) {
-      try {
-        imageProvider = MemoryImage(base64Decode(trimmed.substring(comma + 1)));
-      } catch (_) {}
+    final bytes = _decodeCachedAvatarDataUri(trimmed);
+    if (bytes != null) {
+      imageProvider = MemoryImage(bytes);
     }
   } else if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     imageProvider = NetworkImage(trimmed);
@@ -4447,12 +4468,18 @@ Widget? buildAvatarWidget({
   final radius = borderRadius ?? size / 2;
   return ClipRRect(
     borderRadius: BorderRadius.circular(radius),
-    child: Image(
-      image: imageProvider,
-      width: size,
-      height: size,
-      fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => fallback ?? SizedBox.shrink(),
+    child: Builder(
+      builder: (context) {
+        final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 2.0;
+        final cachePx = (size * dpr).round().clamp(1, 512);
+        return Image(
+          image: ResizeImage.resizeIfNeeded(cachePx, cachePx, imageProvider!),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => fallback ?? SizedBox.shrink(),
+        );
+      },
     ),
   );
 }

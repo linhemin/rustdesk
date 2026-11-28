@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 import 'package:flutter_hbb/common/widgets/address_book.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/my_group.dart';
@@ -168,7 +170,7 @@ class _PeerTabPageState extends State<PeerTabPage>
 
   Widget _createSwitchBar(BuildContext context) {
     final model = Provider.of<PeerTabModel>(context);
-    final labeled = !isWeb && (isWindows || isMacOS);
+    final labeled = usesWorkspaceStyle && (isWindows || isMacOS || isLinux || isWebDesktop);
     final canScroll = labeled || model.isVisibleEnabled[PeerTabIndex.owned.index];
     var counter = -1;
     return ReorderableListView(
@@ -180,12 +182,7 @@ class _PeerTabPageState extends State<PeerTabPage>
           final selected = model.currentTab == t;
           final color = selected
               ? MyTheme.tabbar(context).selectedTextColor
-              : MyTheme.tabbar(context).unSelectedTextColor
-            ?..withOpacity(0.5);
-          final hover = false.obs;
-          final deco = BoxDecoration(
-              color: Theme.of(context).colorScheme.background,
-              borderRadius: BorderRadius.circular(6));
+              : MyTheme.tabbar(context).unSelectedTextColor?.withOpacity(0.5);
           final decoBorder = BoxDecoration(
             color: usesWorkspaceStyle
                 ? Theme.of(context).cardColor
@@ -199,15 +196,17 @@ class _PeerTabPageState extends State<PeerTabPage>
           return ReorderableDragStartListener(
               key: ValueKey(t),
               index: counter,
-              child: Obx(() => Tooltip(
+              child: Tooltip(
                     preferBelow: false,
                     message: model.tabTooltip(t),
                     onTriggered: isMobile ? mobileShowTabVisibilityMenu : null,
                     child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      hoverColor: selected
+                          ? Colors.transparent
+                          : Theme.of(context).hoverColor,
                       child: Container(
-                        decoration: (hover.value
-                            ? (selected ? decoBorder : deco)
-                            : (selected ? decoBorder : null)),
+                        decoration: selected ? decoBorder : null,
                         child: labeled
                             ? Row(mainAxisSize: MainAxisSize.min, children: [
                                 Text(model.tabTooltip(t),
@@ -231,9 +230,8 @@ class _PeerTabPageState extends State<PeerTabPage>
                               await bind.setLocalFlutterOption(
                                   k: kOptionPeerTabIndex, v: t.toString());
                             },
-                      onHover: (value) => hover.value = value,
                     ),
-                  )));
+                  ));
         }).toList());
   }
 
@@ -910,7 +908,7 @@ class _PeerTabPageState extends State<PeerTabPage>
     final rightWidth = availableWidth -
         searchWidth -
         (actions.length == 2 ? otherActionWidth : 0);
-    final availablePositions = rightWidth ~/ otherActionWidth;
+    final availablePositions = (rightWidth ~/ otherActionWidth).clamp(0, dynamicActions.length);
 
     if (availablePositions < dynamicActions.length &&
         dynamicActions.length > 1) {
@@ -940,6 +938,30 @@ class PeerSearchBar extends StatefulWidget {
 
 class _PeerSearchBarState extends State<PeerSearchBar> {
   var drawer = false;
+  late final FocusNode _focusNode;
+  bool _focused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode()
+      ..addListener(() {
+        if (!mounted) return;
+        final hasFocus = _focusNode.hasFocus;
+        setState(() => _focused = hasFocus);
+        if (hasFocus) {
+          peerSearchTextController.selection = TextSelection(
+              baseOffset: 0,
+              extentOffset: peerSearchTextController.value.text.length);
+        }
+      });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -948,7 +970,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
         : _hoverAction(
             context: context,
             toolTip: translate('Search'),
-            touchTarget: _usesIPhoneToolbar(context),
+            touchTarget: _usesIPhoneToolbar(context) || isMobile,
             padding: const EdgeInsets.only(right: 2),
             onTap: () {
               setState(() {
@@ -962,19 +984,12 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
   }
 
   Widget _buildSearchBar() {
-    RxBool focused = false.obs;
-    FocusNode focusNode = FocusNode();
-    focusNode.addListener(() {
-      focused.value = focusNode.hasFocus;
-      peerSearchTextController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: peerSearchTextController.value.text.length);
-    });
-    return Obx(() => Container(
+    return Container(
           width: stateGlobal.isPortrait.isTrue ? 120 : 140,
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.background,
-            borderRadius: BorderRadius.circular(6),
+            color: WorkspaceStyle.elevatedSurface(context),
+            border: Border.all(color: Theme.of(context).dividerColor),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             children: [
@@ -992,7 +1007,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                         onChanged: (searchText) {
                           peerSearchText.value = searchText;
                         },
-                        focusNode: focusNode,
+                        focusNode: _focusNode,
                         textAlign: TextAlign.start,
                         maxLines: 1,
                         cursorColor: Theme.of(context)
@@ -1004,13 +1019,16 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                         cursorWidth: 1,
                         style: const TextStyle(fontSize: 14),
                         decoration: InputDecoration(
+                          filled: false,
                           contentPadding:
                               const EdgeInsets.symmetric(vertical: 6),
                           hintText:
-                              focused.value ? null : translate("Search ID"),
+                              _focused ? null : translate("Search ID"),
                           hintStyle: TextStyle(
                               fontSize: 14, color: Theme.of(context).hintColor),
                           border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
                           isDense: true,
                         ),
                       ).workaroundFreezeLinuxMint(),
@@ -1019,6 +1037,7 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                     IconButton(
                       alignment: Alignment.centerRight,
                       padding: const EdgeInsets.only(right: 2),
+                      tooltip: translate('Close'),
                       onPressed: () {
                         setState(() {
                           peerSearchTextController.clear();
@@ -1026,19 +1045,17 @@ class _PeerSearchBarState extends State<PeerSearchBar> {
                           drawer = false;
                         });
                       },
-                      icon: Tooltip(
-                          message: translate('Close'),
-                          child: Icon(
-                            Icons.close,
-                            color: Theme.of(context).hintColor,
-                          )),
+                      icon: Icon(
+                        Icons.close,
+                        color: Theme.of(context).hintColor,
+                      ),
                     ),
                   ],
                 ),
               )
             ],
           ),
-        ));
+        );
   }
 }
 
@@ -1113,14 +1130,14 @@ class _PeerViewDropdownState extends State<PeerViewDropdown> {
     return _hoverAction(
         context: context,
         toolTip: translate('Change view'),
-        child: Icon(
-          peerCardUiType.value == PeerUiType.grid
-              ? Icons.grid_view_rounded
-              : peerCardUiType.value == PeerUiType.list
-                  ? Icons.view_list_rounded
-                  : Icons.view_agenda_rounded,
-          size: 18,
-        ),
+        child: Obx(() => Icon(
+              peerCardUiType.value == PeerUiType.grid
+                  ? Icons.grid_view_rounded
+                  : peerCardUiType.value == PeerUiType.list
+                      ? Icons.view_list_rounded
+                      : Icons.view_agenda_rounded,
+              size: 18,
+            )),
         onTapDown: (details) {
           final x = details.globalPosition.dx;
           final y = details.globalPosition.dy;
@@ -1149,30 +1166,25 @@ class _PeerSortDropdownState extends State<PeerSortDropdown> {
         color: Theme.of(context).textTheme.titleLarge?.color,
         fontSize: MenuConfig.fontSize,
         fontWeight: FontWeight.normal);
-    List<PopupMenuEntry> items = List.empty(growable: true);
-    items.add(PopupMenuItem(
+    final items = <PopupMenuEntry<String>>[];
+    items.add(PopupMenuItem<String>(
         height: 36,
         enabled: false,
         child: Text(translate("Sort by"), style: style)));
     for (var e in PeerSortType.values) {
-      items.add(PopupMenuItem(
+      items.add(PopupMenuItem<String>(
+          value: e,
           height: 36,
-          child: Obx(() => Center(
+          child: Builder(builder: (menuContext) => Obx(() => Center(
                 child: SizedBox(
                   height: 36,
                   child: getRadio(
                       Text(translate(e), style: style), e, peerSort.value,
-                      dense: true, (String? v) async {
-                    if (v != null) {
-                      peerSort.value = v;
-                      await bind.setLocalFlutterOption(
-                        k: kOptionPeerSorting,
-                        v: peerSort.value,
-                      );
-                    }
+                      dense: true, (String? v) {
+                    if (v != null) Navigator.pop(menuContext, v);
                   }),
                 ),
-              ))));
+              )))));
     }
 
     var menuPos = RelativeRect.fromLTRB(0, 0, 0, 0);
@@ -1188,12 +1200,17 @@ class _PeerSortDropdownState extends State<PeerSortDropdown> {
         final y = details.globalPosition.dy;
         menuPos = RelativeRect.fromLTRB(x, y, x, y);
       },
-      onTap: () => showMenu(
-        context: context,
-        position: menuPos,
-        items: items,
-        elevation: 8,
-      ),
+      onTap: () async {
+        final sort = await showMenu<String>(
+          context: context,
+          position: menuPos,
+          items: items,
+          elevation: 8,
+        );
+        if (sort == null || sort == peerSort.value) return;
+        peerSort.value = sort;
+        await bind.setLocalFlutterOption(k: kOptionPeerSorting, v: sort);
+      },
     );
   }
 }
@@ -1212,11 +1229,25 @@ class RefreshWidget extends StatefulWidget {
 class RefreshWidgetState extends State<RefreshWidget> {
   double turns = 0.0;
   bool hover = false;
+  StreamSubscription<bool>? _spinSub;
 
   @override
   void initState() {
     super.initState();
-    widget.spinning?.listen((v) {
+    _subscribeSpinning();
+  }
+
+  @override
+  void didUpdateWidget(covariant RefreshWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.spinning != widget.spinning) {
+      _spinSub?.cancel();
+      _subscribeSpinning();
+    }
+  }
+
+  void _subscribeSpinning() {
+    _spinSub = widget.spinning?.listen((v) {
       if (v && mounted) {
         setState(() {
           turns += 1;
@@ -1226,9 +1257,15 @@ class RefreshWidgetState extends State<RefreshWidget> {
   }
 
   @override
+  void dispose() {
+    _spinSub?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final deco = BoxDecoration(
-      color: Theme.of(context).colorScheme.background,
+      color: Theme.of(context).hoverColor,
       borderRadius: BorderRadius.circular(6),
     );
     return AnimatedRotation(
@@ -1269,25 +1306,31 @@ Widget _hoverAction(
     RxBool? hoverableWhenfalse,
     bool touchTarget = false,
     EdgeInsetsGeometry padding = const EdgeInsets.all(4.0)}) {
-  final hover = false.obs;
+  final effectivePadding =
+      isMobile ? const EdgeInsets.all(8.0) : padding;
   final deco = BoxDecoration(
-    color: Theme.of(context).colorScheme.background,
+    color: Theme.of(context).hoverColor,
     borderRadius: BorderRadius.circular(6),
   );
   return Tooltip(
     message: toolTip,
-    child: Obx(
-      () => Container(
-          margin: EdgeInsets.symmetric(horizontal: 1),
-          decoration:
-              (hover.value || hoverableWhenfalse?.value == false) ? deco : null,
-          child: InkWell(
-              onHover: (value) => hover.value = value,
-              onTap: onTap,
-              onTapDown: onTapDown,
-              child: touchTarget
-                  ? SizedBox.square(dimension: 44, child: Center(child: child))
-                  : Container(padding: padding, child: child))),
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        hoverColor: Theme.of(context).hoverColor,
+        onTap: onTap,
+        onTapDown: onTapDown,
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 1),
+          decoration: (hoverableWhenfalse != null && !hoverableWhenfalse.value)
+              ? deco
+              : null,
+          child: touchTarget
+              ? SizedBox.square(dimension: 44, child: Center(child: child))
+              : Container(padding: effectivePadding, child: child),
+        ),
+      ),
     ),
   );
 }
