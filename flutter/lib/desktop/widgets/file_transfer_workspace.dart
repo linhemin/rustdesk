@@ -128,26 +128,28 @@ class FileTransferBreadcrumbs extends StatelessWidget {
   }
 }
 
-/// Keeps both file browsers mounted while changing the visible pane.
+/// Keeps the available file browsers mounted while changing the visible pane.
 class FileTransferWorkspace extends StatefulWidget {
   const FileTransferWorkspace({
     super.key,
-    required this.local,
+    this.local,
     required this.remote,
     required this.queue,
     required this.localLabel,
     required this.remoteLabel,
     required this.queueLabel,
     required this.queueCount,
+    this.activeJobCount,
   });
 
-  final Widget local;
+  final Widget? local;
   final Widget remote;
   final Widget queue;
   final String localLabel;
   final String remoteLabel;
   final String queueLabel;
   final Widget queueCount;
+  final int? activeJobCount;
 
   @override
   State<FileTransferWorkspace> createState() => _FileTransferWorkspaceState();
@@ -156,6 +158,16 @@ class FileTransferWorkspace extends StatefulWidget {
 class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
   bool _local = true;
   bool _showQueue = false;
+
+  @override
+  void didUpdateWidget(covariant FileTransferWorkspace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final prev = oldWidget.activeJobCount;
+    final next = widget.activeJobCount;
+    if (next != null && (prev ?? 0) == 0 && next > 0 && !_showQueue) {
+      _showQueue = true;
+    }
+  }
 
   Widget _browser(Widget child, bool visible, AlignmentDirectional alignment,
       double widthFactor) {
@@ -194,8 +206,10 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, bounds) {
-          final dualPane = bounds.maxWidth >= 780;
-          final bottomQueue = dualPane && bounds.maxHeight >= 480;
+          final local = widget.local;
+          final wide = bounds.maxWidth >= 780;
+          final dualPane = wide && local != null;
+          final bottomQueue = wide && bounds.maxHeight >= 480;
           final showBrowsers = !_showQueue || bottomQueue;
           final queueButton = TextButton.icon(
             style: TextButton.styleFrom(
@@ -234,11 +248,12 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
               Expanded(
                 child: Stack(fit: StackFit.expand, children: [
                   Stack(fit: StackFit.expand, children: [
-                    _browser(widget.local, showBrowsers && (dualPane || _local),
-                        AlignmentDirectional.centerStart, dualPane ? .5 : 1),
+                    if (local != null)
+                      _browser(local, showBrowsers && (dualPane || _local),
+                          AlignmentDirectional.centerStart, dualPane ? .5 : 1),
                     _browser(
                         widget.remote,
-                        showBrowsers && (dualPane || !_local),
+                        showBrowsers && (local == null || dualPane || !_local),
                         AlignmentDirectional.centerEnd,
                         dualPane ? .5 : 1),
                     if (dualPane) Center(child: VerticalDivider(width: 1)),
@@ -253,7 +268,7 @@ class _FileTransferWorkspaceState extends State<FileTransferWorkspace> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   child: Row(children: [
-                    if (!dualPane) ...[
+                    if (local != null && !dualPane) ...[
                       _sideButton(widget.localLabel, true),
                       _sideButton(widget.remoteLabel, false),
                     ],

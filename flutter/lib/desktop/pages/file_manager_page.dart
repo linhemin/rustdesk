@@ -170,36 +170,40 @@ class _FileManagerPageState extends State<FileManagerPage>
     super.build(context);
     return Overlay(key: _overlayKeyState.key, initialEntries: [
       OverlayEntry(builder: (_) {
+        final localPane = isWeb
+            ? null
+            : dropArea(
+                FileManagerView(model.localController, _ffi, _mouseFocusScope));
+        final remotePane = dropArea(
+            FileManagerView(model.remoteController, _ffi, _mouseFocusScope));
+        final queuePane = statusList();
         return willPopScope(Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-          body: isWindows || isMacOS || isLinux
-              ? FileTransferWorkspace(
-                  local: dropArea(FileManagerView(
-                      model.localController, _ffi, _mouseFocusScope)),
-                  remote: dropArea(FileManagerView(
-                      model.remoteController, _ffi, _mouseFocusScope)),
-                  queue: statusList(),
-                  localLabel: translate('Local'),
-                  remoteLabel: translate('Remote'),
-                  queueLabel: translate('Transfer file'),
-                  queueCount: Obx(() {
-                    final jobs = jobController.jobTable;
-                    final active = jobs.firstWhereOrNull((job) => job.state == JobState.inProgress);
-                    return Text('${jobs.length}${active != null && active.speed > 0 ? " · ${readableFileSize(active.speed)}/s" : ""}');
-                  }),
-                )
+          body: usesWorkspaceStyle
+              ? Obx(() {
+                  final jobs = jobController.jobTable;
+                  final activeCount = jobs
+                      .where((job) => job.state == JobState.inProgress)
+                      .length;
+                  final active =
+                      jobs.firstWhereOrNull((job) => job.state == JobState.inProgress);
+                  return FileTransferWorkspace(
+                    local: localPane,
+                    remote: remotePane,
+                    queue: queuePane,
+                    localLabel: translate('Local'),
+                    remoteLabel: translate('Remote'),
+                    queueLabel: translate('Transfer file'),
+                    activeJobCount: activeCount,
+                    queueCount: Text(
+                        '${jobs.length}${active != null && active.speed > 0 ? " · ${readableFileSize(active.speed)}/s" : ""}'),
+                  );
+                })
               : Row(
             children: [
-              if (!isWeb)
-                Flexible(
-                    flex: 3,
-                    child: dropArea(FileManagerView(
-                        model.localController, _ffi, _mouseFocusScope))),
-              Flexible(
-                  flex: 3,
-                  child: dropArea(FileManagerView(
-                      model.remoteController, _ffi, _mouseFocusScope))),
-              Flexible(flex: 2, child: statusList())
+              if (localPane != null) Flexible(flex: 3, child: localPane),
+              Flexible(flex: 3, child: remotePane),
+              Flexible(flex: 2, child: queuePane),
             ],
           ),
         ));
@@ -676,7 +680,9 @@ class _FileManagerViewState extends State<FileManagerView> {
   final _modifiedColWidth = 0.0.obs;
   final _sizeColWidth = 0.0.obs;
   final _fileListScrollController = ScrollController();
+  final _pathLocationController = TextEditingController();
   final _globalHeaderKey = GlobalKey();
+  StreamSubscription? _directorySubscription;
 
   /// [_lastClickTime], [_lastClickEntry] help to handle double click
   var _lastClickTime =
@@ -688,7 +694,8 @@ class _FileManagerViewState extends State<FileManagerView> {
 
   FileController get controller => widget.controller;
   bool get isLocal => widget.controller.isLocal;
-  double get _rowHeight => isWindows || isMacOS ? 36 : kDesktopFileTransferRowHeight;
+  double get _rowHeight =>
+      usesWorkspaceStyle ? 36 : kDesktopFileTransferRowHeight;
   FFI get _ffi => widget._ffi;
   SelectedItems get selectedItems => controller.selectedItems;
 
@@ -697,7 +704,8 @@ class _FileManagerViewState extends State<FileManagerView> {
     super.initState();
     // register location listener
     _locationNode.addListener(onLocationFocusChanged);
-    controller.directory.listen((e) => breadCrumbScrollToEnd());
+    _directorySubscription =
+        controller.directory.listen((e) => breadCrumbScrollToEnd());
   }
 
   @override
@@ -707,13 +715,15 @@ class _FileManagerViewState extends State<FileManagerView> {
     _keyboardNode.dispose();
     _breadCrumbScroller.dispose();
     _fileListScrollController.dispose();
+    _pathLocationController.dispose();
+    _directorySubscription?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, bounds) {
-      final nativeWorkspace = isWindows || isMacOS;
+      final nativeWorkspace = usesWorkspaceStyle;
       final available = nativeWorkspace
           ? max(1.0, bounds.maxWidth - 40)
           : MediaQuery.sizeOf(context).width;
@@ -891,8 +901,15 @@ class _FileManagerViewState extends State<FileManagerView> {
                   : null,
               child: Text(isLocal
                   ? '${translate("Send")} → ${translate("Remote")}'
-                  : '← ${translate("Receive")} · ${translate("Local")}'))),
+                  : isWeb
+                      ? translate('Download')
+                      : '← ${translate("Receive")} · ${translate("Local")}'))),
         ]),
+        if (isWeb)
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: _webUploadButton(),
+          ),
         const SizedBox(height: 6),
         Row(children: [
           tool(Icons.arrow_back_rounded, 'Back', () {
@@ -996,15 +1013,46 @@ class _FileManagerViewState extends State<FileManagerView> {
         onSubmit: submit,
         onCancel: () => close(false),
       );
-    });
+    }).whenComplete(() => WidgetsBinding.instance.addPostFrameCallback((_) {
+          name.dispose();
+        }));
+  }
+
+  Widget _webUploadButton() {
+    const option = 'upload-folder-button';
+    final uploadFolder = (bind.mainGetLocalOption(key: option) == 'Y').obs;
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Flexible(
+        child: Obx(() => FilledButton.tonalIcon(
+              icon: const Icon(Icons.upload_rounded, size: 16),
+              label: Text(
+                translate(uploadFolder.value ? 'Upload folder' : 'Upload files'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onPressed: () => webselectFiles(is_folder: uploadFolder.value),
+            )),
+      ),
+      PopupMenuButton<bool>(
+        tooltip: translate('More'),
+        position: PopupMenuPosition.under,
+        icon: const Icon(Icons.arrow_drop_down),
+        itemBuilder: (_) => [
+          PopupMenuItem(value: false, child: Text(translate('Upload files'))),
+          PopupMenuItem(value: true, child: Text(translate('Upload folder'))),
+        ],
+        onSelected: (folder) {
+          uploadFolder.value = folder;
+          bind.mainSetLocalOption(key: option, value: folder ? 'Y' : '');
+          webselectFiles(is_folder: folder);
+        },
+      ),
+    ]);
   }
 
   Widget headTools() {
-    if (isWindows || isMacOS) return _nativeHeadTools();
-    var uploadButtonTapPosition = RelativeRect.fill;
-    RxBool isUploadFolder =
-        (bind.mainGetLocalOption(key: 'upload-folder-button') == 'Y').obs;
-    final native = isWindows || isMacOS;
+    if (usesWorkspaceStyle) return _nativeHeadTools();
+    final native = usesWorkspaceStyle;
     final label = translate(isLocal ? 'Local Computer' : 'Remote Computer');
     final platform = Container(
       width: native ? 28 : 34,
@@ -1256,14 +1304,16 @@ class _FileManagerViewState extends State<FileManagerView> {
                       onPressed: () {
                         final name = TextEditingController();
                         String? errorText;
+                        VoidCallback? refreshDialog;
+                        name.addListener(() {
+                          if (errorText != null) {
+                            refreshDialog?.call();
+                          }
+                        });
                         _ffi.dialogManager.show((setState, close, context) {
-                          name.addListener(() {
-                            if (errorText != null) {
-                              setState(() {
+                          refreshDialog = () => setState(() {
                                 errorText = null;
                               });
-                            }
-                          });
                           submit() {
                             if (name.value.text.isNotEmpty) {
                               if (!PathUtil.validName(name.value.text,
@@ -1327,7 +1377,10 @@ class _FileManagerViewState extends State<FileManagerView> {
                             onSubmit: submit,
                             onCancel: cancel,
                           );
-                        });
+                        }).whenComplete(() => WidgetsBinding.instance
+                                .addPostFrameCallback((_) {
+                              name.dispose();
+                            }));
                       },
                       child: SvgPicture.asset(
                         "assets/folder_new.svg",
@@ -1358,66 +1411,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                   ],
                 ),
               ),
-              if (isWeb)
-                Obx(() => ElevatedButton.icon(
-                      style: ButtonStyle(
-                        padding: MaterialStateProperty.all<EdgeInsetsGeometry>(
-                            isLocal
-                                ? EdgeInsets.only(left: 10)
-                                : EdgeInsets.only(right: 10)),
-                        backgroundColor: MaterialStateProperty.all(
-                          selectedItems.items.isEmpty
-                              ? MyTheme.accent80
-                              : MyTheme.accent,
-                        ),
-                      ),
-                      onPressed: () =>
-                          {webselectFiles(is_folder: isUploadFolder.value)},
-                      label: InkWell(
-                        hoverColor: Colors.transparent,
-                        splashColor: Colors.transparent,
-                        highlightColor: Colors.transparent,
-                        focusColor: Colors.transparent,
-                        onTapDown: (e) {
-                          final x = e.globalPosition.dx;
-                          final y = e.globalPosition.dy;
-                          uploadButtonTapPosition =
-                              RelativeRect.fromLTRB(x, y, x, y);
-                        },
-                        onTap: () async {
-                          final value = await showMenu<bool>(
-                              context: context,
-                              position: uploadButtonTapPosition,
-                              items: [
-                                PopupMenuItem<bool>(
-                                  value: false,
-                                  child: Text(translate('Upload files')),
-                                ),
-                                PopupMenuItem<bool>(
-                                  value: true,
-                                  child: Text(translate('Upload folder')),
-                                ),
-                              ]);
-                          if (value != null) {
-                            isUploadFolder.value = value;
-                            bind.mainSetLocalOption(
-                                key: 'upload-folder-button',
-                                value: value ? 'Y' : '');
-                            webselectFiles(is_folder: value);
-                          }
-                        },
-                        child: Icon(Icons.arrow_drop_down),
-                      ),
-                      icon: Text(
-                        translate(isUploadFolder.isTrue
-                            ? 'Upload folder'
-                            : 'Upload files'),
-                        textAlign: TextAlign.right,
-                        style: TextStyle(
-                          color: Colors.white,
-                        ),
-                      ).marginOnly(left: 8),
-                    )).marginOnly(left: 16),
+              if (isWeb) _webUploadButton(),
               Obx(() => ElevatedButton.icon(
                     style: ButtonStyle(
                       padding: MaterialStateProperty.all<EdgeInsetsGeometry>(
@@ -1675,7 +1669,8 @@ class _FileManagerViewState extends State<FileManagerView> {
           }
 
           return Padding(
-            padding: EdgeInsets.symmetric(vertical: 1, horizontal: (isWindows || isMacOS) ? 8 : 0),
+            padding: EdgeInsets.symmetric(
+                vertical: 1, horizontal: usesWorkspaceStyle ? 8 : 0),
             child: Obx(() => Container(
                 decoration: BoxDecoration(
                   color: selectedItems.items.contains(entry)
@@ -1709,7 +1704,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                                       waitDuration: Duration(milliseconds: 500),
                                       message: entry.name,
                                       child: Row(children: [
-                                        (isWindows || isMacOS)
+                                        usesWorkspaceStyle
                                             ? _nativeFileIcon(entry)
                                             : entry.isDrive
                                             ? Image(
@@ -2023,7 +2018,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   Widget _buildFileBrowserHeader(BuildContext context) {
     final padding = EdgeInsets.all(1.0);
     return Container(
-      decoration: isWindows || isMacOS
+      decoration: usesWorkspaceStyle
           ? BoxDecoration(
               border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor)))
           : null,
@@ -2059,7 +2054,7 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   Widget headerItemFunc(double? width, SortBy sortBy, String name) {
-    final headerTextStyle = isWindows || isMacOS
+    final headerTextStyle = usesWorkspaceStyle
         ? TextStyle(fontSize: 10, fontWeight: FontWeight.w600,
             color: Theme.of(context).hintColor)
         : Theme.of(context).dataTableTheme.headingTextStyle ?? TextStyle();
@@ -2120,7 +2115,7 @@ class _FileManagerViewState extends State<FileManagerView> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
                 Expanded(
-                  child: (isWindows || isMacOS) &&
+                  child: usesWorkspaceStyle &&
                           !(controller.options.value.isWindows &&
                               controller.directory.value.path == '/')
                       ? FileTransferBreadcrumbs(
@@ -2294,8 +2289,12 @@ class _FileManagerViewState extends State<FileManagerView> {
     final text = _locationStatus.value == LocationStatus.pathLocation
         ? controller.directory.value.path
         : _searchText.value;
-    final textController = TextEditingController(text: text)
-      ..selection = TextSelection.collapsed(offset: text.length);
+    if (_pathLocationController.text != text) {
+      _pathLocationController.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+    }
     return Row(
       children: [
         SvgPicture.asset(
@@ -2314,7 +2313,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                 padding: EdgeInsets.only(left: 4.0),
               ),
             ),
-            controller: textController,
+            controller: _pathLocationController,
             onSubmitted: (path) {
               controller.openDirectory(path);
             },

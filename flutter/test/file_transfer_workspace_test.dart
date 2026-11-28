@@ -179,4 +179,34 @@ void main() {
     expect(find.text('Documents'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('a browser without local file access shows the remote pane',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(430, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: FileTransferWorkspace(
+          remote: SizedBox.expand(key: ValueKey('remote')),
+          queue: Text('Active job'),
+          localLabel: 'Local',
+          remoteLabel: 'Remote',
+          queueLabel: 'Status',
+          queueCount: Text('1'),
+        ),
+      ),
+    ));
+    final remote = find.byKey(const ValueKey('remote'));
+    expect(find.text('Local'), findsNothing);
+    expect(tester.getSize(remote).width, 430);
+    await tester.tap(find.text('Status'));
+    await tester.pumpAndSettle();
+    expect(find.text('Active job'), findsOneWidget);
+    expect(remote, findsNothing);
+
+    await tester.binding.setSurfaceSize(const Size(1200, 700));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(remote).width, 1200);
+    expect(find.text('Active job'), findsOneWidget);
+  });
 }

@@ -1059,6 +1059,7 @@ class FileController {
               title: '${translate('Rename')} ${item.name}',
               controller: textEditingController,
               errorText: errorText,
+              autofocus: true,
             ),
           ],
         ),

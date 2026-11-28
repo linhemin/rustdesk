@@ -312,14 +312,16 @@ class _FileManagerPageState extends State<FileManagerPage> {
   void _createFolder() {
     final name = TextEditingController();
     String? errorText;
+    VoidCallback? clearError;
+    name.addListener(() {
+      if (errorText != null) {
+        clearError?.call();
+      }
+    });
     gFFI.dialogManager.show((setState, close, context) {
-      name.addListener(() {
-        if (errorText != null) {
-          setState(() {
+      clearError = () => setState(() {
             errorText = null;
           });
-        }
-      });
       return CustomAlertDialog(
           title: Text(translate("Create Folder")),
           content: Column(
@@ -352,7 +354,8 @@ class _FileManagerPageState extends State<FileManagerPage> {
               }
             })
           ]);
-    });
+    }).whenComplete(
+        () => WidgetsBinding.instance.addPostFrameCallback((_) => name.dispose()));
   }
 
   Widget _headerTitle() => AnimatedBuilder(
@@ -933,6 +936,7 @@ class FileManagerView extends StatefulWidget {
 class _FileManagerViewState extends State<FileManagerView> {
   final _listScrollController = ScrollController();
   final _breadCrumbScroller = ScrollController();
+  StreamSubscription? _directorySubscription;
 
   bool get isLocal => widget.controller.isLocal;
   FileController get controller => widget.controller;
@@ -941,7 +945,16 @@ class _FileManagerViewState extends State<FileManagerView> {
   @override
   void initState() {
     super.initState();
-    controller.directory.listen((e) => breadCrumbScrollToEnd());
+    _directorySubscription =
+        controller.directory.listen((e) => breadCrumbScrollToEnd());
+  }
+
+  @override
+  void dispose() {
+    _listScrollController.dispose();
+    _breadCrumbScroller.dispose();
+    _directorySubscription?.cancel();
+    super.dispose();
   }
 
   @override
