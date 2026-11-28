@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:path/path.dart' as path;
+import 'package:rustdesk_ui/rustdesk_ui.dart';
 
 const _nonemptyDirectoryWarning = 'install-directory-not-empty-tip';
 
@@ -88,7 +89,7 @@ class _InstallDirectoryWarningState extends State<InstallDirectoryWarning> {
               style: TextStyle(
                   color: snapshot.hasError
                       ? Theme.of(context).colorScheme.error
-                      : Colors.orange.shade700)),
+                      : WorkspaceStyle.warning(context))),
         );
       },
     );

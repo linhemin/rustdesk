@@ -48,7 +48,7 @@ class _InstallPageState extends State<InstallPage> {
       enableResizeEdges: windowManagerEnableResizeEdges,
       child: Container(
         child: Scaffold(
-            backgroundColor: Theme.of(context).colorScheme.background,
+            backgroundColor: Theme.of(context).colorScheme.surface,
             body: DesktopTab(controller: tabController)),
       ),
     );
@@ -114,6 +114,7 @@ class _InstallPageBodyState extends State<_InstallPageBody>
   @override
   void dispose() {
     windowManager.removeListener(this);
+    controller.dispose();
     super.dispose();
   }
 
